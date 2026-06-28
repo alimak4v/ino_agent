@@ -1,0 +1,2 @@
+# Dev-only: icon generation script uses stdlib only.
+# Runtime is Tauri (Rust + React).
