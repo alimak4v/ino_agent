@@ -1,0 +1,10 @@
+/Users/sinicynaleksej/Downloads/treeAI-macos-v5/src-tauri/target/release/deps/icu_normalizer-c9b251ee16b03c4b.d: /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/lib.rs /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/properties.rs /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/provider.rs /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/uts46.rs
+
+/Users/sinicynaleksej/Downloads/treeAI-macos-v5/src-tauri/target/release/deps/libicu_normalizer-c9b251ee16b03c4b.rlib: /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/lib.rs /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/properties.rs /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/provider.rs /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/uts46.rs
+
+/Users/sinicynaleksej/Downloads/treeAI-macos-v5/src-tauri/target/release/deps/libicu_normalizer-c9b251ee16b03c4b.rmeta: /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/lib.rs /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/properties.rs /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/provider.rs /Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/uts46.rs
+
+/Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/lib.rs:
+/Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/properties.rs:
+/Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/provider.rs:
+/Users/sinicynaleksej/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.2.0/src/uts46.rs:
