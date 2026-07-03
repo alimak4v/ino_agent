@@ -43,6 +43,7 @@ pub struct Message {
     pub node_id: String,
     pub role: String,
     pub content: String,
+    pub visualization_html: Option<String>,
     pub created_at: i64,
 }
 
@@ -125,6 +126,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         let store = Self { conn };
         store.init_db()?;
+        store.migrate_db()?;
         store.remove_seed_data()?;
         store.remove_empty_default_trees()?;
         Ok(store)
@@ -165,6 +167,7 @@ impl Store {
                     node_id TEXT NOT NULL,
                     role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
                     content TEXT NOT NULL,
+                    visualization_html TEXT,
                     created_at INTEGER NOT NULL,
                     FOREIGN KEY(tree_id) REFERENCES trees(id) ON DELETE CASCADE,
                     FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
@@ -176,6 +179,24 @@ impl Store {
                 ",
             )
             .map_err(|e| e.to_string())
+    }
+
+    fn migrate_db(&self) -> Result<(), String> {
+        let mut stmt = self
+            .conn
+            .prepare("PRAGMA table_info(messages)")
+            .map_err(|e| e.to_string())?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        if !columns.iter().any(|column| column == "visualization_html") {
+            self.conn
+                .execute("ALTER TABLE messages ADD COLUMN visualization_html TEXT", [])
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     fn get_setting(&self, key: &str, default: &str) -> Result<String, String> {
@@ -544,6 +565,17 @@ impl Store {
         role: &str,
         content: &str,
     ) -> Result<Message, String> {
+        self.add_message_with_visualization(tree_id, node_id, role, content, None)
+    }
+
+    pub fn add_message_with_visualization(
+        &mut self,
+        tree_id: &str,
+        node_id: &str,
+        role: &str,
+        content: &str,
+        visualization_html: Option<String>,
+    ) -> Result<Message, String> {
         let content = content.trim();
         if content.is_empty() {
             return Err("Message is empty.".into());
@@ -553,9 +585,17 @@ impl Store {
         let message_id = Uuid::new_v4().to_string();
         self.conn
             .execute(
-                "INSERT INTO messages(id, tree_id, node_id, role, content, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![message_id, tree_id, node_id, role, content, ts],
+                "INSERT INTO messages(id, tree_id, node_id, role, content, visualization_html, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    message_id,
+                    tree_id,
+                    node_id,
+                    role,
+                    content,
+                    visualization_html.as_deref(),
+                    ts
+                ],
             )
             .map_err(|e| e.to_string())?;
 
@@ -595,6 +635,7 @@ impl Store {
             node_id: node_id.to_string(),
             role: role.to_string(),
             content: content.to_string(),
+            visualization_html,
             created_at: ts,
         })
     }
@@ -611,7 +652,7 @@ impl Store {
 
         let placeholders = path.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT id, tree_id, node_id, role, content, created_at
+            "SELECT id, tree_id, node_id, role, content, visualization_html, created_at
              FROM messages WHERE tree_id = ? AND node_id IN ({placeholders})
              ORDER BY created_at"
         );
@@ -630,7 +671,8 @@ impl Store {
                     node_id: row.get(2)?,
                     role: row.get(3)?,
                     content: row.get(4)?,
-                    created_at: row.get(5)?,
+                    visualization_html: row.get(5)?,
+                    created_at: row.get(6)?,
                 })
             })
             .map_err(|e| e.to_string())?;

@@ -294,13 +294,49 @@ fn generate_assistant_reply_blocking(
             },
         );
     })?;
+    let visualization_html = maybe_generate_inline_visualization(&settings, &latest_user, &answer);
     let store = &mut *lock_store(&store)?;
-    let message = store.add_message(&tree_id, &node_id, "assistant", &answer)?;
+    let message = store.add_message_with_visualization(
+        &tree_id,
+        &node_id,
+        "assistant",
+        &answer,
+        visualization_html,
+    )?;
     Ok(store::AssistantReplyResult {
         message,
         selected_node_id: node_id,
         created_branches: Vec::new(),
     })
+}
+
+fn maybe_generate_inline_visualization(
+    settings: &store::ChatSettings,
+    latest_user: &str,
+    answer: &str,
+) -> Option<String> {
+    if !wants_inline_visualization(latest_user, answer) {
+        return None;
+    }
+    let mut graph_settings = settings.clone();
+    if graph_settings.model.trim().is_empty() || graph_settings.model.trim() == "gpt-4.1-mini" {
+        graph_settings.model = "gpt-4o-mini".to_string();
+    }
+    let messages = vec![
+        store::ChatContextMessage {
+            role: "system".to_string(),
+            content: learning_graph_prompt(),
+        },
+        store::ChatContextMessage {
+            role: "user".to_string(),
+            content: format!(
+                "Сгенерируй встроенный интерактивный HTML-виджет для ответа ассистента.\n\nЗапрос пользователя:\n{}\n\nОтвет ассистента:\n{}\n\nЕсли это алгоритм, поток, процесс или граф, обязательно сделай пошаговый режим с кнопками Prev/Next и подсветкой текущего шага. Если это концептуальная тема, сделай интерактивный граф понятий с кликабельными узлами.",
+                clip_chars(latest_user, 6_000),
+                clip_chars(answer, 8_000),
+            ),
+        },
+    ];
+    api::generate_learning_graph_html(&graph_settings, &messages).ok()
 }
 
 fn create_branches_from_plan(
@@ -460,6 +496,37 @@ fn looks_branchable(raw: &str) -> bool {
     many && split
 }
 
+fn wants_inline_visualization(latest_user: &str, answer: &str) -> bool {
+    let text = format!("{latest_user}\n{answer}").to_lowercase();
+    [
+        "граф",
+        "дерев",
+        "схем",
+        "диаграм",
+        "алгоритм",
+        "дейкстр",
+        "dijkstra",
+        "поток",
+        "flow",
+        "process",
+        "процесс",
+        "стрел",
+        "шаг",
+        "пошаг",
+        "симуля",
+        "визуал",
+        "маршрут",
+        "path",
+        "network",
+        "узл",
+        "ребр",
+        "edge",
+        "node",
+    ]
+    .iter()
+    .any(|needle| contains(&text, needle))
+}
+
 fn fallback_branch_plan_from_text(source: &str) -> Option<store::BranchPlan> {
     let mut lines = source.lines().collect::<Vec<_>>();
     if lines.len() > 80 {
@@ -617,6 +684,10 @@ fn contains(haystack: &str, needle: &str) -> bool {
     haystack.contains(needle)
 }
 
+fn clip_chars(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let store = store::Store::new().expect("failed to open local store");
@@ -684,4 +755,31 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn learning_graph_prompt() -> String {
+    r#"Ты — специализированный модуль визуализации учебных данных. Твоя единственная задача — переводить сложные концепции, учебные темы, связи и процессы в интерактивные графы знаний.
+
+ТРЕБОВАНИЯ К КОДУ:
+1. Выдай СТРОГО один валидный HTML-файл. Начни с <!DOCTYPE html> и закончи </html>.
+2. Внутри <head> подключи Vis.js Network через CDN:
+   https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/dist/vis-network.min.css
+   https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/dist/vis-network.min.js
+3. Не используй markdown-обертки вроде ```html ... ```.
+4. Все стили и скрипты должны быть внутри этого же файла.
+5. Не обращайся к внешним API и не загружай данные после старта страницы, кроме указанного CDN Vis.js.
+6. Документ будет встроен в чат через iframe srcDoc, поэтому он должен выглядеть как компактный виджет без внешних отступов страницы.
+
+ТРЕБОВАНИЯ К ВИЗУАЛУ И UX:
+1. Темная тема: background #121212, панели/узлы #1E1E1E, текст #E0E0E0, 2-4 осмысленных акцентных цвета.
+2. Узлы должны быть draggable, граф должен zoomable колесом мыши.
+3. Edges должны иметь стрелки для причинных, иерархических или процессных связей и понятные label.
+4. Разделяй узлы по типам: главная тема, подтема, термин, процесс/пример. Используй группы Vis.js, размеры и цвета.
+5. Физика должна быть стабильной: включи physics с solver forceAtlas2Based или barnesHut, ограничь stabilization, чтобы узлы не разлетались.
+6. Добавь краткую легенду внутри HTML и обработчик клика по узлу, который показывает 1-2 предложения пояснения.
+7. Для алгоритмов, маршрутов, потоков, очередей, состояний и процессов добавь кнопки Prev/Next, счетчик шага и JavaScript-массив steps, который подсвечивает текущие nodes/edges и меняет пояснение шага.
+8. Высота виджета должна быть 420-520px, весь интерфейс должен помещаться внутри HTML без необходимости раскрывать его на отдельный экран.
+
+Верни только HTML-документ."#
+        .to_string()
 }

@@ -12,7 +12,7 @@ pub fn chat_completion(
     messages: &[ChatContextMessage],
 ) -> Result<String, String> {
     ensure_settings(settings)?;
-    let payload = request_payload(settings, messages, false);
+    let payload = request_payload(settings, messages, false, 0.7);
     let mut child = curl_command(settings, false)
         .arg("--write-out")
         .arg("\n%{http_code}")
@@ -73,7 +73,7 @@ where
     F: FnMut(String),
 {
     ensure_settings(settings)?;
-    let payload = request_payload(settings, messages, true);
+    let payload = request_payload(settings, messages, true, 0.7);
     let mut child = curl_command(settings, true)
         .arg("--data-binary")
         .arg("@-")
@@ -154,6 +154,62 @@ where
         return Err("The model returned an empty answer.".to_string());
     }
     Ok(answer)
+}
+
+pub fn generate_learning_graph_html(
+    settings: &ChatSettings,
+    messages: &[ChatContextMessage],
+) -> Result<String, String> {
+    ensure_settings(settings)?;
+    let payload = request_payload(settings, messages, false, 0.25);
+    let mut child = curl_command(settings, false)
+        .arg("--write-out")
+        .arg("\n%{http_code}")
+        .arg("--data-binary")
+        .arg("@-")
+        .arg(normalize_endpoint(&settings.endpoint))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start curl: {e}"))?;
+
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "Failed to open curl stdin.".to_string())?
+        .write_all(payload.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let split = stdout
+        .rfind('\n')
+        .ok_or_else(|| format!("API response did not include an HTTP status. {stderr}"))?;
+    let body = stdout[..split].trim();
+    let status = stdout[split + 1..]
+        .trim()
+        .parse::<u16>()
+        .map_err(|e| format!("Could not parse API status: {e}"))?;
+
+    if status >= 400 {
+        return Err(format!("API error {status}: {}", clip(body, 1200)));
+    }
+    if !output.status.success() && !stderr.is_empty() {
+        return Err(stderr);
+    }
+
+    let parsed = serde_json::from_str::<Value>(body).map_err(|e| {
+        format!(
+            "Could not parse API response: {e}. Body: {}",
+            clip(body, 800)
+        )
+    })?;
+    let content = extract_choice_content(&parsed, false);
+    let html = sanitize_html_payload(&content);
+    validate_graph_html(&html)?;
+    Ok(html)
 }
 
 pub fn parse_branch_plan(answer: &str, limit: usize) -> Option<BranchPlan> {
@@ -258,6 +314,7 @@ fn request_payload(
     settings: &ChatSettings,
     messages: &[ChatContextMessage],
     stream: bool,
+    temperature: f32,
 ) -> String {
     let messages = messages
         .iter()
@@ -266,7 +323,7 @@ fn request_payload(
     json!({
         "model": settings.model,
         "messages": messages,
-        "temperature": 0.7,
+        "temperature": temperature,
         "stream": stream,
     })
     .to_string()
@@ -409,4 +466,74 @@ fn branch_text_field(item: &Value, keys: &[&str]) -> Option<String> {
 
 fn clip(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
+}
+
+pub fn sanitize_html_payload(raw_response: &str) -> String {
+    let mut cleaned = raw_response.trim().to_string();
+    let lower = cleaned.to_lowercase();
+    for fence in ["```html", "```htm", "```"] {
+        if lower.starts_with(fence) {
+            cleaned = cleaned[fence.len()..].trim_start().to_string();
+            break;
+        }
+    }
+    if cleaned.trim_end().ends_with("```") {
+        let trimmed_len = cleaned.trim_end().len();
+        cleaned.truncate(trimmed_len - 3);
+        cleaned = cleaned.trim().to_string();
+    }
+
+    let lower = cleaned.to_lowercase();
+    let start = lower
+        .find("<!doctype html")
+        .or_else(|| lower.find("<html"))
+        .unwrap_or(0);
+    if start > 0 {
+        cleaned = cleaned[start..].trim_start().to_string();
+    }
+
+    let lower = cleaned.to_lowercase();
+    if let Some(end) = lower.rfind("</html>") {
+        cleaned.truncate(end + "</html>".len());
+    }
+    cleaned.trim().to_string()
+}
+
+fn validate_graph_html(html: &str) -> Result<(), String> {
+    let lower = html.trim_start().to_lowercase();
+    if !(lower.starts_with("<!doctype html") || lower.starts_with("<html")) {
+        return Err("The model did not return an HTML document.".to_string());
+    }
+    for required in ["<html", "</html>", "<script", "</script>"] {
+        if !lower.contains(required) {
+            return Err(format!("Generated graph HTML is missing {required}."));
+        }
+    }
+    if !lower.contains("vis-network") && !lower.contains("cytoscape") {
+        return Err("Generated graph HTML did not include an approved graph library.".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_html_payload;
+
+    #[test]
+    fn strips_markdown_fences() {
+        let raw = "```html\n<!DOCTYPE html><html><body></body></html>\n```";
+        assert_eq!(
+            sanitize_html_payload(raw),
+            "<!DOCTYPE html><html><body></body></html>"
+        );
+    }
+
+    #[test]
+    fn removes_extra_text_around_html() {
+        let raw = "Here you go:\n<!DOCTYPE html><html><body></body></html>\nextra";
+        assert_eq!(
+            sanitize_html_payload(raw),
+            "<!DOCTYPE html><html><body></body></html>"
+        );
+    }
 }

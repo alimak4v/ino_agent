@@ -42,6 +42,7 @@ export interface Message {
   node_id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  visualization_html: string | null;
   created_at: number;
 }
 

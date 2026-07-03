@@ -306,6 +306,9 @@ export function ChatPanel({
                   }
                 >
                   <MarkdownMessage content={message.content} />
+                  {message.visualization_html && (
+                    <InlineVisualization html={message.visualization_html} />
+                  )}
                 </div>
               </div>
             ))}
@@ -438,6 +441,19 @@ export function ChatPanel({
         </div>
       </form>
     </aside>
+  );
+}
+
+function InlineVisualization({ html }: { html: string }) {
+  return (
+    <div className="mt-5 overflow-hidden rounded-lg border border-[color:var(--border)] bg-[#121212] shadow-[0_18px_44px_rgba(0,0,0,0.22)]">
+      <iframe
+        title="Interactive visualization"
+        sandbox="allow-scripts"
+        srcDoc={html}
+        className="h-[460px] w-full border-0"
+      />
+    </div>
   );
 }
 
