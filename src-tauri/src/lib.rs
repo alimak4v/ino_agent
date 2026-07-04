@@ -130,6 +130,16 @@ fn save_settings(
 }
 
 #[tauri::command]
+fn extract_pdf_text(bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.is_empty() {
+        return Err("PDF file is empty.".to_string());
+    }
+    pdf_extract::extract_text_from_mem(&bytes)
+        .map(|text| clean_extracted_text(&text))
+        .map_err(|e| format!("Could not extract PDF text: {e}"))
+}
+
+#[tauri::command]
 fn get_messages(
     state: State<AppState>,
     tree_id: String,
@@ -772,6 +782,15 @@ fn contains(haystack: &str, needle: &str) -> bool {
     haystack.contains(needle)
 }
 
+fn clean_extracted_text(value: &str) -> String {
+    value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn clip_chars(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
@@ -837,6 +856,7 @@ pub fn run() {
             get_tree_layout,
             get_settings,
             save_settings,
+            extract_pdf_text,
             get_messages,
             add_user_message,
             generate_assistant_reply,

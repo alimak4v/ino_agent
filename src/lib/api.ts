@@ -123,6 +123,7 @@ export const api = {
   getSettings: () =>
     isTauriRuntime() ? invoke<ChatSettings>("get_settings") : Promise.resolve(FALLBACK_SETTINGS),
   saveSettings: (input: SettingsInput) => invokeDesktop<ChatSettings>("save_settings", { input }),
+  extractPdfText: (bytes: number[]) => invokeDesktop<string>("extract_pdf_text", { bytes }),
   getMessages: (treeId: string, nodeId: string) =>
     invokeDesktop<Message[]>("get_messages", { treeId, nodeId }),
   addUserMessage: (treeId: string, nodeId: string, content: string) =>

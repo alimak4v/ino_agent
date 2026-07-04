@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ChatSettings, Message, SettingsInput } from "../lib/api";
+import { api, isTauriRuntime, type ChatSettings, type Message, type SettingsInput } from "../lib/api";
 import type { CanvasLayoutNode } from "./TreeCanvas";
 import { MarkdownMessage } from "./MarkdownMessage";
 
@@ -323,7 +323,7 @@ export function ChatPanel({
                       : `${assistantWidth} min-w-0 break-words text-[15px] leading-7 text-[color:var(--text)]`
                   }
                 >
-                  <MarkdownMessage content={message.content} />
+                  <MessageContent content={message.content} />
                   {message.visualization_html && (
                     <InlineVisualization html={message.visualization_html} />
                   )}
@@ -340,7 +340,7 @@ export function ChatPanel({
                 <div
                   className={`${assistantWidth} min-w-0 break-words text-[15px] leading-7 text-[color:var(--text)]`}
                 >
-                  <MarkdownMessage content={streamingText} />
+                  <MessageContent content={streamingText} />
                 </div>
               </div>
             )}
@@ -547,15 +547,17 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
   }
 
   if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
-    const text = await extractPdfText(file);
+    const text = isTauriRuntime()
+      ? await api.extractPdfText(Array.from(new Uint8Array(await file.arrayBuffer())))
+      : await extractPdfTextFallback(file);
     return {
       id: crypto.randomUUID(),
       name: file.name,
       size: file.size,
       type: "application/pdf",
-      content: text || "[PDF text extraction returned no readable text.]",
+      content: text.trim() || "[PDF text extraction returned no readable text.]",
       warning: text
-        ? "PDF text was extracted with a lightweight parser"
+        ? "PDF text extracted"
         : "Could not extract PDF text",
     };
   }
@@ -570,7 +572,50 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
   };
 }
 
-async function extractPdfText(file: File) {
+function MessageContent({ content }: { content: string }) {
+  const { visibleText, attachments } = splitAttachmentPayload(content);
+  return (
+    <>
+      {attachments.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {attachments.map((attachment) => (
+            <div
+              key={`${attachment.name}-${attachment.index}`}
+              className="max-w-full rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 py-2 text-xs leading-5 text-[color:var(--text)]"
+            >
+              <div className="max-w-[260px] truncate font-medium">{attachment.name}</div>
+              <div className="text-[color:var(--muted)]">{attachment.meta}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {visibleText && <MarkdownMessage content={visibleText} />}
+    </>
+  );
+}
+
+function splitAttachmentPayload(content: string) {
+  const attachments: Array<{ index: number; name: string; meta: string }> = [];
+  let index = 0;
+  const visibleText = content
+    .replace(
+      /\[Attached file: ([\s\S]*?)\]\n\n(```|~~~~)text\n[\s\S]*?\n\2/g,
+      (_match, descriptor: string) => {
+        const parsed = descriptor.match(/^(.+?) \((.+)\)(?:\nNote: (.+))?$/);
+        attachments.push({
+          index,
+          name: parsed?.[1] ?? descriptor,
+          meta: parsed?.[3] ? `${parsed[2]} · ${parsed[3]}` : parsed?.[2] ?? "Attached file",
+        });
+        index += 1;
+        return "";
+      },
+    )
+    .trim();
+  return { visibleText, attachments };
+}
+
+async function extractPdfTextFallback(file: File) {
   const buffer = await file.arrayBuffer();
   const raw = new TextDecoder("latin1").decode(buffer);
   const chunks = new Set<string>();
