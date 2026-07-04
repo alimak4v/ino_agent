@@ -43,20 +43,39 @@ body {
 }
 
 .react-flow__edge-path {
-  filter: drop-shadow(0 5px 8px rgba(15, 23, 42, 0.1));
+  filter: none;
 }
 
 .react-flow__controls {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.1);
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
 
 .react-flow__controls-button {
-  border-color: var(--border);
-  background: var(--panel);
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
   color: var(--text);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(10px);
+}
+
+.react-flow__controls-button:hover {
+  background: var(--panel-soft);
+}
+
+.react-flow__controls-button svg {
+  max-width: 15px;
+  max-height: 15px;
+  fill: currentColor;
 }
 
 .react-flow__attribution {

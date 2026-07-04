@@ -6,7 +6,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, isTauriRuntime, type ChatSettings, type Message, type SettingsInput } from "../lib/api";
+import {
+  api,
+  isTauriRuntime,
+  type ChatSettings,
+  type Message,
+  type SettingsInput,
+} from "../lib/api";
 import type { CanvasLayoutNode } from "./TreeCanvas";
 import { MarkdownMessage } from "./MarkdownMessage";
 
@@ -209,18 +215,18 @@ export function ChatPanel({
                 : "Chat"}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5">
             <button
               type="button"
               onClick={onToggleTree}
-              className="rounded-full border border-transparent px-2.5 py-1.5 text-xs font-medium text-[color:var(--muted)] transition-colors hover:border-[color:var(--border)] hover:bg-[color:var(--panel)] hover:text-[color:var(--text)]"
+              className="h-8 rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--panel)] hover:text-[color:var(--text)]"
             >
               {treeVisible ? "Focus" : "Tree"}
             </button>
             <button
               type="button"
               onClick={() => setSettingsOpen((value) => !value)}
-              className="rounded-full border border-transparent px-2.5 py-1.5 text-xs font-medium text-[color:var(--muted)] transition-colors hover:border-[color:var(--border)] hover:bg-[color:var(--panel)] hover:text-[color:var(--text)]"
+              className="h-8 rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--panel)] hover:text-[color:var(--text)]"
             >
               API
             </button>
@@ -425,46 +431,50 @@ export function ChatPanel({
               </div>
             )}
             <div className="flex items-end gap-2 px-2 py-2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={(event) => void attachFiles(event.target.files)}
-            />
-            <button
-              type="button"
-              disabled={!canWrite || sending || attachmentBusy}
-              onClick={() => fileInputRef.current?.click()}
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xl leading-none text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
-              aria-label={attachmentBusy ? "Loading files" : "Attach files"}
-            >
-              {attachmentBusy ? "..." : "+"}
-            </button>
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              value={draft}
-              disabled={!selectedNode || !canWrite || sending}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={handleComposerKeyDown}
-              className="max-h-[156px] min-h-[28px] flex-1 resize-none bg-transparent px-1 py-1.5 text-[15px] leading-7 text-[color:var(--text)] outline-none placeholder:text-[color:var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
-              placeholder={
-                selectedNode
-                  ? canWrite
-                    ? "Спроси что-нибудь"
-                    : "Parent branches are read-only"
-                  : "No node selected"
-              }
-            />
-            <button
-              type="submit"
-              disabled={!canSend}
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[color:var(--button)] text-base font-semibold text-[color:var(--button-text)] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-              aria-label="Send"
-            >
-              ↑
-            </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(event) => void attachFiles(event.target.files)}
+              />
+              <button
+                type="button"
+                disabled={!canWrite || sending || attachmentBusy}
+                onClick={() => fileInputRef.current?.click()}
+                className="group relative grid h-9 w-9 shrink-0 place-items-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label={attachmentBusy ? "Loading files" : "Attach files"}
+              >
+                {attachmentBusy ? (
+                  <span className="text-xs leading-none">...</span>
+                ) : (
+                  <PlusIcon />
+                )}
+              </button>
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={draft}
+                disabled={!selectedNode || !canWrite || sending}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={handleComposerKeyDown}
+                className="max-h-[156px] min-h-[28px] flex-1 resize-none bg-transparent px-1 py-1.5 text-[15px] leading-7 text-[color:var(--text)] outline-none placeholder:text-[color:var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
+                placeholder={
+                  selectedNode
+                    ? canWrite
+                      ? "Спроси что-нибудь"
+                      : "Parent branches are read-only"
+                    : "No node selected"
+                }
+              />
+              <button
+                type="submit"
+                disabled={!canSend}
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[color:var(--button)] text-[color:var(--button-text)] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Send"
+              >
+                <SendIcon />
+              </button>
             </div>
           </div>
         </div>
@@ -520,6 +530,25 @@ function InlineVisualization({ html }: { html: string }) {
   );
 }
 
+function PlusIcon() {
+  return (
+    <span className="relative block h-4 w-4" aria-hidden="true">
+      <span className="absolute left-1/2 top-0 h-4 w-[1.5px] -translate-x-1/2 rounded-full bg-current" />
+      <span className="absolute left-0 top-1/2 h-[1.5px] w-4 -translate-y-1/2 rounded-full bg-current" />
+    </span>
+  );
+}
+
+function SendIcon() {
+  return (
+    <span className="relative block h-4 w-4" aria-hidden="true">
+      <span className="absolute left-1/2 top-[1px] h-[14px] w-[1.7px] -translate-x-1/2 rounded-full bg-current" />
+      <span className="absolute left-[4px] top-[1px] h-[8px] w-[1.7px] origin-top rotate-45 rounded-full bg-current" />
+      <span className="absolute right-[4px] top-[1px] h-[8px] w-[1.7px] origin-top -rotate-45 rounded-full bg-current" />
+    </span>
+  );
+}
+
 async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
   if (file.size > MAX_FILE_BYTES) {
     throw new Error(`File is larger than ${formatBytes(MAX_FILE_BYTES)}.`);
@@ -533,9 +562,8 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
 
   if (textLike) {
     const text = await readFileText(file);
-    const clipped = text.length > MAX_TEXT_CHARS
-      ? `${text.slice(0, MAX_TEXT_CHARS)}\n\n[File clipped]`
-      : text;
+    const clipped =
+      text.length > MAX_TEXT_CHARS ? `${text.slice(0, MAX_TEXT_CHARS)}\n\n[File clipped]` : text;
     return {
       id: crypto.randomUUID(),
       name: file.name,
