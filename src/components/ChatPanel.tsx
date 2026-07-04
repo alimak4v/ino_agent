@@ -37,6 +37,10 @@ interface AttachmentDraft {
   warning?: string;
 }
 
+const MAX_ATTACHMENTS = 8;
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_TEXT_CHARS = 180_000;
+
 export function ChatPanel({
   selectedNode,
   messages,
@@ -80,8 +84,8 @@ export function ChatPanel({
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(148, Math.max(26, textarea.scrollHeight))}px`;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(156, Math.max(28, textarea.scrollHeight))}px`;
   }, [draft]);
 
   const canSend = Boolean(
@@ -95,8 +99,18 @@ export function ChatPanel({
     try {
       const loaded: AttachmentDraft[] = [];
       const failed: string[] = [];
+      const slotsLeft = MAX_ATTACHMENTS - attachments.length;
+      const candidates = Array.from(files).slice(0, Math.max(0, slotsLeft));
 
-      for (const file of Array.from(files)) {
+      if (slotsLeft <= 0) {
+        setAttachmentError(`Maximum ${MAX_ATTACHMENTS} files per message.`);
+        return;
+      }
+      if (files.length > slotsLeft) {
+        failed.push(`Only ${slotsLeft} more file${slotsLeft === 1 ? "" : "s"} can be attached.`);
+      }
+
+      for (const file of candidates) {
         try {
           loaded.push(await readFileAsAttachment(file));
         } catch (e) {
@@ -158,9 +172,13 @@ export function ChatPanel({
     }
   };
 
-  const contentShell = "w-full min-w-0";
-  const composerShell = "w-full min-w-0";
-  const assistantWidth = "max-w-full";
+  const contentShell = fullWidth
+    ? "mx-auto w-full max-w-[920px] min-w-0"
+    : "w-full min-w-0";
+  const composerShell = fullWidth
+    ? "mx-auto w-full max-w-[820px] min-w-0"
+    : "w-full min-w-0";
+  const assistantWidth = "max-w-[100%]";
   const userWidth = "max-w-[92%]";
   const panelStyle = fullWidth || !panelWidth ? undefined : { width: `${panelWidth}px` };
 
@@ -173,14 +191,14 @@ export function ChatPanel({
           : "border-l border-[color:var(--border)]"
       }`}
     >
-      <header className="border-b border-[color:var(--border)] bg-[color:var(--panel)]/95 px-5 py-3 shadow-[0_1px_0_rgba(255,255,255,0.02)]">
+      <header className="border-b border-[color:var(--border)] bg-[color:var(--app-bg)]/95 px-5 py-3 shadow-[0_1px_0_rgba(255,255,255,0.02)]">
         <div
-          className={`${contentShell} flex min-h-12 items-start justify-between gap-3 ${
+          className={`${contentShell} flex min-h-10 items-center justify-between gap-3 ${
             fullWidth ? "pl-24" : ""
           }`}
         >
           <div className="min-w-0">
-            <div className="truncate text-[15px] font-semibold tracking-normal">
+            <div className="truncate text-[14px] font-semibold tracking-normal">
               {selectedNode?.title ?? "No node selected"}
             </div>
             <div className="truncate text-xs text-[color:var(--muted)]">
@@ -195,14 +213,14 @@ export function ChatPanel({
             <button
               type="button"
               onClick={onToggleTree}
-              className="rounded-xl border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 py-2 text-xs font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+              className="rounded-full border border-transparent px-2.5 py-1.5 text-xs font-medium text-[color:var(--muted)] transition-colors hover:border-[color:var(--border)] hover:bg-[color:var(--panel)] hover:text-[color:var(--text)]"
             >
-              {treeVisible ? "Hide tree" : "Show tree"}
+              {treeVisible ? "Focus" : "Tree"}
             </button>
             <button
               type="button"
               onClick={() => setSettingsOpen((value) => !value)}
-              className="rounded-xl border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 py-2 text-xs font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+              className="rounded-full border border-transparent px-2.5 py-1.5 text-xs font-medium text-[color:var(--muted)] transition-colors hover:border-[color:var(--border)] hover:bg-[color:var(--panel)] hover:text-[color:var(--text)]"
             >
               API
             </button>
@@ -212,24 +230,40 @@ export function ChatPanel({
         {settingsOpen && (
           <form
             onSubmit={saveSettings}
-            className={`${contentShell} ${fullWidth ? "pl-24" : ""} mt-3 space-y-2`}
+            className={`${contentShell} ${fullWidth ? "pl-24" : ""} mt-3 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3`}
           >
-            <label className="block text-xs text-[color:var(--muted)]">
-              API key
-              <input
-                type="password"
-                value={settingsDraft.api_key}
-                onChange={(event) =>
-                  setSettingsDraft((current) => ({
-                    ...current,
-                    api_key: event.target.value,
-                  }))
-                }
-                className="mt-1 h-9 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
-                placeholder="sk-..."
-              />
-            </label>
-            <label className="block text-xs text-[color:var(--muted)]">
+            <div className="grid gap-2 md:grid-cols-[1fr_180px]">
+              <label className="block text-xs text-[color:var(--muted)]">
+                API key
+                <input
+                  type="password"
+                  value={settingsDraft.api_key}
+                  onChange={(event) =>
+                    setSettingsDraft((current) => ({
+                      ...current,
+                      api_key: event.target.value,
+                    }))
+                  }
+                  className="mt-1 h-9 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
+                  placeholder="sk-..."
+                />
+              </label>
+              <label className="block text-xs text-[color:var(--muted)]">
+                Model
+                <input
+                  type="text"
+                  value={settingsDraft.model}
+                  onChange={(event) =>
+                    setSettingsDraft((current) => ({
+                      ...current,
+                      model: event.target.value,
+                    }))
+                  }
+                  className="mt-1 h-9 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
+                />
+              </label>
+            </div>
+            <label className="mt-2 block text-xs text-[color:var(--muted)]">
               Endpoint
               <input
                 type="text"
@@ -243,35 +277,21 @@ export function ChatPanel({
                 className="mt-1 h-9 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
               />
             </label>
-            <label className="block text-xs text-[color:var(--muted)]">
-              Model
-              <input
-                type="text"
-                value={settingsDraft.model}
-                onChange={(event) =>
-                  setSettingsDraft((current) => ({
-                    ...current,
-                    model: event.target.value,
-                  }))
-                }
-                className="mt-1 h-9 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
-              />
-            </label>
-            <div className="flex justify-end gap-2 pt-1">
+            <div className="mt-3 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => {
                   setSettingsDraft(settings);
                   setSettingsOpen(false);
                 }}
-                className="rounded-lg border border-[color:var(--border)] px-3 py-1.5 text-xs hover:bg-[color:var(--selected)]"
+                className="rounded-full px-3 py-1.5 text-xs text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={savingSettings}
-                className="rounded-lg bg-[color:var(--button)] px-3 py-1.5 text-xs font-medium text-[color:var(--button-text)] disabled:opacity-60"
+                className="rounded-full bg-[color:var(--button)] px-3 py-1.5 text-xs font-medium text-[color:var(--button-text)] disabled:opacity-60"
               >
                 {savingSettings ? "Saving" : "Save"}
               </button>
@@ -352,7 +372,11 @@ export function ChatPanel({
           event.preventDefault();
           setDropActive(true);
         }}
-        onDragLeave={() => setDropActive(false)}
+        onDragLeave={(event) => {
+          const nextTarget = event.relatedTarget as Node | null;
+          if (nextTarget && event.currentTarget.contains(nextTarget)) return;
+          setDropActive(false);
+        }}
         className="bg-gradient-to-t from-[color:var(--app-bg)] via-[color:var(--app-bg)] px-5 pb-5 pt-2"
       >
         <div className={composerShell}>
@@ -362,44 +386,45 @@ export function ChatPanel({
             </div>
           )}
 
-          {attachmentBusy && (
-            <div className="mb-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] px-4 py-2 text-xs text-[color:var(--muted)]">
-              Loading files
-            </div>
-          )}
-
-          {attachments.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-2">
-              {attachments.map((file) => (
-                <div
-                  key={file.id}
-                  className="flex max-w-full items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--panel)] px-3 py-1.5 text-xs text-[color:var(--text)]"
-                  title={file.warning || file.name}
-                >
-                  <span className="max-w-[220px] truncate">{file.name}</span>
-                  <span className="shrink-0 text-[color:var(--muted)]">
-                    {formatBytes(file.size)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeAttachment(file.id)}
-                    className="grid h-5 w-5 place-items-center rounded-full text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
-                    aria-label={`Remove ${file.name}`}
-                  >
-                    x
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
           <div
-            className={`flex items-end gap-2 rounded-[28px] border px-3 py-2 shadow-[0_18px_44px_rgba(0,0,0,0.24)] transition-colors focus-within:border-[color:var(--accent)] ${
+            className={`overflow-hidden rounded-[28px] border shadow-[0_18px_44px_rgba(0,0,0,0.22)] transition-colors focus-within:border-[color:var(--accent)] ${
               dropActive
                 ? "border-[color:var(--accent)] bg-[color:var(--selected)]"
                 : "border-[color:var(--border)] bg-[#1D1D20]"
             }`}
           >
+            {(attachments.length > 0 || attachmentBusy) && (
+              <div className="flex max-h-24 gap-2 overflow-x-auto border-b border-[color:var(--border)] px-3 py-2">
+                {attachments.map((file) => (
+                  <div
+                    key={file.id}
+                    className="flex max-w-[220px] shrink-0 items-center gap-2 rounded-2xl bg-[color:var(--panel-soft)] px-3 py-2 text-xs text-[color:var(--text)]"
+                    title={file.warning || file.name}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate leading-4">{file.name}</div>
+                      <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
+                        {file.warning ?? formatBytes(file.size)}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(file.id)}
+                      className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
+                      aria-label={`Remove ${file.name}`}
+                    >
+                      x
+                    </button>
+                  </div>
+                ))}
+                {attachmentBusy && (
+                  <div className="shrink-0 rounded-2xl bg-[color:var(--panel-soft)] px-3 py-2 text-xs text-[color:var(--muted)]">
+                    Loading files
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex items-end gap-2 px-2 py-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -411,7 +436,7 @@ export function ChatPanel({
               type="button"
               disabled={!canWrite || sending || attachmentBusy}
               onClick={() => fileInputRef.current?.click()}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-2xl leading-none text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xl leading-none text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
               aria-label={attachmentBusy ? "Loading files" : "Attach files"}
             >
               {attachmentBusy ? "..." : "+"}
@@ -423,7 +448,7 @@ export function ChatPanel({
               disabled={!selectedNode || !canWrite || sending}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              className="max-h-[148px] min-h-[26px] flex-1 resize-none bg-transparent px-1 py-2 text-[15px] leading-6 text-[color:var(--text)] outline-none placeholder:text-[color:var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="max-h-[156px] min-h-[28px] flex-1 resize-none bg-transparent px-1 py-1.5 text-[15px] leading-7 text-[color:var(--text)] outline-none placeholder:text-[color:var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
               placeholder={
                 selectedNode
                   ? canWrite
@@ -435,11 +460,12 @@ export function ChatPanel({
             <button
               type="submit"
               disabled={!canSend}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[color:var(--button)] text-lg font-semibold text-[color:var(--button-text)] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[color:var(--button)] text-base font-semibold text-[color:var(--button-text)] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
               aria-label="Send"
             >
               ↑
             </button>
+            </div>
           </div>
         </div>
       </form>
@@ -495,7 +521,10 @@ function InlineVisualization({ html }: { html: string }) {
 }
 
 async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
-  const maxTextBytes = 220_000;
+  if (file.size > MAX_FILE_BYTES) {
+    throw new Error(`File is larger than ${formatBytes(MAX_FILE_BYTES)}.`);
+  }
+
   const textLike =
     file.type.startsWith("text/") ||
     /\.(md|markdown|txt|csv|json|jsonl|tsv|tex|js|jsx|ts|tsx|py|rs|html|css|xml|yaml|yml|log)$/i.test(
@@ -504,15 +533,16 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
 
   if (textLike) {
     const text = await readFileText(file);
-    const clipped =
-      text.length > maxTextBytes ? `${text.slice(0, maxTextBytes)}\n\n[File clipped]` : text;
+    const clipped = text.length > MAX_TEXT_CHARS
+      ? `${text.slice(0, MAX_TEXT_CHARS)}\n\n[File clipped]`
+      : text;
     return {
       id: crypto.randomUUID(),
       name: file.name,
       size: file.size,
       type: file.type || "text",
       content: clipped,
-      warning: text.length > maxTextBytes ? "File clipped before sending" : undefined,
+      warning: text.length > MAX_TEXT_CHARS ? "File clipped before sending" : undefined,
     };
   }
 
@@ -565,7 +595,7 @@ async function extractPdfText(file: File) {
     }
   }
 
-  return Array.from(chunks).join("\n").slice(0, 220_000).trim();
+  return Array.from(chunks).join("\n").slice(0, MAX_TEXT_CHARS).trim();
 }
 
 function looksReadable(value: string) {
