@@ -193,7 +193,10 @@ impl Store {
             .map_err(|e| e.to_string())?;
         if !columns.iter().any(|column| column == "visualization_html") {
             self.conn
-                .execute("ALTER TABLE messages ADD COLUMN visualization_html TEXT", [])
+                .execute(
+                    "ALTER TABLE messages ADD COLUMN visualization_html TEXT",
+                    [],
+                )
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -638,6 +641,23 @@ impl Store {
             visualization_html,
             created_at: ts,
         })
+    }
+
+    pub fn set_message_visualization(
+        &self,
+        tree_id: &str,
+        node_id: &str,
+        message_id: &str,
+        visualization_html: &str,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE messages SET visualization_html = ?1
+                 WHERE id = ?2 AND tree_id = ?3 AND node_id = ?4 AND role = 'assistant'",
+                params![visualization_html, message_id, tree_id, node_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn get_messages_for_path(

@@ -11,6 +11,8 @@ import {
   api,
   isTauriRuntime,
   type AssistantDelta,
+  type AssistantVisualization,
+  type AssistantVisualizationError,
   type ChatSettings,
   type Message,
   type SettingsInput,
@@ -28,7 +30,6 @@ const DEFAULT_SETTINGS: ChatSettings = {
 };
 const MIN_TREE_WIDTH = 240;
 const MIN_CHAT_WIDTH = 340;
-const MAX_CHAT_WIDTH = 620;
 const DIVIDER_WIDTH = 8;
 
 export default function App() {
@@ -39,6 +40,7 @@ export default function App() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [activeRequests, setActiveRequests] = useState<Record<string, string>>({});
   const [streamingText, setStreamingText] = useState<Record<string, string>>({});
+  const [visualizationErrors, setVisualizationErrors] = useState<Record<string, string>>({});
   const [chatError, setChatError] = useState("");
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
@@ -128,14 +130,13 @@ export default function App() {
   const clampChatWidth = useCallback((width: number) => {
     const viewportWidth =
       typeof window === "undefined"
-        ? MIN_TREE_WIDTH + DIVIDER_WIDTH + MAX_CHAT_WIDTH
+        ? MIN_TREE_WIDTH + DIVIDER_WIDTH + MIN_CHAT_WIDTH
         : window.innerWidth;
     const maxByViewport = Math.max(
       MIN_CHAT_WIDTH,
       viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH,
     );
-    const maxWidth = Math.min(MAX_CHAT_WIDTH, maxByViewport);
-    return Math.min(maxWidth, Math.max(MIN_CHAT_WIDTH, Math.round(width)));
+    return Math.min(maxByViewport, Math.max(MIN_CHAT_WIDTH, Math.round(width)));
   }, []);
 
   useEffect(() => {
@@ -280,6 +281,46 @@ export default function App() {
     });
     return () => {
       unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    let unlistenReady: (() => void) | undefined;
+    let unlistenError: (() => void) | undefined;
+
+    void listen<AssistantVisualization>("assistant-visualization", (event) => {
+      const payload = event.payload;
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === payload.message_id
+            ? { ...message, visualization_html: payload.html }
+            : message,
+        ),
+      );
+      setVisualizationErrors((current) => {
+        const next = { ...current };
+        delete next[payload.message_id];
+        return next;
+      });
+    }).then((fn) => {
+      unlistenReady = fn;
+    });
+
+    void listen<AssistantVisualizationError>("assistant-visualization-error", (event) => {
+      const payload = event.payload;
+      setVisualizationErrors((current) => ({
+        ...current,
+        [payload.message_id]: payload.error,
+      }));
+    }).then((fn) => {
+      unlistenError = fn;
+    });
+
+    return () => {
+      unlistenReady?.();
+      unlistenError?.();
     };
   }, []);
 
@@ -544,6 +585,7 @@ export default function App() {
         loading={messagesLoading}
         sending={selectedNodeIsSending}
         streamingText={selectedStreamingText}
+        visualizationErrors={visualizationErrors}
         canWrite={Boolean(selectedNode?.is_leaf)}
         fullWidth={!treeVisible}
         error={chatError}

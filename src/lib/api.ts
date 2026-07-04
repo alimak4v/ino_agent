@@ -70,6 +70,20 @@ export interface AssistantDelta {
   delta: string;
 }
 
+export interface AssistantVisualization {
+  tree_id: string;
+  node_id: string;
+  message_id: string;
+  html: string;
+}
+
+export interface AssistantVisualizationError {
+  tree_id: string;
+  node_id: string;
+  message_id: string;
+  error: string;
+}
+
 export type SettingsInput = ChatSettings;
 
 const FALLBACK_SETTINGS: ChatSettings = {

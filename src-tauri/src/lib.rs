@@ -23,6 +23,22 @@ struct StreamDelta {
     delta: String,
 }
 
+#[derive(Clone, Serialize)]
+struct VisualizationReady {
+    tree_id: String,
+    node_id: String,
+    message_id: String,
+    html: String,
+}
+
+#[derive(Clone, Serialize)]
+struct VisualizationError {
+    tree_id: String,
+    node_id: String,
+    message_id: String,
+    error: String,
+}
+
 fn lock_store(store: &Arc<Mutex<store::Store>>) -> Result<MutexGuard<'_, store::Store>, String> {
     store.lock().map_err(|e| e.to_string())
 }
@@ -294,15 +310,23 @@ fn generate_assistant_reply_blocking(
             },
         );
     })?;
-    let visualization_html = maybe_generate_inline_visualization(&settings, &latest_user, &answer);
-    let store = &mut *lock_store(&store)?;
-    let message = store.add_message_with_visualization(
-        &tree_id,
-        &node_id,
-        "assistant",
-        &answer,
-        visualization_html,
-    )?;
+    let should_visualize = wants_inline_visualization(&latest_user, &answer);
+    let message = {
+        let store = &mut *lock_store(&store)?;
+        store.add_message(&tree_id, &node_id, "assistant", &answer)?
+    };
+    if should_visualize {
+        spawn_inline_visualization(
+            window.clone(),
+            settings.clone(),
+            store.clone(),
+            tree_id.clone(),
+            node_id.clone(),
+            message.id.clone(),
+            latest_user.clone(),
+            answer.clone(),
+        );
+    }
     Ok(store::AssistantReplyResult {
         message,
         selected_node_id: node_id,
@@ -310,14 +334,64 @@ fn generate_assistant_reply_blocking(
     })
 }
 
-fn maybe_generate_inline_visualization(
+fn spawn_inline_visualization(
+    window: Window,
+    settings: store::ChatSettings,
+    store: Arc<Mutex<store::Store>>,
+    tree_id: String,
+    node_id: String,
+    message_id: String,
+    latest_user: String,
+    answer: String,
+) {
+    tauri::async_runtime::spawn_blocking(move || {
+        match generate_inline_visualization(&settings, &latest_user, &answer) {
+            Ok(html) => {
+                let update = lock_store(&store).and_then(|store| {
+                    store.set_message_visualization(&tree_id, &node_id, &message_id, &html)
+                });
+                if let Err(error) = update {
+                    let _ = window.emit(
+                        "assistant-visualization-error",
+                        VisualizationError {
+                            tree_id,
+                            node_id,
+                            message_id,
+                            error,
+                        },
+                    );
+                    return;
+                }
+                let _ = window.emit(
+                    "assistant-visualization",
+                    VisualizationReady {
+                        tree_id,
+                        node_id,
+                        message_id,
+                        html,
+                    },
+                );
+            }
+            Err(error) => {
+                let _ = window.emit(
+                    "assistant-visualization-error",
+                    VisualizationError {
+                        tree_id,
+                        node_id,
+                        message_id,
+                        error,
+                    },
+                );
+            }
+        }
+    });
+}
+
+fn generate_inline_visualization(
     settings: &store::ChatSettings,
     latest_user: &str,
     answer: &str,
-) -> Option<String> {
-    if !wants_inline_visualization(latest_user, answer) {
-        return None;
-    }
+) -> Result<String, String> {
     let mut graph_settings = settings.clone();
     if graph_settings.model.trim().is_empty() || graph_settings.model.trim() == "gpt-4.1-mini" {
         graph_settings.model = "gpt-4o-mini".to_string();
@@ -336,7 +410,7 @@ fn maybe_generate_inline_visualization(
             ),
         },
     ];
-    api::generate_learning_graph_html(&graph_settings, &messages).ok()
+    api::generate_learning_graph_html(&graph_settings, &messages)
 }
 
 fn create_branches_from_plan(
@@ -497,34 +571,48 @@ fn looks_branchable(raw: &str) -> bool {
 }
 
 fn wants_inline_visualization(latest_user: &str, answer: &str) -> bool {
-    let text = format!("{latest_user}\n{answer}").to_lowercase();
-    [
+    let prompt = latest_user.to_lowercase();
+    let answer = answer.to_lowercase();
+    let explicit_visual = [
         "граф",
         "дерев",
         "схем",
         "диаграм",
+        "визуал",
+        "нарис",
+        "покажи",
+        "интерактив",
+        "симуля",
+        "блок-схем",
+    ]
+    .iter()
+    .any(|needle| contains(&prompt, needle));
+    let algorithmic_topic = [
         "алгоритм",
         "дейкстр",
         "dijkstra",
+        "bfs",
+        "dfs",
+        "a*",
         "поток",
-        "flow",
-        "process",
+        "ford",
+        "fulkerson",
+        "edmonds",
+        "karp",
         "процесс",
-        "стрел",
-        "шаг",
-        "пошаг",
-        "симуля",
-        "визуал",
         "маршрут",
-        "path",
         "network",
-        "узл",
-        "ребр",
-        "edge",
-        "node",
+        "автомат",
+        "состояни",
     ]
     .iter()
-    .any(|needle| contains(&text, needle))
+    .any(|needle| contains(&prompt, needle));
+    let answer_is_visual = ["узл", "ребр", "вершин", "стрел", "пошаг", "шаг"]
+        .iter()
+        .filter(|needle| contains(&answer, needle))
+        .count()
+        >= 2;
+    explicit_visual || algorithmic_topic || (contains(&prompt, "объясни") && answer_is_visual)
 }
 
 fn fallback_branch_plan_from_text(source: &str) -> Option<store::BranchPlan> {

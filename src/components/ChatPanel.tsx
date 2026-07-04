@@ -16,6 +16,7 @@ interface ChatPanelProps {
   loading: boolean;
   sending: boolean;
   streamingText: string;
+  visualizationErrors: Record<string, string>;
   canWrite: boolean;
   fullWidth: boolean;
   error: string;
@@ -42,6 +43,7 @@ export function ChatPanel({
   loading,
   sending,
   streamingText,
+  visualizationErrors,
   canWrite,
   fullWidth,
   error,
@@ -156,14 +158,10 @@ export function ChatPanel({
     }
   };
 
-  const contentShell = fullWidth
-    ? "mx-auto w-full max-w-[900px] min-w-0"
-    : "w-full min-w-0";
-  const composerShell = fullWidth
-    ? "mx-auto w-full max-w-[700px] min-w-0"
-    : "w-full min-w-0";
-  const assistantWidth = fullWidth ? "max-w-[860px]" : "max-w-full";
-  const userWidth = fullWidth ? "max-w-[720px]" : "max-w-[92%]";
+  const contentShell = "w-full min-w-0";
+  const composerShell = "w-full min-w-0";
+  const assistantWidth = "max-w-full";
+  const userWidth = "max-w-[92%]";
   const panelStyle = fullWidth || !panelWidth ? undefined : { width: `${panelWidth}px` };
 
   return (
@@ -309,6 +307,11 @@ export function ChatPanel({
                   {message.visualization_html && (
                     <InlineVisualization html={message.visualization_html} />
                   )}
+                  {visualizationErrors[message.id] && (
+                    <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
+                      {visualizationErrors[message.id]}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -445,15 +448,49 @@ export function ChatPanel({
 }
 
 function InlineVisualization({ html }: { html: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const renderFrame = (title: string) => (
+    <iframe
+      title={title}
+      sandbox="allow-scripts"
+      srcDoc={html}
+      className="h-full w-full border-0"
+    />
+  );
+
   return (
-    <div className="mt-5 overflow-hidden rounded-lg border border-[color:var(--border)] bg-[#121212] shadow-[0_18px_44px_rgba(0,0,0,0.22)]">
-      <iframe
-        title="Interactive visualization"
-        sandbox="allow-scripts"
-        srcDoc={html}
-        className="h-[460px] w-full border-0"
-      />
-    </div>
+    <>
+      <div className="mt-5 overflow-hidden rounded-lg border border-[color:var(--border)] bg-[#121212] shadow-[0_18px_44px_rgba(0,0,0,0.22)]">
+        <div className="flex h-9 items-center justify-end border-b border-[color:var(--border)] bg-[#17181C] px-2">
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="rounded-md border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-2 py-1 text-xs font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+          >
+            Fullscreen
+          </button>
+        </div>
+        <div className="h-[min(520px,60vh)] min-h-[360px]">
+          {renderFrame("Interactive visualization")}
+        </div>
+      </div>
+      {expanded && (
+        <div className="no-drag fixed inset-0 z-[120] flex flex-col bg-[#121212]">
+          <div className="flex h-12 shrink-0 items-center justify-end border-b border-white/10 bg-[#17181C] px-3">
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-black transition-opacity hover:opacity-85"
+            >
+              Close
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            {renderFrame("Fullscreen interactive visualization")}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
