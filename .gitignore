@@ -1,0 +1,24 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# App data and local databases
+treeai.sqlite
+treeai.sqlite3
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# Dependency and build outputs
+node_modules/
+dist/
+src-tauri/target/
+
+# Tooling caches
+.DS_Store
+.vite/
+*.log
