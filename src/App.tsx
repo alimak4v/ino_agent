@@ -53,7 +53,7 @@ export default function App() {
   const activeRequestsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
-    applyThemeVars(THEMES["Obsidian Dark"]);
+    applyThemeVars(THEMES["Minimal Light"]);
   }, []);
 
   useEffect(() => {

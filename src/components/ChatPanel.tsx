@@ -197,7 +197,7 @@ export function ChatPanel({
           : "border-l border-[color:var(--border)]"
       }`}
     >
-      <header className="border-b border-[color:var(--border)] bg-[color:var(--app-bg)]/95 px-5 py-3 shadow-[0_1px_0_rgba(255,255,255,0.02)]">
+      <header className="border-b border-[color:var(--border)] bg-[color:var(--app-bg)]/95 px-5 py-3">
         <div
           className={`${contentShell} flex min-h-10 items-center justify-between gap-3 ${
             fullWidth ? "pl-24" : ""
@@ -219,14 +219,14 @@ export function ChatPanel({
             <button
               type="button"
               onClick={onToggleTree}
-              className="h-8 rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--panel)] hover:text-[color:var(--text)]"
+              className="h-8 rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--panel-soft)] hover:text-[color:var(--text)]"
             >
               {treeVisible ? "Focus" : "Tree"}
             </button>
             <button
               type="button"
               onClick={() => setSettingsOpen((value) => !value)}
-              className="h-8 rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--panel)] hover:text-[color:var(--text)]"
+              className="h-8 rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--panel-soft)] hover:text-[color:var(--text)]"
             >
               API
             </button>
@@ -325,7 +325,7 @@ export function ChatPanel({
                 <div
                   className={
                     message.role === "user"
-                      ? `${userWidth} min-w-0 break-words rounded-3xl bg-[color:var(--panel)] px-4 py-3 text-[15px] leading-7 text-[color:var(--text)] shadow-sm`
+                      ? `${userWidth} min-w-0 break-words rounded-3xl bg-[color:var(--user)] px-4 py-3 text-[15px] leading-7 text-[color:var(--text)]`
                       : `${assistantWidth} min-w-0 break-words text-[15px] leading-7 text-[color:var(--text)]`
                   }
                 >
@@ -334,7 +334,7 @@ export function ChatPanel({
                     <InlineVisualization html={message.visualization_html} />
                   )}
                   {visualizationErrors[message.id] && (
-                    <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
+                    <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
                       {visualizationErrors[message.id]}
                     </div>
                   )}
@@ -364,8 +364,8 @@ export function ChatPanel({
       {(error || attachmentError) && (
         <div className="px-5 pb-2 text-xs text-red-300">
           <div className={`${composerShell} space-y-1 whitespace-pre-wrap break-words`}>
-            {error && <div>{error}</div>}
-            {attachmentError && <div>{attachmentError}</div>}
+            {error && <div className="text-red-600">{error}</div>}
+            {attachmentError && <div className="text-red-600">{attachmentError}</div>}
           </div>
         </div>
       )}
@@ -393,10 +393,10 @@ export function ChatPanel({
           )}
 
           <div
-            className={`overflow-hidden rounded-[28px] border shadow-[0_18px_44px_rgba(0,0,0,0.22)] transition-colors focus-within:border-[color:var(--accent)] ${
+            className={`overflow-hidden rounded-[28px] border shadow-[0_12px_38px_rgba(0,0,0,0.08)] transition-colors focus-within:border-[color:var(--accent)] ${
               dropActive
                 ? "border-[color:var(--accent)] bg-[color:var(--selected)]"
-                : "border-[color:var(--border)] bg-[#1D1D20]"
+                : "border-[color:var(--border)] bg-[color:var(--panel)]"
             }`}
           >
             {(attachments.length > 0 || attachmentBusy) && (
@@ -415,7 +415,7 @@ export function ChatPanel({
                     </div>
                     <button
                       type="button"
-                      onClick={() => removeAttachment(file.id)}
+                    onClick={() => removeAttachment(file.id)}
                       className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
                       aria-label={`Remove ${file.name}`}
                     >
@@ -442,7 +442,7 @@ export function ChatPanel({
                 type="button"
                 disabled={!canWrite || sending || attachmentBusy}
                 onClick={() => fileInputRef.current?.click()}
-                className="group relative grid h-9 w-9 shrink-0 place-items-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[color:var(--panel-soft)] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label={attachmentBusy ? "Loading files" : "Attach files"}
               >
                 {attachmentBusy ? (
@@ -470,7 +470,7 @@ export function ChatPanel({
               <button
                 type="submit"
                 disabled={!canSend}
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[color:var(--button)] text-[color:var(--button-text)] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[color:var(--button)] text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="Send"
               >
                 <SendIcon />
@@ -496,12 +496,12 @@ function InlineVisualization({ html }: { html: string }) {
 
   return (
     <>
-      <div className="mt-5 overflow-hidden rounded-lg border border-[color:var(--border)] bg-[#121212] shadow-[0_18px_44px_rgba(0,0,0,0.22)]">
-        <div className="flex h-9 items-center justify-end border-b border-[color:var(--border)] bg-[#17181C] px-2">
+      <div className="mt-5 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_34px_rgba(0,0,0,0.08)]">
+        <div className="flex h-9 items-center justify-end border-b border-[color:var(--border)] bg-[color:var(--panel-soft)] px-2">
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="rounded-md border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-2 py-1 text-xs font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+            className="rounded-full px-3 py-1 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
           >
             Fullscreen
           </button>
@@ -511,12 +511,12 @@ function InlineVisualization({ html }: { html: string }) {
         </div>
       </div>
       {expanded && (
-        <div className="no-drag fixed inset-0 z-[120] flex flex-col bg-[#121212]">
-          <div className="flex h-12 shrink-0 items-center justify-end border-b border-white/10 bg-[#17181C] px-3">
+        <div className="no-drag fixed inset-0 z-[120] flex flex-col bg-[color:var(--app-bg)]">
+          <div className="flex h-12 shrink-0 items-center justify-end border-b border-[color:var(--border)] bg-[color:var(--panel)] px-3">
             <button
               type="button"
               onClick={() => setExpanded(false)}
-              className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-black transition-opacity hover:opacity-85"
+              className="rounded-full bg-[color:var(--button)] px-3 py-1.5 text-xs font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-85"
             >
               Close
             </button>
@@ -532,20 +532,35 @@ function InlineVisualization({ html }: { html: string }) {
 
 function PlusIcon() {
   return (
-    <span className="relative block h-4 w-4" aria-hidden="true">
-      <span className="absolute left-1/2 top-0 h-4 w-[1.5px] -translate-x-1/2 rounded-full bg-current" />
-      <span className="absolute left-0 top-1/2 h-[1.5px] w-4 -translate-y-1/2 rounded-full bg-current" />
-    </span>
+    <svg
+      aria-hidden="true"
+      className="block h-5 w-5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 5v14M5 12h14" />
+    </svg>
   );
 }
 
 function SendIcon() {
   return (
-    <span className="relative block h-4 w-4" aria-hidden="true">
-      <span className="absolute left-1/2 top-[1px] h-[14px] w-[1.7px] -translate-x-1/2 rounded-full bg-current" />
-      <span className="absolute left-[4px] top-[1px] h-[8px] w-[1.7px] origin-top rotate-45 rounded-full bg-current" />
-      <span className="absolute right-[4px] top-[1px] h-[8px] w-[1.7px] origin-top -rotate-45 rounded-full bg-current" />
-    </span>
+    <svg
+      aria-hidden="true"
+      className="block h-5 w-5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2.25"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 19V5" />
+      <path d="m5 12 7-7 7 7" />
+    </svg>
   );
 }
 

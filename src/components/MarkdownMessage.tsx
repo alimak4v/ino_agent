@@ -36,13 +36,13 @@ export function MarkdownMessage({ content }: { content: string }) {
         code: ({ children, className, ...props }) => (
           <code
             {...props}
-            className={`${className ?? ""} break-words rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[0.92em] text-[color:var(--text)]`}
+            className={`${className ?? ""} break-words rounded-md bg-[color:var(--panel-soft)] px-1.5 py-0.5 text-[0.92em] text-[color:var(--text)]`}
           >
             {children}
           </code>
         ),
         pre: ({ children }) => (
-          <pre className="my-4 max-w-full overflow-x-hidden whitespace-pre-wrap break-words rounded-2xl border border-[color:var(--border)] bg-[#15161A] p-4 text-xs leading-relaxed">
+          <pre className="my-4 max-w-full overflow-x-hidden whitespace-pre-wrap break-words rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-4 text-xs leading-relaxed">
             {children}
           </pre>
         ),

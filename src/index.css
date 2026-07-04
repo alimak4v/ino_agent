@@ -17,6 +17,7 @@ body,
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
   overflow: hidden;
+  background: #ffffff;
 }
 
 * {
@@ -62,9 +63,9 @@ body {
   height: 36px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  background: var(--panel);
   color: var(--text);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
   backdrop-filter: blur(10px);
 }
 
@@ -91,7 +92,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--muted) 60%, transparent);
+  background: color-mix(in srgb, var(--muted) 44%, transparent);
   border-radius: 999px;
 }
 
