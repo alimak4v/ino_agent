@@ -18,11 +18,15 @@
         "minWidth": 760,
         "minHeight": 520,
         "titleBarStyle": "Overlay",
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 26
+        },
         "hiddenTitle": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: https://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost http://localhost:* ws://localhost:*; object-src 'none'; base-uri 'self'; frame-src 'none'"
     }
   },
   "bundle": {

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ThemeName } from "./theme";
 
 declare global {
   interface Window {
@@ -25,6 +26,7 @@ export interface LayoutNode {
   parent_id: string | null;
   title: string;
   summary: string | null;
+  color: string | null;
   x: number;
   y: number;
   selected: boolean;
@@ -50,6 +52,7 @@ export interface ChatSettings {
   endpoint: string;
   model: string;
   api_key: string;
+  theme: ThemeName;
 }
 
 export interface AiBranchCreated {
@@ -70,26 +73,13 @@ export interface AssistantDelta {
   delta: string;
 }
 
-export interface AssistantVisualization {
-  tree_id: string;
-  node_id: string;
-  message_id: string;
-  html: string;
-}
-
-export interface AssistantVisualizationError {
-  tree_id: string;
-  node_id: string;
-  message_id: string;
-  error: string;
-}
-
 export type SettingsInput = ChatSettings;
 
 const FALLBACK_SETTINGS: ChatSettings = {
   endpoint: "https://api.openai.com/v1/chat/completions",
   model: "gpt-4.1-mini",
   api_key: "",
+  theme: "Minimal Light",
 };
 
 const DESKTOP_ONLY_ERROR = "Open the desktop app window to use this action.";
@@ -116,6 +106,18 @@ export const api = {
     invokeDesktop<string>("create_child_node", { treeId, parentId, title }),
   renameNode: (treeId: string, nodeId: string, title: string) =>
     invokeDesktop<void>("rename_node", { treeId, nodeId, title }),
+  setNodeColor: (
+    treeId: string,
+    nodeId: string,
+    color: string | null,
+    includeDescendants: boolean,
+  ) =>
+    invokeDesktop<void>("set_node_color", {
+      treeId,
+      nodeId,
+      color,
+      includeDescendants,
+    }),
   deleteNode: (treeId: string, nodeId: string) =>
     invokeDesktop<DeleteNodeResult>("delete_node", { treeId, nodeId }),
   getTreeLayout: (treeId: string) =>
@@ -128,6 +130,12 @@ export const api = {
     invokeDesktop<Message[]>("get_messages", { treeId, nodeId }),
   addUserMessage: (treeId: string, nodeId: string, content: string) =>
     invokeDesktop<Message>("add_user_message", { treeId, nodeId, content }),
+  editUserMessage: (treeId: string, messageId: string, content: string) =>
+    invokeDesktop<Message>("edit_user_message", { treeId, messageId, content }),
   generateAssistantReply: (treeId: string, nodeId: string, requestId: string) =>
     invokeDesktop<AssistantReplyResult>("generate_assistant_reply", { treeId, nodeId, requestId }),
+  confirmPendingBranches: (treeId: string, nodeId: string) =>
+    invokeDesktop<AssistantReplyResult>("confirm_pending_branches", { treeId, nodeId }),
+  forceBranchSplit: (treeId: string, nodeId: string) =>
+    invokeDesktop<AssistantReplyResult>("force_branch_split", { treeId, nodeId }),
 };

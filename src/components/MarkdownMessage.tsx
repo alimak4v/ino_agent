@@ -1,8 +1,10 @@
+import { Children, isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
+import { GraphSteps, MermaidDiagram } from "./MermaidGraph";
 
 export function MarkdownMessage({ content }: { content: string }) {
   return (
@@ -33,22 +35,52 @@ export function MarkdownMessage({ content }: { content: string }) {
             {children}
           </blockquote>
         ),
-        code: ({ children, className, ...props }) => (
-          <code
-            {...props}
-            className={`${className ?? ""} break-words rounded-md bg-[color:var(--panel-soft)] px-1.5 py-0.5 text-[0.92em] text-[color:var(--text)]`}
-          >
-            {children}
-          </code>
-        ),
-        pre: ({ children }) => (
-          <pre className="my-4 max-w-full overflow-x-hidden whitespace-pre-wrap break-words rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-4 text-xs leading-relaxed">
-            {children}
-          </pre>
-        ),
+        code: ({ children, className, ...props }) => {
+          const code = String(children).replace(/\n$/, "");
+          if (isMermaidClass(className)) {
+            return <MermaidDiagram graph={code} />;
+          }
+          if (isGraphStepsClass(className)) {
+            return <GraphSteps source={code} />;
+          }
+          return (
+            <code
+              {...props}
+              className={`${className ?? ""} break-words rounded-md bg-[color:var(--panel-soft)] px-1.5 py-0.5 text-[0.92em] text-[color:var(--text)]`}
+            >
+              {children}
+            </code>
+          );
+        },
+        pre: ({ children }) => {
+          const child = Children.only(children);
+          if (isSpecialCodeBlock(child)) {
+            return <>{children}</>;
+          }
+          return (
+            <pre className="my-4 max-w-full overflow-x-hidden whitespace-pre-wrap break-words rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-4 text-xs leading-relaxed">
+              {children}
+            </pre>
+          );
+        },
       }}
     >
       {content}
     </ReactMarkdown>
   );
+}
+
+function isMermaidClass(className?: string) {
+  return /\blanguage-mermaid\b/.test(className ?? "");
+}
+
+function isGraphStepsClass(className?: string) {
+  return /\blanguage-(graphsteps|mermaid-steps)\b/.test(className ?? "");
+}
+
+function isSpecialCodeBlock(child: unknown) {
+  if (!isValidElement(child)) return false;
+  const props = child.props as { className?: unknown };
+  const className = typeof props.className === "string" ? props.className : "";
+  return isMermaidClass(className) || isGraphStepsClass(className);
 }

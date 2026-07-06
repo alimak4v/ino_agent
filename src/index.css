@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
 }
 
 html,
@@ -15,7 +15,13 @@ body,
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   overflow: hidden;
   background: #ffffff;
 }
@@ -47,6 +53,14 @@ body {
   filter: none;
 }
 
+.react-flow__node,
+.react-flow__node:focus,
+.react-flow__node:focus-visible,
+.react-flow__node.selected {
+  outline: none;
+  box-shadow: none;
+}
+
 .react-flow__controls {
   display: flex;
   flex-direction: column;
@@ -59,14 +73,17 @@ body {
 }
 
 .react-flow__controls-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 36px;
   height: 36px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--panel);
   color: var(--text);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
-  backdrop-filter: blur(10px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(20px);
 }
 
 .react-flow__controls-button:hover {
@@ -74,8 +91,8 @@ body {
 }
 
 .react-flow__controls-button svg {
-  max-width: 15px;
-  max-height: 15px;
+  width: 15px;
+  height: 15px;
   fill: currentColor;
 }
 

@@ -1,5 +1,8 @@
 import {
+  type FormEvent,
   type PointerEvent as ReactPointerEvent,
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -7,59 +10,91 @@ import {
   useState,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   api,
   isTauriRuntime,
   type AssistantDelta,
-  type AssistantVisualization,
-  type AssistantVisualizationError,
+  type AssistantReplyResult,
   type ChatSettings,
   type Message,
   type SettingsInput,
   type TreeSummary,
 } from "./lib/api";
-import { applyThemeVars, THEMES } from "./lib/theme";
+import { applyThemeVars, THEMES, type ThemeName } from "./lib/theme";
 import { AppDialog, type AppDialogState } from "./components/AppDialog";
-import { ChatPanel } from "./components/ChatPanel";
-import { TreeCanvas, type CanvasLayoutNode } from "./components/TreeCanvas";
+import type { CanvasLayoutNode } from "./components/TreeCanvas";
+
+const ChatPanel = lazy(() =>
+  import("./components/ChatPanel").then((module) => ({ default: module.ChatPanel })),
+);
+const TreeCanvas = lazy(() =>
+  import("./components/TreeCanvas").then((module) => ({ default: module.TreeCanvas })),
+);
 
 const DEFAULT_SETTINGS: ChatSettings = {
   endpoint: "https://api.openai.com/v1/chat/completions",
   model: "gpt-4.1-mini",
   api_key: "",
+  theme: "Minimal Light",
 };
-const MIN_TREE_WIDTH = 240;
-const MIN_CHAT_WIDTH = 340;
+const THEME_NAMES = Object.keys(THEMES) as ThemeName[];
+const COMPACT_LAYOUT_WIDTH = 860;
+const MIN_TREE_WIDTH = 360;
+const MIN_CHAT_WIDTH = 420;
+const TARGET_CHAT_WIDTH = 760;
 const DIVIDER_WIDTH = 8;
 
+function getViewportWidth() {
+  return typeof window === "undefined" ? 1440 : window.innerWidth;
+}
+
+function getMinChatWidth(viewportWidth: number) {
+  const available = viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH;
+  return Math.min(TARGET_CHAT_WIDTH, Math.max(MIN_CHAT_WIDTH, available));
+}
+
 export default function App() {
-  const [trees, setTrees] = useState<TreeSummary[]>([]);
+  const [, setTrees] = useState<TreeSummary[]>([]);
   const [nodes, setNodes] = useState<CanvasLayoutNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [activeRequests, setActiveRequests] = useState<Record<string, string>>({});
   const [streamingText, setStreamingText] = useState<Record<string, string>>({});
-  const [visualizationErrors, setVisualizationErrors] = useState<Record<string, string>>({});
   const [chatError, setChatError] = useState("");
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [statusText, setStatusText] = useState("");
   const [treeVisible, setTreeVisible] = useState(true);
-  const [chatWidth, setChatWidth] = useState(500);
+  const [windowFullscreen, setWindowFullscreen] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(getViewportWidth);
+  const [chatWidth, setChatWidth] = useState(() => {
+    const viewportWidth = getViewportWidth();
+    return Math.min(
+      Math.round(viewportWidth * 0.48),
+      viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH,
+    );
+  });
   const [dividerDragging, setDividerDragging] = useState(false);
   const [dialog, setDialog] = useState<AppDialogState | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [savingSettings, setSavingSettings] = useState(false);
   const selectedNodeIdRef = useRef<string | null>(null);
   const activeRequestsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
-    applyThemeVars(THEMES["Minimal Light"]);
-  }, []);
+    applyThemeVars(THEMES[settings.theme] ?? THEMES[DEFAULT_SETTINGS.theme]);
+  }, [settings.theme]);
 
   useEffect(() => {
     void api
       .getSettings()
-      .then(setSettings)
+      .then((loaded) => {
+        setSettings(loaded);
+        setSettingsDraft(loaded);
+      })
       .catch((e) => setChatError(String(e)));
   }, []);
 
@@ -84,6 +119,11 @@ export default function App() {
   const selectedStreamingText = selectedCanvasNodeId
     ? streamingText[selectedCanvasNodeId] ?? ""
     : "";
+  const compactLayout = viewportWidth < COMPACT_LAYOUT_WIDTH;
+  const titlebarNeedsTrafficSpace = isTauriRuntime() && !windowFullscreen;
+  const titlebarTitle = selectedNode?.title ?? "treeAI";
+  const titlebarSubtitle =
+    selectedNode && selectedNode.treeTitle !== selectedNode.title ? selectedNode.treeTitle : "";
 
   const askText = useCallback(
     (options: {
@@ -128,23 +168,70 @@ export default function App() {
   );
 
   const clampChatWidth = useCallback((width: number) => {
-    const viewportWidth =
-      typeof window === "undefined"
-        ? MIN_TREE_WIDTH + DIVIDER_WIDTH + MIN_CHAT_WIDTH
-        : window.innerWidth;
+    const viewportWidth = getViewportWidth();
+    const minByViewport = getMinChatWidth(viewportWidth);
     const maxByViewport = Math.max(
-      MIN_CHAT_WIDTH,
+      minByViewport,
       viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH,
     );
-    return Math.min(maxByViewport, Math.max(MIN_CHAT_WIDTH, Math.round(width)));
+    return Math.min(maxByViewport, Math.max(minByViewport, Math.round(width)));
   }, []);
 
   useEffect(() => {
-    const onResize = () => setChatWidth((width) => clampChatWidth(width));
+    const onResize = () => {
+      setViewportWidth(getViewportWidth());
+      setChatWidth((width) => clampChatWidth(width));
+    };
     window.addEventListener("resize", onResize);
     onResize();
     return () => window.removeEventListener("resize", onResize);
   }, [clampChatWidth]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    const appWindow = getCurrentWindow();
+    let disposed = false;
+    let unlistenResize: (() => void) | undefined;
+    let unlistenFocus: (() => void) | undefined;
+
+    const refreshFullscreenState = () => {
+      void appWindow
+        .isFullscreen()
+        .then((isFullscreen) => {
+          if (!disposed) {
+            setWindowFullscreen(isFullscreen);
+          }
+        })
+        .catch(() => {
+          if (!disposed) {
+            setWindowFullscreen(false);
+          }
+        });
+    };
+
+    refreshFullscreenState();
+    void appWindow.onResized(refreshFullscreenState).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenResize = fn;
+    });
+    void appWindow.onFocusChanged(refreshFullscreenState).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenFocus = fn;
+    });
+
+    return () => {
+      disposed = true;
+      unlistenResize?.();
+      unlistenFocus?.();
+    };
+  }, []);
 
   const beginDividerDrag = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -190,15 +277,22 @@ export default function App() {
 
   const loadMessages = useCallback(async (treeId: string, nodeId: string) => {
     setMessagesLoading(true);
+    const isStillSelected = () => selectedNodeIdRef.current === nodeId;
     try {
       const nextMessages = await api.getMessages(treeId, nodeId);
-      setMessages(nextMessages);
-      setChatError("");
+      if (isStillSelected()) {
+        setMessages(nextMessages);
+        setChatError("");
+      }
     } catch (e) {
-      setMessages([]);
-      setChatError(String(e));
+      if (isStillSelected()) {
+        setMessages([]);
+        setChatError(String(e));
+      }
     } finally {
-      setMessagesLoading(false);
+      if (isStillSelected()) {
+        setMessagesLoading(false);
+      }
     }
   }, []);
 
@@ -266,6 +360,7 @@ export default function App() {
     if (!isTauriRuntime()) return;
 
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     void listen<AssistantDelta>("assistant-delta", (event) => {
       const payload = event.payload;
       const activeRequest = activeRequestsRef.current[payload.node_id];
@@ -277,50 +372,15 @@ export default function App() {
         [payload.node_id]: `${current[payload.node_id] ?? ""}${payload.delta}`,
       }));
     }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
       unlisten = fn;
     });
     return () => {
+      disposed = true;
       unlisten?.();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-
-    let unlistenReady: (() => void) | undefined;
-    let unlistenError: (() => void) | undefined;
-
-    void listen<AssistantVisualization>("assistant-visualization", (event) => {
-      const payload = event.payload;
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === payload.message_id
-            ? { ...message, visualization_html: payload.html }
-            : message,
-        ),
-      );
-      setVisualizationErrors((current) => {
-        const next = { ...current };
-        delete next[payload.message_id];
-        return next;
-      });
-    }).then((fn) => {
-      unlistenReady = fn;
-    });
-
-    void listen<AssistantVisualizationError>("assistant-visualization-error", (event) => {
-      const payload = event.payload;
-      setVisualizationErrors((current) => ({
-        ...current,
-        [payload.message_id]: payload.error,
-      }));
-    }).then((fn) => {
-      unlistenError = fn;
-    });
-
-    return () => {
-      unlistenReady?.();
-      unlistenError?.();
     };
   }, []);
 
@@ -435,6 +495,18 @@ export default function App() {
     [askText, loadCanvas],
   );
 
+  const handleSetNodeColor = useCallback(
+    async (node: CanvasLayoutNode, color: string | null, includeDescendants: boolean) => {
+      try {
+        await api.setNodeColor(node.treeId, node.id, color, includeDescendants);
+        await loadCanvas(node.id);
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [loadCanvas],
+  );
+
   const handleDeleteNode = useCallback(
     async (node: CanvasLayoutNode) => {
       const message = node.isRoot
@@ -467,6 +539,32 @@ export default function App() {
     [askConfirm, loadCanvas],
   );
 
+  const applyAssistantReply = useCallback(
+    async (treeId: string, nodeId: string, reply: AssistantReplyResult) => {
+      const nextNodeId = reply.selected_node_id || nodeId;
+      const createdCount = reply.created_branches.length;
+      const currentSelection = selectedNodeIdRef.current;
+      const createdBranchIds = new Set(reply.created_branches.map((branch) => branch.id));
+      const branchWasCreated = createdCount > 0 && createdBranchIds.has(nextNodeId);
+      const shouldAdoptReplySelection =
+        branchWasCreated || currentSelection === nodeId || currentSelection === nextNodeId;
+
+      if (shouldAdoptReplySelection) {
+        if (branchWasCreated) {
+          setTreeVisible(true);
+        }
+        await loadMessages(treeId, nextNodeId);
+      }
+      await loadCanvas(shouldAdoptReplySelection ? nextNodeId : currentSelection);
+      if (createdCount > 0) {
+        setStatusText(
+          createdCount === 1 ? "Created 1 branch" : `Created ${createdCount} branches`,
+        );
+      }
+    },
+    [loadCanvas, loadMessages],
+  );
+
   const handleSendMessage = useCallback(
     async (content: string) => {
       if (!selectedNode || !selectedNode.is_leaf) return;
@@ -488,23 +586,7 @@ export default function App() {
         await loadCanvas(nodeId);
 
         const reply = await api.generateAssistantReply(treeId, nodeId, requestId);
-        const nextNodeId = reply.selected_node_id || nodeId;
-        const createdCount = reply.created_branches.length;
-        const currentSelection = selectedNodeIdRef.current;
-        const shouldAdoptReplySelection =
-          currentSelection === nodeId || currentSelection === nextNodeId;
-
-        if (shouldAdoptReplySelection) {
-          await loadMessages(treeId, nextNodeId);
-        }
-        await loadCanvas(shouldAdoptReplySelection ? nextNodeId : currentSelection);
-        if (createdCount > 0) {
-          setStatusText(
-            createdCount === 1
-              ? "Created 1 branch"
-              : `Created ${createdCount} branches`,
-          );
-        }
+        await applyAssistantReply(treeId, nodeId, reply);
       } catch (e) {
         setChatError(String(e));
         if (selectedNodeIdRef.current === nodeId) {
@@ -523,13 +605,124 @@ export default function App() {
         });
       }
     },
-    [loadCanvas, loadMessages, selectedNode],
+    [applyAssistantReply, loadCanvas, loadMessages, selectedNode],
+  );
+
+  const handleConfirmBranches = useCallback(
+    async (message: Message) => {
+      const nodeId = message.node_id;
+      const treeId = message.tree_id;
+      if (activeRequestsRef.current[nodeId]) return;
+
+      setActiveRequests((current) => ({ ...current, [nodeId]: "confirm-branches" }));
+      setChatError("");
+      try {
+        const reply = await api.confirmPendingBranches(treeId, nodeId);
+        await applyAssistantReply(treeId, nodeId, reply);
+      } catch (e) {
+        setChatError(String(e));
+        if (selectedNodeIdRef.current === nodeId) {
+          await loadMessages(treeId, nodeId);
+        }
+        throw e;
+      } finally {
+        setActiveRequests((current) => {
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        });
+      }
+    },
+    [applyAssistantReply, loadMessages],
+  );
+
+  const handleEditMessage = useCallback(
+    async (message: Message, content: string) => {
+      const treeId = message.tree_id;
+      const nodeId = message.node_id;
+      if (activeRequestsRef.current[nodeId]) return;
+
+      const requestId = crypto.randomUUID();
+      setActiveRequests((current) => ({ ...current, [nodeId]: requestId }));
+      setStreamingText((current) => ({ ...current, [nodeId]: "" }));
+      setChatError("");
+
+      try {
+        const edited = await api.editUserMessage(treeId, message.id, content);
+        if (selectedNodeIdRef.current === nodeId) {
+          setMessages((current) => {
+            const index = current.findIndex((item) => item.id === message.id);
+            if (index === -1) return current;
+            return [...current.slice(0, index), edited];
+          });
+        }
+        await loadCanvas(nodeId);
+
+        const reply = await api.generateAssistantReply(treeId, nodeId, requestId);
+        await applyAssistantReply(treeId, nodeId, reply);
+      } catch (e) {
+        setChatError(String(e));
+        if (selectedNodeIdRef.current === nodeId) {
+          await loadMessages(treeId, nodeId);
+        }
+      } finally {
+        setActiveRequests((current) => {
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        });
+        setStreamingText((current) => {
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        });
+      }
+    },
+    [applyAssistantReply, loadCanvas, loadMessages],
+  );
+
+  const handleForceBranchSplit = useCallback(
+    async (content: string) => {
+      if (!selectedNode || !selectedNode.is_leaf) return;
+
+      const treeId = selectedNode.treeId;
+      const nodeId = selectedNode.id;
+      if (activeRequestsRef.current[nodeId]) return;
+
+      setActiveRequests((current) => ({ ...current, [nodeId]: "force-branch-split" }));
+      setChatError("");
+      try {
+        if (content) {
+          const userMessage = await api.addUserMessage(treeId, nodeId, content);
+          if (selectedNodeIdRef.current === nodeId) {
+            setMessages((current) => [...current, userMessage]);
+          }
+          await loadCanvas(nodeId);
+        }
+
+        const reply = await api.forceBranchSplit(treeId, nodeId);
+        await applyAssistantReply(treeId, nodeId, reply);
+      } catch (e) {
+        setChatError(String(e));
+        if (selectedNodeIdRef.current === nodeId) {
+          await loadMessages(treeId, nodeId);
+        }
+      } finally {
+        setActiveRequests((current) => {
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        });
+      }
+    },
+    [applyAssistantReply, loadCanvas, loadMessages, selectedNode],
   );
 
   const handleSaveSettings = useCallback(async (input: SettingsInput) => {
     try {
       const saved = await api.saveSettings(input);
       setSettings(saved);
+      setSettingsDraft(saved);
       setChatError("");
     } catch (e) {
       setChatError(String(e));
@@ -537,66 +730,285 @@ export default function App() {
     }
   }, []);
 
+  const saveSettings = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      setSavingSettings(true);
+      try {
+        await handleSaveSettings(settingsDraft);
+        setSettingsOpen(false);
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [handleSaveSettings, settingsDraft],
+  );
+
   return (
-    <main className="no-drag relative flex h-screen overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)]">
+    <main className="no-drag relative flex h-screen flex-col overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)]">
       <div className="drag-region absolute left-0 right-0 top-0 z-20 h-2" />
-      {treeVisible && (
-        <section className="min-w-0 flex-1 overflow-hidden">
-          <TreeCanvas
-            nodes={nodes}
-            rootsCount={trees.length}
-            loading={loading}
-            statusText={statusText}
-            onCreateRoot={handleCreateRoot}
-            onSelectNode={handleSelectNode}
-            onRenameNode={handleRenameNode}
-            onCreateChild={handleCreateChild}
-            onDeleteNode={handleDeleteNode}
-          />
-        </section>
-      )}
-      {treeVisible && (
+      <header className="no-drag relative z-40 flex h-12 shrink-0 items-center border-b border-[color:var(--border)] bg-[color:var(--app-bg)] px-3">
         <div
-          role="separator"
-          aria-label="Resize tree and chat panels"
-          aria-orientation="vertical"
-          tabIndex={0}
-          onPointerDown={beginDividerDrag}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowLeft") {
-              event.preventDefault();
-              setChatWidth((width) => clampChatWidth(width + 24));
-            }
-            if (event.key === "ArrowRight") {
-              event.preventDefault();
-              setChatWidth((width) => clampChatWidth(width - 24));
-            }
-          }}
-          className={`no-drag group relative z-30 w-2 shrink-0 cursor-col-resize outline-none ${
-            dividerDragging ? "bg-[color:var(--selected)]" : "bg-transparent"
+          className={`absolute left-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center justify-start gap-2 ${
+            titlebarNeedsTrafficSpace ? "pl-0 sm:pl-[72px]" : "pl-0"
           }`}
         >
-          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--border)] transition-colors group-hover:bg-[color:var(--accent)] group-focus-visible:bg-[color:var(--accent)]" />
+          {titlebarNeedsTrafficSpace && (
+            <div className="drag-region mr-1 hidden h-8 w-2 shrink-0 sm:flex" />
+          )}
+          <button
+            type="button"
+            onClick={() => setTreeVisible((value) => !value)}
+            className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
+          >
+            <PanelIcon />
+            {treeVisible ? "Focus" : "Tree"}
+          </button>
+          <div className="hidden h-8 max-w-[168px] shrink-0 items-center truncate whitespace-nowrap rounded-full border border-[color:var(--border)] px-3 text-xs text-[color:var(--muted)] lg:inline-flex">
+            {settings.model || DEFAULT_SETTINGS.model}
+          </div>
         </div>
-      )}
-      <ChatPanel
-        selectedNode={selectedNode}
-        messages={messages}
-        loading={messagesLoading}
-        sending={selectedNodeIsSending}
-        streamingText={selectedStreamingText}
-        visualizationErrors={visualizationErrors}
-        canWrite={Boolean(selectedNode?.is_leaf)}
-        fullWidth={!treeVisible}
-        error={chatError}
-        settings={settings}
-        treeVisible={treeVisible}
-        panelWidth={treeVisible ? chatWidth : undefined}
-        onToggleTree={() => setTreeVisible((value) => !value)}
-        onSend={handleSendMessage}
-        onSaveSettings={handleSaveSettings}
-      />
+        <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(560px,42vw)] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center leading-tight">
+          <div className="max-w-full truncate text-sm font-semibold text-[color:var(--text)]">
+            {titlebarTitle}
+          </div>
+          {titlebarSubtitle && (
+            <div className="mt-0.5 max-w-full truncate text-[11px] text-[color:var(--muted)]">
+              {titlebarSubtitle}
+            </div>
+          )}
+        </div>
+        <div className="absolute right-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center justify-end gap-2">
+          <button
+            type="button"
+            aria-label="Settings"
+            onClick={() => {
+              setSettingsDraft(settings);
+              setSettingsOpen((value) => !value);
+            }}
+            className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
+          >
+            <SettingsIcon />
+            <span className="hidden sm:inline">Settings</span>
+          </button>
+          {settingsOpen && (
+            <SettingsPanel
+              settings={settings}
+              settingsDraft={settingsDraft}
+              saving={savingSettings}
+              onChange={setSettingsDraft}
+              onCancel={() => {
+                setSettingsDraft(settings);
+                setSettingsOpen(false);
+              }}
+              onSubmit={saveSettings}
+            />
+          )}
+        </div>
+      </header>
+      <div className="min-h-0 flex flex-1 flex-col overflow-hidden md:flex-row">
+        <Suspense
+          fallback={
+            <div className="flex flex-1 items-center justify-center text-sm text-[color:var(--muted)]">
+              Loading
+            </div>
+          }
+        >
+          {treeVisible && (
+            <section className="min-h-[240px] min-w-0 shrink-0 overflow-hidden border-b border-[color:var(--border)] md:min-h-0 md:flex-1 md:border-b-0">
+              <TreeCanvas
+                nodes={nodes}
+                loading={loading}
+                statusText={statusText}
+                onCreateRoot={handleCreateRoot}
+                onSelectNode={handleSelectNode}
+                onRenameNode={handleRenameNode}
+                onCreateChild={handleCreateChild}
+                onSetNodeColor={handleSetNodeColor}
+                onDeleteNode={handleDeleteNode}
+              />
+            </section>
+          )}
+          {treeVisible && !compactLayout && (
+            <div
+              role="separator"
+              aria-label="Resize tree and chat panels"
+              aria-orientation="vertical"
+              tabIndex={0}
+              onPointerDown={beginDividerDrag}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft") {
+                  event.preventDefault();
+                  setChatWidth((width) => clampChatWidth(width + 24));
+                }
+                if (event.key === "ArrowRight") {
+                  event.preventDefault();
+                  setChatWidth((width) => clampChatWidth(width - 24));
+                }
+              }}
+              className={`no-drag group relative z-30 w-2 shrink-0 cursor-col-resize outline-none ${
+                dividerDragging ? "bg-[color:var(--selected)]" : "bg-transparent"
+              }`}
+            >
+              <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--border)] transition-colors group-hover:bg-[color:var(--selected)] group-focus-visible:bg-[color:var(--selected)]" />
+            </div>
+          )}
+          <ChatPanel
+            selectedNode={selectedNode}
+            messages={messages}
+            loading={messagesLoading}
+            sending={selectedNodeIsSending}
+            streamingText={selectedStreamingText}
+            canWrite={Boolean(selectedNode?.is_leaf)}
+            fullWidth={!treeVisible || compactLayout}
+            error={chatError}
+            panelWidth={treeVisible && !compactLayout ? chatWidth : undefined}
+            onSend={handleSendMessage}
+            onEditMessage={handleEditMessage}
+            onConfirmBranches={handleConfirmBranches}
+            onForceBranchSplit={handleForceBranchSplit}
+          />
+        </Suspense>
+      </div>
       <AppDialog dialog={dialog} onClose={() => setDialog(null)} />
     </main>
+  );
+}
+
+function SettingsPanel({
+  settings,
+  settingsDraft,
+  saving,
+  onChange,
+  onCancel,
+  onSubmit,
+}: {
+  settings: ChatSettings;
+  settingsDraft: ChatSettings;
+  saving: boolean;
+  onChange: (next: ChatSettings) => void;
+  onCancel: () => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  const inputClass =
+    "mt-1 h-9 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
+
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="no-drag fixed left-3 right-3 top-12 z-50 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)]/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.14)] backdrop-blur-xl sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:w-[420px]"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-[color:var(--text)]">Agent settings</div>
+          <div className="text-xs text-[color:var(--muted)]">
+            Appearance, model and API access
+          </div>
+        </div>
+        <div className="rounded-full border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--muted)]">
+          {settings.api_key ? "API connected" : "No API key"}
+        </div>
+      </div>
+      <div className="grid gap-2">
+        <label className="block text-xs text-[color:var(--muted)]">
+          Theme
+          <select
+            value={settingsDraft.theme}
+            onChange={(event) =>
+              onChange({ ...settingsDraft, theme: event.target.value as ThemeName })
+            }
+            className={inputClass}
+          >
+            {THEME_NAMES.map((themeName) => (
+              <option key={themeName} value={themeName}>
+                {themeName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-xs text-[color:var(--muted)]">
+          Model
+          <input
+            type="text"
+            value={settingsDraft.model}
+            onChange={(event) => onChange({ ...settingsDraft, model: event.target.value })}
+            className={inputClass}
+            placeholder={DEFAULT_SETTINGS.model}
+          />
+        </label>
+        <label className="block text-xs text-[color:var(--muted)]">
+          API key
+          <input
+            type="password"
+            value={settingsDraft.api_key}
+            onChange={(event) => onChange({ ...settingsDraft, api_key: event.target.value })}
+            className={inputClass}
+            placeholder="sk-..."
+          />
+        </label>
+        <label className="block text-xs text-[color:var(--muted)]">
+          Endpoint
+          <input
+            type="text"
+            value={settingsDraft.endpoint}
+            onChange={(event) => onChange({ ...settingsDraft, endpoint: event.target.value })}
+            className={inputClass}
+            placeholder={DEFAULT_SETTINGS.endpoint}
+          />
+        </label>
+      </div>
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="h-8 rounded-full px-3 text-xs text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={saving}
+          className="h-8 rounded-full bg-[color:var(--button)] px-3 text-xs font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {saving ? "Saving" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+      <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.09 1.65V21a2.1 2.1 0 0 1-4.2 0v-.06a1.8 1.8 0 0 0-1.09-1.65 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.09H3a2.1 2.1 0 0 1 0-4.2h.06A1.8 1.8 0 0 0 4.7 8.62a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04a1.8 1.8 0 0 0 1.98.36A1.8 1.8 0 0 0 10.38 2.4V2.3a2.1 2.1 0 0 1 4.2 0v.06a1.8 1.8 0 0 0 1.09 1.65 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.09H22a2.1 2.1 0 0 1 0 4.2h-.06A1.8 1.8 0 0 0 19.4 15Z" />
+    </svg>
+  );
+}
+
+function PanelIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <rect x="4" y="5" width="16" height="14" rx="2" />
+      <path d="M10 5v14" />
+    </svg>
   );
 }

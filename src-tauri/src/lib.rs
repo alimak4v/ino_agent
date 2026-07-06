@@ -23,21 +23,7 @@ struct StreamDelta {
     delta: String,
 }
 
-#[derive(Clone, Serialize)]
-struct VisualizationReady {
-    tree_id: String,
-    node_id: String,
-    message_id: String,
-    html: String,
-}
-
-#[derive(Clone, Serialize)]
-struct VisualizationError {
-    tree_id: String,
-    node_id: String,
-    message_id: String,
-    error: String,
-}
+const BRANCH_PLAN_ACTION_MARKER: &str = "<!-- treeai:branch-plan -->";
 
 fn lock_store(store: &Arc<Mutex<store::Store>>) -> Result<MutexGuard<'_, store::Store>, String> {
     store.lock().map_err(|e| e.to_string())
@@ -92,6 +78,17 @@ fn rename_node(
     title: String,
 ) -> Result<(), String> {
     lock_store(&state.store)?.rename_node(&tree_id, &node_id, &title)
+}
+
+#[tauri::command]
+fn set_node_color(
+    state: State<AppState>,
+    tree_id: String,
+    node_id: String,
+    color: Option<String>,
+    include_descendants: bool,
+) -> Result<(), String> {
+    lock_store(&state.store)?.set_node_color(&tree_id, &node_id, color, include_descendants)
 }
 
 #[tauri::command]
@@ -163,6 +160,16 @@ fn add_user_message(
 }
 
 #[tauri::command]
+fn edit_user_message(
+    state: State<AppState>,
+    tree_id: String,
+    message_id: String,
+    content: String,
+) -> Result<store::Message, String> {
+    lock_store(&state.store)?.edit_user_message(&tree_id, &message_id, &content)
+}
+
+#[tauri::command]
 async fn generate_assistant_reply(
     window: Window,
     state: State<'_, AppState>,
@@ -179,6 +186,109 @@ async fn generate_assistant_reply(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+fn confirm_pending_branches(
+    state: State<AppState>,
+    tree_id: String,
+    node_id: String,
+) -> Result<store::AssistantReplyResult, String> {
+    let store = &mut *lock_store(&state.store)?;
+    let plan = store
+        .get_pending_branch_plan(&tree_id, &node_id)?
+        .ok_or_else(|| "No branch plan is waiting for confirmation.".to_string())?;
+    let parent = store.get_node(&tree_id, &node_id)?;
+    create_branches_from_plan(store, &tree_id, &node_id, &parent.title, &plan)
+}
+
+#[tauri::command]
+async fn force_branch_split(
+    state: State<'_, AppState>,
+    tree_id: String,
+    node_id: String,
+) -> Result<store::AssistantReplyResult, String> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        force_branch_split_blocking(store, tree_id, node_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn force_branch_split_blocking(
+    store: Arc<Mutex<store::Store>>,
+    tree_id: String,
+    node_id: String,
+) -> Result<store::AssistantReplyResult, String> {
+    let (parent_title, parent_summary, settings, messages, latest_user, latest_assistant) = {
+        let store = lock_store(&store)?;
+        if !store.is_leaf_node(&tree_id, &node_id)? {
+            return Err(
+                "Parent branches are read-only. Select or create a leaf branch.".to_string(),
+            );
+        }
+        let parent = store.get_node(&tree_id, &node_id)?;
+        let current_rows = store.get_messages_for_node(&tree_id, &node_id)?;
+        let mut latest_user = String::new();
+        let mut latest_assistant = String::new();
+        for row in current_rows.iter().rev() {
+            if latest_user.is_empty() && row.role == "user" {
+                latest_user = row.content.clone();
+            }
+            if latest_assistant.is_empty() && row.role == "assistant" {
+                latest_assistant = row.content.clone();
+            }
+            if !latest_user.is_empty() && !latest_assistant.is_empty() {
+                break;
+            }
+        }
+        let messages = current_rows
+            .iter()
+            .filter(|message| message.role != "system")
+            .map(|message| store::ChatContextMessage {
+                role: message.role.clone(),
+                content: message.content.clone(),
+            })
+            .collect::<Vec<_>>();
+        (
+            parent.title,
+            parent.summary,
+            store.get_settings()?,
+            messages,
+            latest_user,
+            latest_assistant,
+        )
+    };
+
+    let branch_limit = 7;
+    let mut planner_messages = vec![store::ChatContextMessage {
+        role: "system".to_string(),
+        content: force_branch_planner_prompt(branch_limit),
+    }, store::ChatContextMessage {
+        role: "system".to_string(),
+        content: force_branch_focus_prompt(&parent_title, parent_summary.as_deref()),
+    }];
+    planner_messages.extend(messages);
+
+    let mut plan = api::chat_completion(&settings, &planner_messages)
+        .ok()
+        .and_then(|answer| api::parse_branch_plan(&answer, branch_limit));
+    if plan.is_none() {
+        plan = fallback_branch_plan_from_text(&latest_user).or_else(|| {
+            if looks_like_created_branch_list(&latest_assistant) {
+                None
+            } else {
+                fallback_branch_plan_from_text(&latest_assistant)
+            }
+        });
+    }
+    let Some(plan) = plan else {
+        return Err("Не смог выделить отдельные ветки из текущего контекста.".to_string());
+    };
+
+    let store = &mut *lock_store(&store)?;
+    create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan)
+}
+
 fn generate_assistant_reply_blocking(
     window: Window,
     store: Arc<Mutex<store::Store>>,
@@ -188,7 +298,7 @@ fn generate_assistant_reply_blocking(
 ) -> Result<store::AssistantReplyResult, String> {
     let snapshot = {
         let store = lock_store(&store)?;
-        let rows = store.get_messages_for_path(&tree_id, &node_id)?;
+        let rows = store.get_messages_for_node(&tree_id, &node_id)?;
         let mut latest_user = String::new();
         let mut latest_assistant = String::new();
         for row in rows.iter().rev() {
@@ -221,7 +331,6 @@ fn generate_assistant_reply_blocking(
     if let Some(plan) = pending_plan {
         if is_affirmative(&latest_user) {
             let store = &mut *lock_store(&store)?;
-            store.clear_pending_branch_plan(&tree_id, &node_id)?;
             return create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan);
         }
         if is_negative(&latest_user) {
@@ -239,7 +348,6 @@ fn generate_assistant_reply_blocking(
                 created_branches: Vec::new(),
             });
         }
-        lock_store(&store)?.clear_pending_branch_plan(&tree_id, &node_id)?;
     }
 
     if is_affirmative(&latest_user) {
@@ -249,11 +357,18 @@ fn generate_assistant_reply_blocking(
         }
     }
 
+    if wants_branch_creation(&latest_user) && !has_attachment_payload(&latest_user) {
+        if let Some(plan) = fallback_branch_plan_from_text(&latest_user) {
+            let store = &mut *lock_store(&store)?;
+            return save_branch_plan_question(store, &tree_id, &node_id, &plan);
+        }
+    }
+
     if looks_branchable(&latest_user) {
-        let create_immediately = wants_branch_creation(&latest_user);
+        let branch_limit = 7;
         let mut planner_messages = vec![store::ChatContextMessage {
             role: "system".to_string(),
-            content: branch_planner_prompt(5),
+            content: branch_planner_prompt(branch_limit),
         }];
         planner_messages.extend(
             messages
@@ -263,49 +378,25 @@ fn generate_assistant_reply_blocking(
         );
 
         let mut plan = match api::chat_completion(&settings, &planner_messages) {
-            Ok(answer) => api::parse_branch_plan(&answer, 5),
-            Err(error) => {
-                if create_immediately {
-                    None
-                } else {
-                    return Err(error);
+            Ok(answer) => api::parse_branch_plan(&answer, branch_limit),
+            Err(error) => return Err(error),
+        };
+        if plan.is_none() || wants_branch_creation(&latest_user) {
+            let fallback = fallback_branch_plan_from_text(&latest_user)
+                .or_else(|| fallback_branch_plan_from_text(&latest_assistant));
+            if let Some(fallback_plan) = fallback {
+                if plan.is_none() {
+                    plan = Some(fallback_plan);
                 }
             }
-        };
-        if plan.is_none() && create_immediately {
-            plan = fallback_branch_plan_from_text(&latest_assistant)
-                .or_else(|| fallback_branch_plan_from_text(&latest_user));
         }
 
         if let Some(plan) = plan {
-            if create_immediately {
-                let store = &mut *lock_store(&store)?;
+            let store = &mut *lock_store(&store)?;
+            if wants_branch_creation(&latest_user) {
                 return create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan);
             }
-
-            let store = &mut *lock_store(&store)?;
-            store.save_pending_branch_plan(&tree_id, &node_id, &plan)?;
-            let message = store.add_message(&tree_id, &node_id, "assistant", &plan.question)?;
-            return Ok(store::AssistantReplyResult {
-                message,
-                selected_node_id: node_id,
-                created_branches: Vec::new(),
-            });
-        }
-
-        if create_immediately {
-            let store = &mut *lock_store(&store)?;
-            let message = store.add_message(
-                &tree_id,
-                &node_id,
-                "assistant",
-                "Я не нашёл в предыдущем контексте достаточно отдельных тем, чтобы создать ветки. Пришли список тем или попроси разбить конкретный ответ.",
-            )?;
-            return Ok(store::AssistantReplyResult {
-                message,
-                selected_node_id: node_id,
-                created_branches: Vec::new(),
-            });
+            return save_branch_plan_question(store, &tree_id, &node_id, &plan);
         }
     }
 
@@ -320,23 +411,10 @@ fn generate_assistant_reply_blocking(
             },
         );
     })?;
-    let should_visualize = wants_inline_visualization(&latest_user, &answer);
     let message = {
         let store = &mut *lock_store(&store)?;
         store.add_message(&tree_id, &node_id, "assistant", &answer)?
     };
-    if should_visualize {
-        spawn_inline_visualization(
-            window.clone(),
-            settings.clone(),
-            store.clone(),
-            tree_id.clone(),
-            node_id.clone(),
-            message.id.clone(),
-            latest_user.clone(),
-            answer.clone(),
-        );
-    }
     Ok(store::AssistantReplyResult {
         message,
         selected_node_id: node_id,
@@ -344,83 +422,20 @@ fn generate_assistant_reply_blocking(
     })
 }
 
-fn spawn_inline_visualization(
-    window: Window,
-    settings: store::ChatSettings,
-    store: Arc<Mutex<store::Store>>,
-    tree_id: String,
-    node_id: String,
-    message_id: String,
-    latest_user: String,
-    answer: String,
-) {
-    tauri::async_runtime::spawn_blocking(move || {
-        match generate_inline_visualization(&settings, &latest_user, &answer) {
-            Ok(html) => {
-                let update = lock_store(&store).and_then(|store| {
-                    store.set_message_visualization(&tree_id, &node_id, &message_id, &html)
-                });
-                if let Err(error) = update {
-                    let _ = window.emit(
-                        "assistant-visualization-error",
-                        VisualizationError {
-                            tree_id,
-                            node_id,
-                            message_id,
-                            error,
-                        },
-                    );
-                    return;
-                }
-                let _ = window.emit(
-                    "assistant-visualization",
-                    VisualizationReady {
-                        tree_id,
-                        node_id,
-                        message_id,
-                        html,
-                    },
-                );
-            }
-            Err(error) => {
-                let _ = window.emit(
-                    "assistant-visualization-error",
-                    VisualizationError {
-                        tree_id,
-                        node_id,
-                        message_id,
-                        error,
-                    },
-                );
-            }
-        }
-    });
-}
-
-fn generate_inline_visualization(
-    settings: &store::ChatSettings,
-    latest_user: &str,
-    answer: &str,
-) -> Result<String, String> {
-    let mut graph_settings = settings.clone();
-    if graph_settings.model.trim().is_empty() || graph_settings.model.trim() == "gpt-4.1-mini" {
-        graph_settings.model = "gpt-4o-mini".to_string();
-    }
-    let messages = vec![
-        store::ChatContextMessage {
-            role: "system".to_string(),
-            content: learning_graph_prompt(),
-        },
-        store::ChatContextMessage {
-            role: "user".to_string(),
-            content: format!(
-                "Сгенерируй встроенный интерактивный HTML-виджет для ответа ассистента.\n\nЗапрос пользователя:\n{}\n\nОтвет ассистента:\n{}\n\nЕсли это алгоритм, поток, процесс или граф, обязательно сделай пошаговый режим с кнопками Prev/Next и подсветкой текущего шага. Если это концептуальная тема, сделай интерактивный граф понятий с кликабельными узлами.",
-                clip_chars(latest_user, 6_000),
-                clip_chars(answer, 8_000),
-            ),
-        },
-    ];
-    api::generate_learning_graph_html(&graph_settings, &messages)
+fn save_branch_plan_question(
+    store: &mut store::Store,
+    tree_id: &str,
+    node_id: &str,
+    plan: &store::BranchPlan,
+) -> Result<store::AssistantReplyResult, String> {
+    store.save_pending_branch_plan(tree_id, node_id, plan)?;
+    let content = format!("{}\n\n{}", plan.question, BRANCH_PLAN_ACTION_MARKER);
+    let message = store.add_message(tree_id, node_id, "assistant", &content)?;
+    Ok(store::AssistantReplyResult {
+        message,
+        selected_node_id: node_id.to_string(),
+        created_branches: Vec::new(),
+    })
 }
 
 fn create_branches_from_plan(
@@ -430,66 +445,71 @@ fn create_branches_from_plan(
     parent_title: &str,
     plan: &store::BranchPlan,
 ) -> Result<store::AssistantReplyResult, String> {
-    let mut created = Vec::new();
-    for item in &plan.branches {
-        let child_id = store.create_child_node(tree_id, node_id, item.title.clone())?;
-        store.add_message(
-            tree_id,
-            &child_id,
-            "assistant",
-            &branch_context_message(parent_title, item),
-        )?;
-        created.push(store::AiBranchCreated {
-            id: child_id,
-            title: item.title.clone(),
-        });
-    }
-
-    let content = if created.is_empty() {
-        "Не получилось создать ветки из плана.".to_string()
-    } else {
-        let list = created
-            .iter()
-            .map(|branch| format!("- {}", branch.title))
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!(
-            "Готово, создал отдельные ветки:\n\n{list}\n\nВ каждой ветке уже есть короткое описание контекста."
-        )
-    };
-    let message = store.add_message(tree_id, node_id, "assistant", &content)?;
-    let selected_node_id = created
-        .first()
-        .map(|branch| branch.id.clone())
-        .unwrap_or_else(|| node_id.to_string());
-    store.set_last_node(tree_id, &selected_node_id)?;
-    Ok(store::AssistantReplyResult {
-        message,
-        selected_node_id,
-        created_branches: created,
-    })
-}
-
-fn branch_context_message(parent_title: &str, item: &store::BranchPlanItem) -> String {
-    format!(
-        "Контекст ветки: {}\n\nЭта ветка создана как отдельное направление внутри родительской ветки \"{}\".\n\nЧто здесь рассматриваем: {}\n\nПродолжай диалог в этой ветке, удерживая фокус именно на этом направлении и опираясь на общий контекст родительской ветки.",
-        item.title, parent_title, item.context
-    )
+    store.create_branches_from_plan(tree_id, node_id, parent_title, plan)
 }
 
 fn branch_planner_prompt(count: usize) -> String {
     format!(
-        "You are a strict branch-planning classifier for a local tree chat app. Decide whether the latest user request truly needs separate child branches.\n\nReturn ONLY JSON with this exact shape:\n{{\"should_branch\": boolean, \"question\": string, \"branches\": [{{\"title\": string, \"context\": string}}]}}\n\nSet should_branch=true only when the user asks for multiple independent topics, categories, spheres, directions, startup areas, plans, modules, blocks, or alternatives that would be meaningfully discussed separately in different branches. If the latest user explicitly asks to create/split/separate branches or topics, set should_branch=true unless the conversation has no separable topics. Do not branch for ordinary questions, single-topic explanations, short follow-ups, or simple lists that can be answered in one message.\n\nIf should_branch=true, create 2-{count} branches. Each title must be concise. Each context must explain what that branch is about so another assistant call can understand the branch focus. The question must be in Russian and ask the user whether to create those separate branches. If should_branch=false, use an empty branches array and an empty question."
+        "You are a strict branch-planning classifier for a local tree chat app. Decide whether the latest user request truly needs separate child branches.\n\nReturn ONLY JSON with this exact shape:\n{{\"should_branch\": boolean, \"question\": string, \"branches\": [{{\"title\": string, \"context\": string}}]}}\n\nSet should_branch=true whenever the request, pasted text, file, plan, project, research idea, study program, comparison, or broad problem would be cleaner as several independent subtopics that can be explored separately without polluting one chat. This is not limited to PDFs: any multi-topic content should be considered. If the latest user explicitly asks to create/split/separate branches or topics, set should_branch=true unless the conversation has no separable topics.\n\nSet should_branch=false for ordinary single-topic questions, single algorithm explanations, short follow-ups, simple clarifications, or lists that are small enough to answer in one message.\n\nWhen branching, create COARSE top-level branches, not one branch per tiny item. Prefer 3-{count} large blocks. For exam/program files, use blocks such as dynamic programming, graphs, flows/matchings, trees/decompositions, math/combinatorics, strings/geometry when those fit. For non-academic content, choose the natural large areas of work. Preserve explicit top-level sections/headings/modules when the source has them, but group fine-grained items under larger directions. Each title must be concise. Each context must explain what that branch is about so another assistant call can understand the branch focus.\n\nThe question must be one concise Russian paragraph in this style: \"Здесь есть несколько крупных направлений (...). Чтобы разбирать их отдельно и не смешивать контекст, создать отдельные ветки для этих блоков?\" Do not include a bullet list in the question. If should_branch=false, use an empty branches array and an empty question."
+    )
+}
+
+fn force_branch_planner_prompt(count: usize) -> String {
+    format!(
+        "You are a branch planner for a local tree chat app. The user pressed a dedicated Split button, so you MUST create useful child branches from the CURRENT SELECTED NODE, current composer content, attached file, or recent conversation inside that node.\n\nReturn ONLY JSON with this exact shape:\n{{\"should_branch\": true, \"question\": \"\", \"branches\": [{{\"title\": string, \"context\": string}}]}}\n\nThe current node title and description are authoritative. If the current node is already one block inside a broader parent program, split that block into its own subtopics. Do NOT recreate sibling or parent-level branches unless the current node title itself is that broad parent. For example, if the current node is about dynamic programming, create dynamic-programming subtopics; do not create graph/flow/tree branches just because they appeared in the parent context.\n\nCreate COARSE child branches, not one branch per tiny item. Prefer 3-{count} large blocks. If the content is an exam/program/algorithm list, group fine-grained topics under the selected node's domain. If the content is not academic, choose the natural large areas of work inside the selected node. Each title must be concise. Each context must explicitly mention how the child belongs to the current selected node and be specific enough that another assistant call can continue inside that branch without reading the parent chat."
+    )
+}
+
+fn force_branch_focus_prompt(current_title: &str, current_summary: Option<&str>) -> String {
+    let summary = current_summary
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "Empty")
+        .unwrap_or("No node description is stored.");
+    format!(
+        "CURRENT SELECTED NODE TO SPLIT:\nTitle: {current_title}\nDescription: {summary}\n\nHard rule: every branch you create must be a subtopic of this exact node. Use the title and description as the primary source of scope. If recent messages mention broader parent topics or sibling branches, treat them only as background and never split them again."
     )
 }
 
 fn is_affirmative(raw: &str) -> bool {
     let text = normalize_reply(raw);
+    let tokens = text.split_whitespace().collect::<HashSet<_>>();
     matches!(
         text.as_str(),
-        "да" | "ага" | "угу" | "ок" | "окей" | "yes" | "y" | "sure" | "давай" | "конечно"
-    ) || (contains(&text, "создай") && contains(&text, "вет"))
-        || (contains(&text, "сделай") && contains(&text, "вет"))
+        "да" | "ага"
+            | "угу"
+            | "ок"
+            | "окей"
+            | "yes"
+            | "y"
+            | "sure"
+            | "давай"
+            | "конечно"
+            | "подтверждаю"
+            | "согласен"
+            | "согласна"
+            | "можно"
+            | "го"
+    ) || tokens.iter().any(|token| {
+        matches!(
+            *token,
+            "да" | "ага"
+                | "угу"
+                | "ок"
+                | "окей"
+                | "yes"
+                | "y"
+                | "sure"
+                | "давай"
+                | "конечно"
+                | "подтверждаю"
+                | "согласен"
+                | "согласна"
+                | "можно"
+                | "го"
+        )
+    }) || wants_branch_creation(&text)
+        || (contains(&text, "делай") && contains(&text, "вет"))
+        || (contains(&text, "создавай") && contains(&text, "вет"))
 }
 
 fn is_negative(raw: &str) -> bool {
@@ -534,10 +554,17 @@ fn wants_branch_creation(raw: &str) -> bool {
 
 fn looks_branchable(raw: &str) -> bool {
     let text = raw.to_lowercase();
-    if is_negative(&text) || text.chars().count() < 24 || is_affirmative(&text) {
+    let char_count = text.chars().count();
+    if is_negative(&text) || is_affirmative(&text) {
         return false;
     }
     if wants_branch_creation(&text) {
+        return true;
+    }
+    if char_count < 24 {
+        return false;
+    }
+    if has_attachment_payload(&text) {
         return true;
     }
     let many = [
@@ -577,70 +604,57 @@ fn looks_branchable(raw: &str) -> bool {
     ]
     .iter()
     .any(|needle| contains(&text, needle));
-    many && split
+    let structure_hint = text.lines().filter(|line| !line.trim().is_empty()).count() >= 3
+        || text.matches(';').count() >= 2
+        || text.matches(',').count() >= 4
+        || text.matches(" и ").count() >= 3
+        || text.matches(" или ").count() >= 2;
+    let broad_task = [
+        "план",
+        "проект",
+        "иде",
+        "исслед",
+        "курс",
+        "програм",
+        "подготов",
+        "стратег",
+        "архитект",
+        "продукт",
+        "стартап",
+        "разбор",
+        "обуч",
+        "roadmap",
+        "research",
+    ]
+    .iter()
+    .any(|needle| contains(&text, needle));
+
+    (many && split)
+        || (structure_hint && char_count >= 60)
+        || (broad_task && char_count >= 90)
+        || char_count >= 180
 }
 
-fn wants_inline_visualization(latest_user: &str, answer: &str) -> bool {
-    let prompt = latest_user.to_lowercase();
-    let answer = answer.to_lowercase();
-    let explicit_visual = [
-        "граф",
-        "дерев",
-        "схем",
-        "диаграм",
-        "визуал",
-        "нарис",
-        "покажи",
-        "интерактив",
-        "симуля",
-        "блок-схем",
-    ]
-    .iter()
-    .any(|needle| contains(&prompt, needle));
-    let algorithmic_topic = [
-        "алгоритм",
-        "дейкстр",
-        "dijkstra",
-        "bfs",
-        "dfs",
-        "a*",
-        "поток",
-        "ford",
-        "fulkerson",
-        "edmonds",
-        "karp",
-        "процесс",
-        "маршрут",
-        "network",
-        "автомат",
-        "состояни",
-    ]
-    .iter()
-    .any(|needle| contains(&prompt, needle));
-    let answer_is_visual = ["узл", "ребр", "вершин", "стрел", "пошаг", "шаг"]
-        .iter()
-        .filter(|needle| contains(&answer, needle))
-        .count()
-        >= 2;
-    explicit_visual || algorithmic_topic || (contains(&prompt, "объясни") && answer_is_visual)
+fn has_attachment_payload(raw: &str) -> bool {
+    contains(&raw.to_lowercase(), "[attached file:")
+}
+
+fn looks_like_created_branch_list(raw: &str) -> bool {
+    let text = raw.to_lowercase();
+    contains(&text, "создал отдельные ветки") || contains(&text, "created branches")
 }
 
 fn fallback_branch_plan_from_text(source: &str) -> Option<store::BranchPlan> {
-    let mut lines = source.lines().collect::<Vec<_>>();
-    if lines.len() > 80 {
-        lines = lines[lines.len() - 80..].to_vec();
-    }
+    let lines = source.lines().collect::<Vec<_>>();
 
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
-    let mut in_code = false;
     for line in lines {
         let line = line.trim();
         if line.starts_with("```") {
-            in_code = !in_code;
             continue;
         }
-        if in_code || line.is_empty() {
+        if line.is_empty() {
             continue;
         }
         let bulletish = line.starts_with('•')
@@ -674,9 +688,13 @@ fn fallback_branch_plan_from_text(source: &str) -> Option<store::BranchPlan> {
         return None;
     }
 
-    let branches = candidates
+    if let Some(plan) = coarse_fallback_branch_plan(&candidates) {
+        return Some(plan);
+    }
+
+    let branches: Vec<store::BranchPlanItem> = candidates
         .into_iter()
-        .take(8)
+        .take(7)
         .map(|title| store::BranchPlanItem {
             context: format!(
                 "Эта ветка создана из предыдущего ответа как отдельная тема: {title}. Разбирай её отдельно, сохраняя общий контекст родительской ветки."
@@ -685,7 +703,131 @@ fn fallback_branch_plan_from_text(source: &str) -> Option<store::BranchPlan> {
         })
         .collect();
     Some(store::BranchPlan {
-        question: "Создать отдельные ветки под эти темы?".to_string(),
+        question: format!(
+            "Файл включает несколько явно разделенных направлений ({}). Чтобы работа была структурированной, создать ли отдельные ветки для каждого направления?",
+            branches
+                .iter()
+                .map(|branch: &store::BranchPlanItem| branch.title.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        branches,
+    })
+}
+
+fn coarse_fallback_branch_plan(candidates: &[String]) -> Option<store::BranchPlan> {
+    if candidates.len() < 6 {
+        return None;
+    }
+
+    let groups = [
+        (
+            "Динамика и рекуррентности",
+            &[
+                "динами",
+                "рекур",
+                "подпоследователь",
+                "рюкзак",
+                "жадн",
+                "бинарн",
+            ][..],
+        ),
+        (
+            "Графы и пути",
+            &[
+                "граф",
+                "путь",
+                "dfs",
+                "bfs",
+                "компонент",
+                "эйлер",
+                "гамильтон",
+                "кратчайш",
+            ][..],
+        ),
+        (
+            "Потоки, паросочетания и остовы",
+            &[
+                "поток",
+                "диниц",
+                "паросочет",
+                "остов",
+                "разрез",
+                "flow",
+                "matching",
+            ][..],
+        ),
+        (
+            "Деревья и декомпозиции",
+            &[
+                "дерев",
+                "lca",
+                "heavy",
+                "light",
+                "декомпози",
+                "центроид",
+                "treap",
+            ][..],
+        ),
+        (
+            "Комбинаторика, матрицы и числа",
+            &[
+                "комбинатор",
+                "матриц",
+                "чисел",
+                "нод",
+                "прост",
+                "остат",
+                "перестанов",
+            ][..],
+        ),
+        (
+            "Строки и последовательности",
+            &["строк", "префикс", "суффикс", "бор", "хеш", "z-функ", "кмп"][..],
+        ),
+        (
+            "Геометрия и структуры данных",
+            &[
+                "геометр",
+                "отрез",
+                "сегмент",
+                "fenwick",
+                "heap",
+                "куч",
+                "множест",
+            ][..],
+        ),
+    ];
+
+    let mut branches = Vec::new();
+    for (title, needles) in groups {
+        let matched = candidates.iter().any(|candidate| {
+            let lower = candidate.to_lowercase().replace('ё', "е");
+            needles.iter().any(|needle| contains(&lower, needle))
+        });
+        if matched {
+            branches.push(store::BranchPlanItem {
+                title: title.to_string(),
+                context: format!(
+                    "Крупный блок программы: {title}. Внутри этой ветки группируй родственные мелкие темы из файла и разбирай их как одно направление подготовки."
+                ),
+            });
+        }
+    }
+
+    if branches.len() < 2 {
+        return None;
+    }
+
+    Some(store::BranchPlan {
+        question: format!(
+            "Файл включает несколько крупных направлений ({}). Чтобы подготовка была структурированной, создать ли отдельные ветки для этих блоков?",
+            branches
+                .iter()
+                .map(|branch| branch.title.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         branches,
     })
 }
@@ -774,8 +916,20 @@ fn clean_fallback_branch_title(raw: &str) -> Option<String> {
 
 fn normalize_reply(raw: &str) -> String {
     raw.trim()
-        .trim_matches(|ch: char| ch.is_ascii_punctuation() || ch.is_whitespace())
         .to_lowercase()
+        .replace('ё', "е")
+        .chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() || ch.is_whitespace() {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn contains(haystack: &str, needle: &str) -> bool {
@@ -789,10 +943,6 @@ fn clean_extracted_text(value: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn clip_chars(value: &str, limit: usize) -> String {
-    value.chars().take(limit).collect()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -852,6 +1002,7 @@ pub fn run() {
             set_current_node,
             create_child_node,
             rename_node,
+            set_node_color,
             delete_node,
             get_tree_layout,
             get_settings,
@@ -859,35 +1010,11 @@ pub fn run() {
             extract_pdf_text,
             get_messages,
             add_user_message,
+            edit_user_message,
             generate_assistant_reply,
+            confirm_pending_branches,
+            force_branch_split,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-fn learning_graph_prompt() -> String {
-    r#"Ты — специализированный модуль визуализации учебных данных. Твоя единственная задача — переводить сложные концепции, учебные темы, связи и процессы в интерактивные графы знаний.
-
-ТРЕБОВАНИЯ К КОДУ:
-1. Выдай СТРОГО один валидный HTML-файл. Начни с <!DOCTYPE html> и закончи </html>.
-2. Внутри <head> подключи Vis.js Network через CDN:
-   https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/dist/vis-network.min.css
-   https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/dist/vis-network.min.js
-3. Не используй markdown-обертки вроде ```html ... ```.
-4. Все стили и скрипты должны быть внутри этого же файла.
-5. Не обращайся к внешним API и не загружай данные после старта страницы, кроме указанного CDN Vis.js.
-6. Документ будет встроен в чат через iframe srcDoc, поэтому он должен выглядеть как компактный виджет без внешних отступов страницы.
-
-ТРЕБОВАНИЯ К ВИЗУАЛУ И UX:
-1. Темная тема: background #121212, панели/узлы #1E1E1E, текст #E0E0E0, 2-4 осмысленных акцентных цвета.
-2. Узлы должны быть draggable, граф должен zoomable колесом мыши.
-3. Edges должны иметь стрелки для причинных, иерархических или процессных связей и понятные label.
-4. Разделяй узлы по типам: главная тема, подтема, термин, процесс/пример. Используй группы Vis.js, размеры и цвета.
-5. Физика должна быть стабильной: включи physics с solver forceAtlas2Based или barnesHut, ограничь stabilization, чтобы узлы не разлетались.
-6. Добавь краткую легенду внутри HTML и обработчик клика по узлу, который показывает 1-2 предложения пояснения.
-7. Для алгоритмов, маршрутов, потоков, очередей, состояний и процессов добавь кнопки Prev/Next, счетчик шага и JavaScript-массив steps, который подсвечивает текущие nodes/edges и меняет пояснение шага.
-8. Высота виджета должна быть 420-520px, весь интерфейс должен помещаться внутри HTML без необходимости раскрывать его на отдельный экран.
-
-Верни только HTML-документ."#
-        .to_string()
 }

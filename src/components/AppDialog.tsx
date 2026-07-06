@@ -93,7 +93,7 @@ export function AppDialog({ dialog, onClose }: AppDialogProps) {
               value={value}
               placeholder={dialog.placeholder}
               onChange={(event) => setValue(event.target.value)}
-              className="mt-1 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
+              className="mt-1 h-10 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]"
             />
           </label>
         ) : (

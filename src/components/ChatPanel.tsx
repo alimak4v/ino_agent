@@ -9,9 +9,7 @@ import {
 import {
   api,
   isTauriRuntime,
-  type ChatSettings,
   type Message,
-  type SettingsInput,
 } from "../lib/api";
 import type { CanvasLayoutNode } from "./TreeCanvas";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -22,16 +20,14 @@ interface ChatPanelProps {
   loading: boolean;
   sending: boolean;
   streamingText: string;
-  visualizationErrors: Record<string, string>;
   canWrite: boolean;
   fullWidth: boolean;
   error: string;
-  settings: ChatSettings;
-  treeVisible: boolean;
   panelWidth?: number;
-  onToggleTree: () => void;
   onSend: (content: string) => Promise<void>;
-  onSaveSettings: (input: SettingsInput) => Promise<void>;
+  onEditMessage: (message: Message, content: string) => Promise<void>;
+  onConfirmBranches: (message: Message) => Promise<void>;
+  onForceBranchSplit: (content: string) => Promise<void>;
 }
 
 interface AttachmentDraft {
@@ -46,6 +42,7 @@ interface AttachmentDraft {
 const MAX_ATTACHMENTS = 8;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_CHARS = 180_000;
+const BRANCH_PLAN_ACTION_MARKER = "<!-- treeai:branch-plan -->";
 
 export function ChatPanel({
   selectedNode,
@@ -53,32 +50,26 @@ export function ChatPanel({
   loading,
   sending,
   streamingText,
-  visualizationErrors,
   canWrite,
   fullWidth,
   error,
-  settings,
-  treeVisible,
   panelWidth,
-  onToggleTree,
   onSend,
-  onSaveSettings,
+  onEditMessage,
+  onConfirmBranches,
+  onForceBranchSplit,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
+  const [branchMode, setBranchMode] = useState(false);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [branchActionBusy, setBranchActionBusy] = useState("");
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
   const [dropActive, setDropActive] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(settings);
-  const [savingSettings, setSavingSettings] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setSettingsDraft(settings);
-  }, [settings]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -91,12 +82,13 @@ export function ChatPanel({
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(156, Math.max(28, textarea.scrollHeight))}px`;
+    textarea.style.height = `${Math.min(200, Math.max(48, textarea.scrollHeight))}px`;
   }, [draft]);
 
   const canSend = Boolean(
     selectedNode && canWrite && !sending && (draft.trim() || attachments.length > 0),
   );
+  const canToggleBranchMode = Boolean(selectedNode && canWrite && !sending && !attachmentBusy);
 
   const attachFiles = async (files: FileList | null) => {
     if (!files?.length || !canWrite || sending) return;
@@ -148,6 +140,20 @@ export function ChatPanel({
     setAttachments((current) => current.filter((file) => file.id !== id));
   };
 
+  const startEditingMessage = (message: Message) => {
+    setEditingMessage(message);
+    setBranchMode(false);
+    setAttachments([]);
+    setDraft(stripBranchPlanAction(message.content));
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const cancelEditing = () => {
+    setEditingMessage(null);
+    setDraft("");
+    setAttachments([]);
+  };
+
   const submitMessage = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!selectedNode || !canWrite || sending) return;
@@ -157,6 +163,16 @@ export function ChatPanel({
 
     setDraft("");
     setAttachments([]);
+    setBranchMode(false);
+    if (editingMessage) {
+      setEditingMessage(null);
+      await onEditMessage(editingMessage, content);
+      return;
+    }
+    if (branchMode) {
+      await onForceBranchSplit(content);
+      return;
+    }
     await onSend(content);
   };
 
@@ -167,156 +183,37 @@ export function ChatPanel({
     }
   };
 
-  const saveSettings = async (event: FormEvent) => {
-    event.preventDefault();
-    setSavingSettings(true);
-    try {
-      await onSaveSettings(settingsDraft);
-      setSettingsOpen(false);
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
-  const contentShell = fullWidth
-    ? "mx-auto w-full max-w-[920px] min-w-0"
-    : "w-full min-w-0";
-  const composerShell = fullWidth
-    ? "mx-auto w-full max-w-[820px] min-w-0"
-    : "w-full min-w-0";
-  const assistantWidth = "max-w-[100%]";
-  const userWidth = "max-w-[92%]";
+  const contentShell = "mx-auto min-w-0";
+  const composerShell = "mx-auto min-w-0";
+  const contentShellStyle = { width: "min(760px, calc(100vw - 48px))", maxWidth: "100%" };
+  const composerShellStyle = { width: "min(780px, calc(100vw - 48px))", maxWidth: "100%" };
+  const assistantWidth = "max-w-[760px]";
+  const userWidth = "max-w-[70%]";
   const panelStyle = fullWidth || !panelWidth ? undefined : { width: `${panelWidth}px` };
 
   return (
     <aside
       style={panelStyle}
-      className={`no-drag flex h-full min-w-0 shrink-0 flex-col overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)] ${
+      className={`no-drag flex min-h-0 min-w-0 flex-col overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)] ${
         fullWidth
-          ? "w-full border-l-0"
-          : "border-l border-[color:var(--border)]"
+          ? "h-auto flex-1 w-full border-l-0"
+          : "h-full shrink-0 border-l border-[color:var(--border)]"
       }`}
     >
-      <header className="border-b border-[color:var(--border)] bg-[color:var(--app-bg)]/95 px-5 py-3">
-        <div
-          className={`${contentShell} flex min-h-10 items-center justify-between gap-3 ${
-            fullWidth ? "pl-24" : ""
-          }`}
-        >
-          <div className="min-w-0">
-            <div className="truncate text-[14px] font-semibold tracking-normal">
-              {selectedNode?.title ?? "No node selected"}
-            </div>
-            <div className="truncate text-xs text-[color:var(--muted)]">
-              {selectedNode
-                ? selectedNode.is_leaf
-                  ? selectedNode.treeTitle
-                  : `${selectedNode.treeTitle} · branch point`
-                : "Chat"}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <button
-              type="button"
-              onClick={onToggleTree}
-              className="h-8 rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--panel-soft)] hover:text-[color:var(--text)]"
-            >
-              {treeVisible ? "Focus" : "Tree"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setSettingsOpen((value) => !value)}
-              className="h-8 rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--panel-soft)] hover:text-[color:var(--text)]"
-            >
-              API
-            </button>
-          </div>
-        </div>
-
-        {settingsOpen && (
-          <form
-            onSubmit={saveSettings}
-            className={`${contentShell} ${fullWidth ? "pl-24" : ""} mt-3 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3`}
-          >
-            <div className="grid gap-2 md:grid-cols-[1fr_180px]">
-              <label className="block text-xs text-[color:var(--muted)]">
-                API key
-                <input
-                  type="password"
-                  value={settingsDraft.api_key}
-                  onChange={(event) =>
-                    setSettingsDraft((current) => ({
-                      ...current,
-                      api_key: event.target.value,
-                    }))
-                  }
-                  className="mt-1 h-9 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
-                  placeholder="sk-..."
-                />
-              </label>
-              <label className="block text-xs text-[color:var(--muted)]">
-                Model
-                <input
-                  type="text"
-                  value={settingsDraft.model}
-                  onChange={(event) =>
-                    setSettingsDraft((current) => ({
-                      ...current,
-                      model: event.target.value,
-                    }))
-                  }
-                  className="mt-1 h-9 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
-                />
-              </label>
-            </div>
-            <label className="mt-2 block text-xs text-[color:var(--muted)]">
-              Endpoint
-              <input
-                type="text"
-                value={settingsDraft.endpoint}
-                onChange={(event) =>
-                  setSettingsDraft((current) => ({
-                    ...current,
-                    endpoint: event.target.value,
-                  }))
-                }
-                className="mt-1 h-9 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
-              />
-            </label>
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setSettingsDraft(settings);
-                  setSettingsOpen(false);
-                }}
-                className="rounded-full px-3 py-1.5 text-xs text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={savingSettings}
-                className="rounded-full bg-[color:var(--button)] px-3 py-1.5 text-xs font-medium text-[color:var(--button-text)] disabled:opacity-60"
-              >
-                {savingSettings ? "Saving" : "Save"}
-              </button>
-            </div>
-          </form>
-        )}
-      </header>
-
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-7">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 pb-7 pt-5">
         {loading ? (
-          <div className={`${contentShell} text-sm text-[color:var(--muted)]`}>Loading</div>
+          <div className={`${contentShell} text-sm text-[color:var(--muted)]`} style={contentShellStyle}>
+            Loading
+          </div>
         ) : messages.length === 0 && !streamingText ? (
           <div
             className={`${contentShell} flex min-h-full items-center justify-center text-center text-sm text-[color:var(--muted)]`}
+            style={contentShellStyle}
           >
             {selectedNode ? "Empty node" : "No node selected"}
           </div>
         ) : (
-          <div className={`${contentShell} space-y-7`}>
+          <div className={`${contentShell} space-y-7`} style={contentShellStyle}>
             {messages.map((message) => (
               <div
                 key={message.id}
@@ -330,12 +227,41 @@ export function ChatPanel({
                   }
                 >
                   <MessageContent content={message.content} />
-                  {message.visualization_html && (
-                    <InlineVisualization html={message.visualization_html} />
+                  {message.role === "user" && message.node_id === selectedNode?.id && (
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        type="button"
+                        disabled={sending}
+                        onClick={() => startEditingMessage(message)}
+                        className="inline-flex h-7 items-center gap-1.5 rounded-full px-2 text-[11px] text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="Редактировать сообщение"
+                        title="Редактировать"
+                      >
+                        <EditIcon />
+                        Edit
+                      </button>
+                    </div>
                   )}
-                  {visualizationErrors[message.id] && (
-                    <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
-                      {visualizationErrors[message.id]}
+                  {message.role === "assistant" && hasBranchPlanAction(message.content) && (
+                    <div className="mt-4 flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={sending || branchActionBusy === message.id}
+                        onClick={async () => {
+                          setBranchActionBusy(message.id);
+                          try {
+                            await onConfirmBranches(message);
+                          } finally {
+                            setBranchActionBusy("");
+                          }
+                        }}
+                        className="inline-flex h-9 items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--panel)] px-3 text-sm font-medium text-[color:var(--text)] shadow-[0_1px_3px_rgba(0,0,0,0.08)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-45"
+                        aria-label="Поделить на ветки"
+                        title="Поделить на ветки"
+                      >
+                        <CheckIcon />
+                        <span>Поделить на ветки</span>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -346,7 +272,7 @@ export function ChatPanel({
                 <div
                   className={`${assistantWidth} min-w-0 break-words text-[15px] leading-7 text-[color:var(--text)]`}
                 >
-                  <MessageContent content={streamingText} />
+                  <StreamingMessage content={streamingText} />
                 </div>
               </div>
             )}
@@ -362,8 +288,11 @@ export function ChatPanel({
       </div>
 
       {(error || attachmentError) && (
-        <div className="px-5 pb-2 text-xs text-red-300">
-          <div className={`${composerShell} space-y-1 whitespace-pre-wrap break-words`}>
+        <div className="px-6 pb-2 text-xs text-red-300">
+          <div
+            className={`${composerShell} space-y-1 whitespace-pre-wrap break-words`}
+            style={composerShellStyle}
+          >
             {error && <div className="text-red-600">{error}</div>}
             {attachmentError && <div className="text-red-600">{attachmentError}</div>}
           </div>
@@ -383,54 +312,82 @@ export function ChatPanel({
           if (nextTarget && event.currentTarget.contains(nextTarget)) return;
           setDropActive(false);
         }}
-        className="bg-gradient-to-t from-[color:var(--app-bg)] via-[color:var(--app-bg)] px-5 pb-5 pt-2"
+        className="bg-[color:var(--app-bg)] px-6 pb-6 pt-2"
       >
-        <div className={composerShell}>
+        <div className={composerShell} style={composerShellStyle}>
           {!canWrite && selectedNode && (
             <div className="mb-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] px-4 py-2 text-xs text-[color:var(--muted)]">
               Select or create a leaf branch to write.
             </div>
           )}
+          {editingMessage && (
+            <div className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] px-4 py-2 text-xs text-[color:var(--muted)]">
+              <span className="truncate">Editing your message</span>
+              <button
+                type="button"
+                onClick={cancelEditing}
+                className="shrink-0 rounded-full px-2 py-1 text-[color:var(--text)] hover:bg-[color:var(--selected)]"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
 
           <div
-            className={`overflow-hidden rounded-[28px] border shadow-[0_12px_38px_rgba(0,0,0,0.08)] transition-colors focus-within:border-[color:var(--accent)] ${
+            className={`overflow-hidden rounded-[24px] border p-3 shadow-[0_1px_3px_rgba(0,0,0,0.08)] transition-[background-color,border-color,box-shadow] focus-within:shadow-[0_1px_3px_rgba(0,0,0,0.08),0_0_0_3px_rgba(0,0,0,0.035)] ${
               dropActive
-                ? "border-[color:var(--accent)] bg-[color:var(--selected)]"
+                ? "border-[color:var(--border)] bg-[color:var(--panel-soft)]"
                 : "border-[color:var(--border)] bg-[color:var(--panel)]"
             }`}
           >
             {(attachments.length > 0 || attachmentBusy) && (
-              <div className="flex max-h-24 gap-2 overflow-x-auto border-b border-[color:var(--border)] px-3 py-2">
+              <div className="mb-2 flex max-h-24 gap-2 overflow-x-auto">
                 {attachments.map((file) => (
                   <div
                     key={file.id}
-                    className="flex max-w-[220px] shrink-0 items-center gap-2 rounded-2xl bg-[color:var(--panel-soft)] px-3 py-2 text-xs text-[color:var(--text)]"
+                    className="inline-flex h-8 max-w-[240px] shrink-0 items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 text-xs text-[color:var(--muted)]"
                     title={file.warning || file.name}
                   >
-                    <div className="min-w-0">
-                      <div className="truncate leading-4">{file.name}</div>
-                      <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
-                        {file.warning ?? formatBytes(file.size)}
-                      </div>
-                    </div>
+                    <span className="min-w-0 truncate">{file.name}</span>
                     <button
                       type="button"
-                    onClick={() => removeAttachment(file.id)}
-                      className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
+                      onClick={() => removeAttachment(file.id)}
+                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
                       aria-label={`Remove ${file.name}`}
                     >
-                      x
+                      <CloseIcon />
                     </button>
                   </div>
                 ))}
                 {attachmentBusy && (
-                  <div className="shrink-0 rounded-2xl bg-[color:var(--panel-soft)] px-3 py-2 text-xs text-[color:var(--muted)]">
+                  <div className="inline-flex h-8 shrink-0 items-center rounded-full border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 text-xs text-[color:var(--muted)]">
                     Loading files
                   </div>
                 )}
               </div>
             )}
-            <div className="flex items-end gap-2 px-2 py-2">
+            <div className="px-1 pt-1">
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={draft}
+                disabled={!selectedNode || !canWrite || sending}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={handleComposerKeyDown}
+                className="max-h-[200px] min-h-[48px] w-full resize-none bg-transparent px-0 py-1 text-[15px] leading-6 text-[color:var(--text)] outline-none placeholder:text-[color:var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
+                placeholder={
+                  selectedNode
+                    ? canWrite
+                      ? editingMessage
+                        ? "Измени запрос"
+                        : "Спроси что-нибудь"
+                      : "Parent branches are read-only"
+                    : "No node selected"
+                }
+              />
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <div className="flex items-center gap-2">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -442,7 +399,7 @@ export function ChatPanel({
                 type="button"
                 disabled={!canWrite || sending || attachmentBusy}
                 onClick={() => fileInputRef.current?.click()}
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[color:var(--panel-soft)] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] bg-transparent p-0 text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label={attachmentBusy ? "Loading files" : "Attach files"}
               >
                 {attachmentBusy ? (
@@ -451,26 +408,26 @@ export function ChatPanel({
                   <PlusIcon />
                 )}
               </button>
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                value={draft}
-                disabled={!selectedNode || !canWrite || sending}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={handleComposerKeyDown}
-                className="max-h-[156px] min-h-[28px] flex-1 resize-none bg-transparent px-1 py-1.5 text-[15px] leading-7 text-[color:var(--text)] outline-none placeholder:text-[color:var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder={
-                  selectedNode
-                    ? canWrite
-                      ? "Спроси что-нибудь"
-                      : "Parent branches are read-only"
-                    : "No node selected"
-                }
-              />
+              <button
+                type="button"
+                disabled={!canToggleBranchMode || Boolean(editingMessage)}
+                onClick={() => setBranchMode((value) => !value)}
+                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border p-0 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  branchMode
+                    ? "border-[color:var(--button)] bg-[color:var(--button)] text-[color:var(--button-text)]"
+                    : "border-[color:var(--border)] bg-transparent text-[color:var(--text)] hover:bg-[color:var(--selected)]"
+                }`}
+                aria-label={branchMode ? "Отменить деление на ветки после отправки" : "Поделить на ветки после отправки"}
+                aria-pressed={branchMode}
+                title={branchMode ? "После отправки поделит на ветки" : "Поделить на ветки после отправки"}
+              >
+                <BranchSplitIcon />
+              </button>
+              </div>
               <button
                 type="submit"
                 disabled={!canSend}
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[color:var(--button)] text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 bg-[color:var(--button)] p-0 text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="Send"
               >
                 <SendIcon />
@@ -483,62 +440,15 @@ export function ChatPanel({
   );
 }
 
-function InlineVisualization({ html }: { html: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const renderFrame = (title: string) => (
-    <iframe
-      title={title}
-      sandbox="allow-scripts"
-      srcDoc={html}
-      className="h-full w-full border-0"
-    />
-  );
-
-  return (
-    <>
-      <div className="mt-5 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_34px_rgba(0,0,0,0.08)]">
-        <div className="flex h-9 items-center justify-end border-b border-[color:var(--border)] bg-[color:var(--panel-soft)] px-2">
-          <button
-            type="button"
-            onClick={() => setExpanded(true)}
-            className="rounded-full px-3 py-1 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
-          >
-            Fullscreen
-          </button>
-        </div>
-        <div className="h-[min(520px,60vh)] min-h-[360px]">
-          {renderFrame("Interactive visualization")}
-        </div>
-      </div>
-      {expanded && (
-        <div className="no-drag fixed inset-0 z-[120] flex flex-col bg-[color:var(--app-bg)]">
-          <div className="flex h-12 shrink-0 items-center justify-end border-b border-[color:var(--border)] bg-[color:var(--panel)] px-3">
-            <button
-              type="button"
-              onClick={() => setExpanded(false)}
-              className="rounded-full bg-[color:var(--button)] px-3 py-1.5 text-xs font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-85"
-            >
-              Close
-            </button>
-          </div>
-          <div className="min-h-0 flex-1">
-            {renderFrame("Fullscreen interactive visualization")}
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
 function PlusIcon() {
   return (
     <svg
       aria-hidden="true"
-      className="block h-5 w-5"
+      className="block h-[18px] w-[18px]"
       fill="none"
       stroke="currentColor"
       strokeLinecap="round"
-      strokeWidth="2"
+      strokeWidth="1.9"
       viewBox="0 0 24 24"
     >
       <path d="M12 5v14M5 12h14" />
@@ -550,16 +460,88 @@ function SendIcon() {
   return (
     <svg
       aria-hidden="true"
-      className="block h-5 w-5"
+      className="block h-[18px] w-[18px]"
       fill="none"
       stroke="currentColor"
       strokeLinecap="round"
       strokeLinejoin="round"
-      strokeWidth="2.25"
+      strokeWidth="2.1"
       viewBox="0 0 24 24"
     >
       <path d="M12 19V5" />
       <path d="m5 12 7-7 7 7" />
+    </svg>
+  );
+}
+
+function BranchSplitIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="block h-[17px] w-[17px]"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 4v5" />
+      <path d="M7 20v-5a5 5 0 0 1 5-5" />
+      <path d="M17 20v-5a5 5 0 0 0-5-5" />
+      <path d="M5 20h4" />
+      <path d="M15 20h4" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+    >
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2.2"
+      viewBox="0 0 24 24"
+    >
+      <path d="m5 12 4 4L19 6" />
     </svg>
   );
 }
@@ -616,7 +598,7 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
 }
 
 function MessageContent({ content }: { content: string }) {
-  const { visibleText, attachments } = splitAttachmentPayload(content);
+  const { visibleText, attachments } = splitAttachmentPayload(stripBranchPlanAction(content));
   return (
     <>
       {attachments.length > 0 && (
@@ -624,16 +606,35 @@ function MessageContent({ content }: { content: string }) {
           {attachments.map((attachment) => (
             <div
               key={`${attachment.name}-${attachment.index}`}
-              className="max-w-full rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 py-2 text-xs leading-5 text-[color:var(--text)]"
+              className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 text-[13px] leading-none text-[color:var(--muted)]"
             >
-              <div className="max-w-[260px] truncate font-medium">{attachment.name}</div>
-              <div className="text-[color:var(--muted)]">{attachment.meta}</div>
+              <span className="max-w-[260px] truncate">{attachment.name}</span>
+              <span className="text-[color:var(--muted)]">·</span>
+              <span className="max-w-[180px] truncate">{attachment.meta}</span>
             </div>
           ))}
         </div>
       )}
       {visibleText && <MarkdownMessage content={visibleText} />}
     </>
+  );
+}
+
+function hasBranchPlanAction(content: string) {
+  return content.includes(BRANCH_PLAN_ACTION_MARKER);
+}
+
+function stripBranchPlanAction(content: string) {
+  return content.replace(BRANCH_PLAN_ACTION_MARKER, "").trim();
+}
+
+function StreamingMessage({ content }: { content: string }) {
+  const normalized = content.replace(/\r\n?/g, "\n").trimStart();
+  return (
+    <div className="whitespace-pre-wrap break-words text-[15px] leading-7 text-[color:var(--text)]">
+      {normalized}
+      <span className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[2px] animate-pulse rounded-full bg-[color:var(--muted)]" />
+    </div>
   );
 }
 

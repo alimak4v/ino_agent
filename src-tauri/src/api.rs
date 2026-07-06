@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
+use std::time::Instant;
 
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
 
@@ -12,6 +13,7 @@ pub fn chat_completion(
     messages: &[ChatContextMessage],
 ) -> Result<String, String> {
     ensure_settings(settings)?;
+    let started = Instant::now();
     let payload = request_payload(settings, messages, false, 0.7);
     let mut child = curl_command(settings, false)
         .arg("--write-out")
@@ -57,6 +59,7 @@ pub fn chat_completion(
             clip(body, 800)
         )
     })?;
+    log_prompt_cache_usage(&parsed, "completion", started.elapsed().as_millis());
     let content = extract_choice_content(&parsed, false).trim().to_string();
     if content.is_empty() {
         return Err("The model returned an empty answer.".to_string());
@@ -73,6 +76,7 @@ where
     F: FnMut(String),
 {
     ensure_settings(settings)?;
+    let started = Instant::now();
     let payload = request_payload(settings, messages, true, 0.7);
     let mut child = curl_command(settings, true)
         .arg("--data-binary")
@@ -109,6 +113,7 @@ where
 
     let mut answer = String::new();
     let mut error_lines = Vec::new();
+    let mut usage: Option<Value> = None;
     for line in BufReader::new(stdout).lines() {
         let line = line.map_err(|e| e.to_string())?;
         let line = line.trim();
@@ -128,6 +133,9 @@ where
         let Ok(parsed) = serde_json::from_str::<Value>(data) else {
             continue;
         };
+        if parsed.get("usage").and_then(Value::as_object).is_some() {
+            usage = Some(parsed.clone());
+        }
         let delta = extract_choice_content(&parsed, true);
         if delta.is_empty() {
             continue;
@@ -139,6 +147,9 @@ where
     let status = child.wait().map_err(|e| e.to_string())?;
     let stderr = stderr_handle.join().unwrap_or_default().trim().to_string();
     let answer = answer.trim().to_string();
+    if let Some(usage) = usage {
+        log_prompt_cache_usage(&usage, "stream", started.elapsed().as_millis());
+    }
 
     if !status.success() && answer.is_empty() {
         let body = error_lines.join("\n");
@@ -154,62 +165,6 @@ where
         return Err("The model returned an empty answer.".to_string());
     }
     Ok(answer)
-}
-
-pub fn generate_learning_graph_html(
-    settings: &ChatSettings,
-    messages: &[ChatContextMessage],
-) -> Result<String, String> {
-    ensure_settings(settings)?;
-    let payload = request_payload(settings, messages, false, 0.25);
-    let mut child = curl_command(settings, false)
-        .arg("--write-out")
-        .arg("\n%{http_code}")
-        .arg("--data-binary")
-        .arg("@-")
-        .arg(normalize_endpoint(&settings.endpoint))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to start curl: {e}"))?;
-
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| "Failed to open curl stdin.".to_string())?
-        .write_all(payload.as_bytes())
-        .map_err(|e| e.to_string())?;
-
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let split = stdout
-        .rfind('\n')
-        .ok_or_else(|| format!("API response did not include an HTTP status. {stderr}"))?;
-    let body = stdout[..split].trim();
-    let status = stdout[split + 1..]
-        .trim()
-        .parse::<u16>()
-        .map_err(|e| format!("Could not parse API status: {e}"))?;
-
-    if status >= 400 {
-        return Err(format!("API error {status}: {}", clip(body, 1200)));
-    }
-    if !output.status.success() && !stderr.is_empty() {
-        return Err(stderr);
-    }
-
-    let parsed = serde_json::from_str::<Value>(body).map_err(|e| {
-        format!(
-            "Could not parse API response: {e}. Body: {}",
-            clip(body, 800)
-        )
-    })?;
-    let content = extract_choice_content(&parsed, false);
-    let html = sanitize_html_payload(&content);
-    validate_graph_html(&html)?;
-    Ok(html)
 }
 
 pub fn parse_branch_plan(answer: &str, limit: usize) -> Option<BranchPlan> {
@@ -316,17 +271,85 @@ fn request_payload(
     stream: bool,
     temperature: f32,
 ) -> String {
-    let messages = messages
+    let api_messages = messages
         .iter()
         .map(|message| json!({ "role": message.role, "content": message.content }))
         .collect::<Vec<_>>();
-    json!({
+    let mut payload = json!({
         "model": settings.model,
-        "messages": messages,
+        "messages": api_messages,
         "temperature": temperature,
         "stream": stream,
-    })
-    .to_string()
+    });
+    if should_use_openai_prompt_cache_hints(&settings.endpoint) {
+        payload["prompt_cache_key"] = json!(prompt_cache_key(settings, messages));
+        if let Some(retention) = prompt_cache_retention(&settings.model) {
+            payload["prompt_cache_retention"] = json!(retention);
+        }
+        if stream {
+            payload["stream_options"] = json!({ "include_usage": true });
+        }
+    }
+    payload.to_string()
+}
+
+fn should_use_openai_prompt_cache_hints(endpoint: &str) -> bool {
+    let endpoint = normalize_endpoint(endpoint).to_lowercase();
+    endpoint.contains("api.openai.com") || endpoint.contains("api.aitunnel.ru")
+}
+
+fn prompt_cache_retention(model: &str) -> Option<&'static str> {
+    let model = model.trim().to_lowercase();
+    if model.starts_with("gpt-5.5") {
+        return Some("24h");
+    }
+    if model.starts_with("gpt-5")
+        || model.starts_with("gpt-4.1")
+        || model.starts_with("gpt-4o")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+    {
+        return Some("in_memory");
+    }
+    None
+}
+
+fn prompt_cache_key(settings: &ChatSettings, messages: &[ChatContextMessage]) -> String {
+    let mut prefix = format!("model:{}\n", settings.model.trim());
+    for message in messages.iter().take_while(|message| message.role == "system") {
+        prefix.push_str("system\n");
+        prefix.push_str(&message.content);
+        prefix.push('\n');
+    }
+    format!("treeai-{:016x}", stable_hash(&prefix))
+}
+
+fn stable_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn log_prompt_cache_usage(data: &Value, mode: &str, elapsed_ms: u128) {
+    let Some(usage) = data.get("usage") else {
+        return;
+    };
+    let prompt_tokens = usage
+        .get("prompt_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cached_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    eprintln!(
+        "[treeAI] prompt-cache {mode}: cached_tokens={cached_tokens}, prompt_tokens={prompt_tokens}, elapsed_ms={elapsed_ms}"
+    );
 }
 
 fn curl_command(settings: &ChatSettings, stream: bool) -> Command {
@@ -466,74 +489,4 @@ fn branch_text_field(item: &Value, keys: &[&str]) -> Option<String> {
 
 fn clip(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
-}
-
-pub fn sanitize_html_payload(raw_response: &str) -> String {
-    let mut cleaned = raw_response.trim().to_string();
-    let lower = cleaned.to_lowercase();
-    for fence in ["```html", "```htm", "```"] {
-        if lower.starts_with(fence) {
-            cleaned = cleaned[fence.len()..].trim_start().to_string();
-            break;
-        }
-    }
-    if cleaned.trim_end().ends_with("```") {
-        let trimmed_len = cleaned.trim_end().len();
-        cleaned.truncate(trimmed_len - 3);
-        cleaned = cleaned.trim().to_string();
-    }
-
-    let lower = cleaned.to_lowercase();
-    let start = lower
-        .find("<!doctype html")
-        .or_else(|| lower.find("<html"))
-        .unwrap_or(0);
-    if start > 0 {
-        cleaned = cleaned[start..].trim_start().to_string();
-    }
-
-    let lower = cleaned.to_lowercase();
-    if let Some(end) = lower.rfind("</html>") {
-        cleaned.truncate(end + "</html>".len());
-    }
-    cleaned.trim().to_string()
-}
-
-fn validate_graph_html(html: &str) -> Result<(), String> {
-    let lower = html.trim_start().to_lowercase();
-    if !(lower.starts_with("<!doctype html") || lower.starts_with("<html")) {
-        return Err("The model did not return an HTML document.".to_string());
-    }
-    for required in ["<html", "</html>", "<script", "</script>"] {
-        if !lower.contains(required) {
-            return Err(format!("Generated graph HTML is missing {required}."));
-        }
-    }
-    if !lower.contains("vis-network") && !lower.contains("cytoscape") {
-        return Err("Generated graph HTML did not include an approved graph library.".to_string());
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::sanitize_html_payload;
-
-    #[test]
-    fn strips_markdown_fences() {
-        let raw = "```html\n<!DOCTYPE html><html><body></body></html>\n```";
-        assert_eq!(
-            sanitize_html_payload(raw),
-            "<!DOCTYPE html><html><body></body></html>"
-        );
-    }
-
-    #[test]
-    fn removes_extra_text_around_html() {
-        let raw = "Here you go:\n<!DOCTYPE html><html><body></body></html>\nextra";
-        assert_eq!(
-            sanitize_html_payload(raw),
-            "<!DOCTYPE html><html><body></body></html>"
-        );
-    }
 }
