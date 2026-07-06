@@ -51,6 +51,12 @@ export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
           if (isQuizClass(className) && renderQuiz) {
             return <>{renderQuiz(code)}</>;
           }
+          if (isJsonClass(className) && renderQuiz && looksLikeQuizJson(code)) {
+            return <>{renderQuiz(code)}</>;
+          }
+          if (renderQuiz && looksLikeQuizJson(code)) {
+            return <>{renderQuiz(code)}</>;
+          }
           return (
             <code
               {...props}
@@ -90,9 +96,45 @@ function isQuizClass(className?: string) {
   return /\blanguage-quiz\b/.test(className ?? "");
 }
 
+function isJsonClass(className?: string) {
+  return /\blanguage-json\b/.test(className ?? "");
+}
+
+function looksLikeQuizJson(source: string) {
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.some(isQuizLikeObject);
+    }
+    if (!parsed || typeof parsed !== "object") {
+      return false;
+    }
+    const object = parsed as Record<string, unknown>;
+    return isQuizLikeObject(object) || Array.isArray(object.questions);
+  } catch {
+    return false;
+  }
+}
+
+function isQuizLikeObject(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const object = value as Record<string, unknown>;
+  return typeof object.question === "string" && (Array.isArray(object.options) || "answer" in object);
+}
+
 function isSpecialCodeBlock(child: unknown, includeQuiz: boolean) {
   if (!isValidElement(child)) return false;
-  const props = child.props as { className?: unknown };
+  const props = child.props as { children?: unknown; className?: unknown };
   const className = typeof props.className === "string" ? props.className : "";
-  return isMermaidClass(className) || isGraphStepsClass(className) || (includeQuiz && isQuizClass(className));
+  const source = String(props.children ?? "").replace(/\n$/, "");
+  return (
+    isMermaidClass(className) ||
+    isGraphStepsClass(className) ||
+    (includeQuiz &&
+      (isQuizClass(className) ||
+        (isJsonClass(className) && looksLikeQuizJson(source)) ||
+        looksLikeQuizJson(source)))
+  );
 }

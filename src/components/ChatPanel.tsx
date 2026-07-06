@@ -73,13 +73,28 @@ export function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastMessage = messages[messages.length - 1];
+  const scrollAnchor = `${messages.length}:${lastMessage?.id ?? ""}:${
+    lastMessage?.content.length ?? 0
+  }:${streamingText.length}:${sending}:${loading}`;
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
+    const scrollElement = scrollRef.current;
+    if (!scrollElement) return;
+
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      scrollElement.scrollTop = scrollElement.scrollHeight;
+      secondFrame = requestAnimationFrame(() => {
+        scrollElement.scrollTop = scrollElement.scrollHeight;
+      });
     });
-  }, [messages.length, sending, loading, streamingText]);
+
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      cancelAnimationFrame(secondFrame);
+    };
+  }, [scrollAnchor]);
 
   useEffect(() => {
     const textarea = textareaRef.current;

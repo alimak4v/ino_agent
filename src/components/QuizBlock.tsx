@@ -45,9 +45,51 @@ export function QuizBlock({
   attempts,
   onSaveAttempt,
 }: QuizBlockProps) {
-  const quiz = useMemo(() => parseQuiz(source), [source]);
+  const quizzes = useMemo(() => parseQuizSet(source), [source]);
+
+  if (quizzes.length === 0) {
+    return (
+      <pre className="my-4 max-w-full overflow-x-hidden whitespace-pre-wrap break-words rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-4 text-xs leading-relaxed">
+        <code>{source}</code>
+      </pre>
+    );
+  }
+
+  if (quizzes.length > 1) {
+    return (
+      <div className="my-5 space-y-4">
+        {quizzes.map((quiz) => (
+          <QuizCard
+            key={quiz.id}
+            quiz={quiz}
+            attempts={attempts}
+            onSaveAttempt={onSaveAttempt}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <QuizCard
+      quiz={quizzes[0]}
+      attempts={attempts}
+      onSaveAttempt={onSaveAttempt}
+    />
+  );
+}
+
+function QuizCard({
+  quiz,
+  attempts,
+  onSaveAttempt,
+}: {
+  quiz: QuizData;
+  attempts: QuizAttempt[];
+  onSaveAttempt: QuizBlockProps["onSaveAttempt"];
+}) {
   const attempt = useMemo(
-    () => (quiz ? attempts.find((item) => item.quiz_id === quiz.id) : undefined),
+    () => attempts.find((item) => item.quiz_id === quiz.id),
     [attempts, quiz],
   );
   const savedAnswer = useMemo(() => parseAttemptAnswer(attempt?.answer_json), [attempt?.answer_json]);
@@ -64,14 +106,6 @@ export function QuizBlock({
     setMultiValues(arrayAnswerValue(savedAnswer));
     setTextValue(firstAnswerValue(savedAnswer));
   }, [attempt, savedAnswer]);
-
-  if (!quiz) {
-    return (
-      <pre className="my-4 max-w-full overflow-x-hidden whitespace-pre-wrap break-words rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-4 text-xs leading-relaxed">
-        <code>{source}</code>
-      </pre>
-    );
-  }
 
   const result = attempt
     ? attemptToResult(attempt, quiz)
@@ -206,26 +240,50 @@ export function QuizBlock({
   );
 }
 
-function parseQuiz(source: string): QuizData | null {
+function parseQuizSet(source: string): QuizData[] {
   let raw: unknown;
   try {
     raw = JSON.parse(source);
   } catch {
-    return null;
+    return [];
   }
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item, index) => parseQuizObject(item, `${source}:${index}`))
+      .filter((item): item is QuizData => Boolean(item));
+  }
+  if (!raw || typeof raw !== "object") return [];
+  const object = raw as Record<string, unknown>;
+  if (Array.isArray(object.questions)) {
+    return object.questions
+      .map((item, index) => parseQuizObject(item, `${source}:question:${index}`))
+      .filter((item): item is QuizData => Boolean(item));
+  }
+  const quiz = parseQuizObject(object, source);
+  return quiz ? [quiz] : [];
+}
+
+function parseQuizObject(raw: unknown, fallbackSource: string): QuizData | null {
   if (!raw || typeof raw !== "object") return null;
   const object = raw as Record<string, unknown>;
-  const type = normalizeQuizType(stringField(object, ["type", "kind"]));
   const question = stringField(object, ["question", "prompt", "text"]);
-  const id = stringField(object, ["id", "quiz_id", "quizId"]) || stableQuizId(source);
-  const options = type === "text" ? [] : normalizeOptions(object.options);
+  const id = stringField(object, ["id", "quiz_id", "quizId"]) || stableQuizId(fallbackSource);
+  const options = normalizeOptions(object.options);
   const correctValues = normalizeCorrectValues(object);
+  const type = normalizeQuizType(stringField(object, ["type", "kind"])) ?? inferQuizType(options, correctValues);
   const explanation = stringField(object, ["explanation", "feedback", "reason"]) || "";
   const points = positiveNumber(object.points) ?? positiveNumber(object.score) ?? 1;
 
   if (!type || !question || correctValues.length === 0) return null;
   if (type !== "text" && options.length < 2) return null;
   return { id, type, question, options, correctValues, explanation, points };
+}
+
+function inferQuizType(options: QuizOption[], correctValues: string[]): QuizType | null {
+  if (options.length >= 2) {
+    return correctValues.length > 1 ? "multiple_choice" : "single_choice";
+  }
+  return correctValues.length > 0 ? "text" : null;
 }
 
 function normalizeQuizType(value: string): QuizType | null {
