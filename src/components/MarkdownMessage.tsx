@@ -1,4 +1,4 @@
-import { Children, isValidElement } from "react";
+import { Children, isValidElement, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -6,7 +6,12 @@ import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { GraphSteps, MermaidDiagram } from "./MermaidGraph";
 
-export function MarkdownMessage({ content }: { content: string }) {
+interface MarkdownMessageProps {
+  content: string;
+  renderQuiz?: (source: string) => ReactNode;
+}
+
+export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -43,6 +48,9 @@ export function MarkdownMessage({ content }: { content: string }) {
           if (isGraphStepsClass(className)) {
             return <GraphSteps source={code} />;
           }
+          if (isQuizClass(className) && renderQuiz) {
+            return <>{renderQuiz(code)}</>;
+          }
           return (
             <code
               {...props}
@@ -54,7 +62,7 @@ export function MarkdownMessage({ content }: { content: string }) {
         },
         pre: ({ children }) => {
           const child = Children.only(children);
-          if (isSpecialCodeBlock(child)) {
+          if (isSpecialCodeBlock(child, Boolean(renderQuiz))) {
             return <>{children}</>;
           }
           return (
@@ -78,9 +86,13 @@ function isGraphStepsClass(className?: string) {
   return /\blanguage-(graphsteps|mermaid-steps)\b/.test(className ?? "");
 }
 
-function isSpecialCodeBlock(child: unknown) {
+function isQuizClass(className?: string) {
+  return /\blanguage-quiz\b/.test(className ?? "");
+}
+
+function isSpecialCodeBlock(child: unknown, includeQuiz: boolean) {
   if (!isValidElement(child)) return false;
   const props = child.props as { className?: unknown };
   const className = typeof props.className === "string" ? props.className : "";
-  return isMermaidClass(className) || isGraphStepsClass(className);
+  return isMermaidClass(className) || isGraphStepsClass(className) || (includeQuiz && isQuizClass(className));
 }

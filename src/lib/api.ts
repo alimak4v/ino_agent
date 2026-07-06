@@ -48,6 +48,21 @@ export interface Message {
   created_at: number;
 }
 
+export interface QuizAttempt {
+  id: string;
+  tree_id: string;
+  node_id: string;
+  message_id: string;
+  quiz_id: string;
+  quiz_type: string;
+  answer_json: string;
+  is_correct: boolean;
+  score: number;
+  max_score: number;
+  explanation: string;
+  created_at: number;
+}
+
 export interface ChatSettings {
   endpoint: string;
   model: string;
@@ -132,6 +147,32 @@ export const api = {
     invokeDesktop<Message>("add_user_message", { treeId, nodeId, content }),
   editUserMessage: (treeId: string, messageId: string, content: string) =>
     invokeDesktop<Message>("edit_user_message", { treeId, messageId, content }),
+  getQuizAttempts: (treeId: string, nodeId: string) =>
+    invokeDesktop<QuizAttempt[]>("get_quiz_attempts", { treeId, nodeId }),
+  saveQuizAttempt: (
+    treeId: string,
+    nodeId: string,
+    messageId: string,
+    quizId: string,
+    quizType: string,
+    answerJson: string,
+    isCorrect: boolean,
+    score: number,
+    maxScore: number,
+    explanation: string,
+  ) =>
+    invokeDesktop<QuizAttempt>("save_quiz_attempt", {
+      treeId,
+      nodeId,
+      messageId,
+      quizId,
+      quizType,
+      answerJson,
+      isCorrect,
+      score,
+      maxScore,
+      explanation,
+    }),
   generateAssistantReply: (treeId: string, nodeId: string, requestId: string) =>
     invokeDesktop<AssistantReplyResult>("generate_assistant_reply", { treeId, nodeId, requestId }),
   confirmPendingBranches: (treeId: string, nodeId: string) =>

@@ -146,6 +146,43 @@ fn get_messages(
 }
 
 #[tauri::command]
+fn get_quiz_attempts(
+    state: State<AppState>,
+    tree_id: String,
+    node_id: String,
+) -> Result<Vec<store::QuizAttempt>, String> {
+    lock_store(&state.store)?.get_quiz_attempts_for_path(&tree_id, &node_id)
+}
+
+#[tauri::command]
+fn save_quiz_attempt(
+    state: State<AppState>,
+    tree_id: String,
+    node_id: String,
+    message_id: String,
+    quiz_id: String,
+    quiz_type: String,
+    answer_json: String,
+    is_correct: bool,
+    score: f64,
+    max_score: f64,
+    explanation: String,
+) -> Result<store::QuizAttempt, String> {
+    lock_store(&state.store)?.save_quiz_attempt(
+        &tree_id,
+        &node_id,
+        &message_id,
+        &quiz_id,
+        &quiz_type,
+        &answer_json,
+        is_correct,
+        score,
+        max_score,
+        &explanation,
+    )
+}
+
+#[tauri::command]
 fn add_user_message(
     state: State<AppState>,
     tree_id: String,
@@ -260,13 +297,16 @@ fn force_branch_split_blocking(
     };
 
     let branch_limit = 7;
-    let mut planner_messages = vec![store::ChatContextMessage {
-        role: "system".to_string(),
-        content: force_branch_planner_prompt(branch_limit),
-    }, store::ChatContextMessage {
-        role: "system".to_string(),
-        content: force_branch_focus_prompt(&parent_title, parent_summary.as_deref()),
-    }];
+    let mut planner_messages = vec![
+        store::ChatContextMessage {
+            role: "system".to_string(),
+            content: force_branch_planner_prompt(branch_limit),
+        },
+        store::ChatContextMessage {
+            role: "system".to_string(),
+            content: force_branch_focus_prompt(&parent_title, parent_summary.as_deref()),
+        },
+    ];
     planner_messages.extend(messages);
 
     let mut plan = api::chat_completion(&settings, &planner_messages)
@@ -1009,6 +1049,8 @@ pub fn run() {
             save_settings,
             extract_pdf_text,
             get_messages,
+            get_quiz_attempts,
+            save_quiz_attempt,
             add_user_message,
             edit_user_message,
             generate_assistant_reply,

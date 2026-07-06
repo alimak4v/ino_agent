@@ -10,9 +10,11 @@ import {
   api,
   isTauriRuntime,
   type Message,
+  type QuizAttempt,
 } from "../lib/api";
 import type { CanvasLayoutNode } from "./TreeCanvas";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { QuizBlock } from "./QuizBlock";
 
 interface ChatPanelProps {
   selectedNode: CanvasLayoutNode | null;
@@ -67,6 +69,7 @@ export function ChatPanel({
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
   const [dropActive, setDropActive] = useState(false);
+  const [quizAttempts, setQuizAttempts] = useState<Record<string, QuizAttempt[]>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -84,6 +87,28 @@ export function ChatPanel({
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(200, Math.max(48, textarea.scrollHeight))}px`;
   }, [draft]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedNode) {
+      setQuizAttempts({});
+      return () => {
+        cancelled = true;
+      };
+    }
+    api
+      .getQuizAttempts(selectedNode.treeId, selectedNode.id)
+      .then((attempts) => {
+        if (cancelled) return;
+        setQuizAttempts(groupQuizAttemptsByMessage(attempts));
+      })
+      .catch(() => {
+        if (!cancelled) setQuizAttempts({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [messages.length, selectedNode?.id, selectedNode?.treeId]);
 
   const canSend = Boolean(
     selectedNode && canWrite && !sending && (draft.trim() || attachments.length > 0),
@@ -226,7 +251,37 @@ export function ChatPanel({
                       : `${assistantWidth} min-w-0 break-words text-[15px] leading-7 text-[color:var(--text)]`
                   }
                 >
-                  <MessageContent content={message.content} />
+                  <MessageContent
+                    message={message}
+                    quizAttempts={quizAttempts[message.id] ?? []}
+                    onSaveQuizAttempt={async (
+                      quizId,
+                      quizType,
+                      answerJson,
+                      isCorrect,
+                      score,
+                      maxScore,
+                      explanation,
+                    ) => {
+                      const attempt = await api.saveQuizAttempt(
+                        message.tree_id,
+                        message.node_id,
+                        message.id,
+                        quizId,
+                        quizType,
+                        answerJson,
+                        isCorrect,
+                        score,
+                        maxScore,
+                        explanation,
+                      );
+                      setQuizAttempts((current) => ({
+                        ...current,
+                        [message.id]: latestQuizAttempts([...(current[message.id] ?? []), attempt]),
+                      }));
+                      return attempt;
+                    }}
+                  />
                   {message.role === "user" && message.node_id === selectedNode?.id && (
                     <div className="mt-2 flex justify-end">
                       <button
@@ -597,8 +652,35 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
   };
 }
 
-function MessageContent({ content }: { content: string }) {
+function MessageContent({
+  message,
+  quizAttempts,
+  onSaveQuizAttempt,
+}: {
+  message: Message;
+  quizAttempts: QuizAttempt[];
+  onSaveQuizAttempt: (
+    quizId: string,
+    quizType: string,
+    answerJson: string,
+    isCorrect: boolean,
+    score: number,
+    maxScore: number,
+    explanation: string,
+  ) => Promise<QuizAttempt>;
+}) {
+  const content = message.content;
   const { visibleText, attachments } = splitAttachmentPayload(stripBranchPlanAction(content));
+  const renderQuiz =
+    message.role === "assistant"
+      ? (source: string) => (
+          <QuizBlock
+            source={source}
+            attempts={quizAttempts}
+            onSaveAttempt={onSaveQuizAttempt}
+          />
+        )
+      : undefined;
   return (
     <>
       {attachments.length > 0 && (
@@ -615,7 +697,12 @@ function MessageContent({ content }: { content: string }) {
           ))}
         </div>
       )}
-      {visibleText && <MarkdownMessage content={visibleText} />}
+      {visibleText && (
+        <MarkdownMessage
+          content={visibleText}
+          renderQuiz={renderQuiz}
+        />
+      )}
     </>
   );
 }
@@ -657,6 +744,25 @@ function splitAttachmentPayload(content: string) {
     )
     .trim();
   return { visibleText, attachments };
+}
+
+function groupQuizAttemptsByMessage(attempts: QuizAttempt[]) {
+  return attempts.reduce<Record<string, QuizAttempt[]>>((acc, attempt) => {
+    acc[attempt.message_id] = latestQuizAttempts([...(acc[attempt.message_id] ?? []), attempt]);
+    return acc;
+  }, {});
+}
+
+function latestQuizAttempts(attempts: QuizAttempt[]) {
+  return Object.values(
+    attempts.reduce<Record<string, QuizAttempt>>((acc, attempt) => {
+      const existing = acc[attempt.quiz_id];
+      if (!existing || existing.created_at <= attempt.created_at) {
+        acc[attempt.quiz_id] = attempt;
+      }
+      return acc;
+    }, {}),
+  );
 }
 
 async function extractPdfTextFallback(file: File) {

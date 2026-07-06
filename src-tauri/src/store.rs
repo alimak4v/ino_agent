@@ -63,6 +63,22 @@ pub struct Message {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuizAttempt {
+    pub id: String,
+    pub tree_id: String,
+    pub node_id: String,
+    pub message_id: String,
+    pub quiz_id: String,
+    pub quiz_type: String,
+    pub answer_json: String,
+    pub is_correct: bool,
+    pub score: f64,
+    pub max_score: f64,
+    pub explanation: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatSettings {
     pub endpoint: String,
     pub model: String,
@@ -197,6 +213,23 @@ impl Store {
                     FOREIGN KEY(tree_id) REFERENCES trees(id) ON DELETE CASCADE,
                     FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS quiz_attempts (
+                    id TEXT PRIMARY KEY,
+                    tree_id TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    quiz_id TEXT NOT NULL,
+                    quiz_type TEXT NOT NULL,
+                    answer_json TEXT NOT NULL,
+                    is_correct INTEGER NOT NULL,
+                    score REAL NOT NULL,
+                    max_score REAL NOT NULL,
+                    explanation TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY(tree_id) REFERENCES trees(id) ON DELETE CASCADE,
+                    FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+                    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT
@@ -239,6 +272,29 @@ impl Store {
                 .execute("ALTER TABLE nodes ADD COLUMN color TEXT", [])
                 .map_err(|e| e.to_string())?;
         }
+        self.conn
+            .execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS quiz_attempts (
+                    id TEXT PRIMARY KEY,
+                    tree_id TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    quiz_id TEXT NOT NULL,
+                    quiz_type TEXT NOT NULL,
+                    answer_json TEXT NOT NULL,
+                    is_correct INTEGER NOT NULL,
+                    score REAL NOT NULL,
+                    max_score REAL NOT NULL,
+                    explanation TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY(tree_id) REFERENCES trees(id) ON DELETE CASCADE,
+                    FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+                    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+                );
+                ",
+            )
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -404,6 +460,12 @@ impl Store {
 
     pub fn delete_tree(&self, tree_id: &str) -> Result<(), String> {
         self.conn
+            .execute(
+                "DELETE FROM quiz_attempts WHERE tree_id = ?1",
+                params![tree_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.conn
             .execute("DELETE FROM messages WHERE tree_id = ?1", params![tree_id])
             .map_err(|e| e.to_string())?;
         self.conn
@@ -435,7 +497,7 @@ impl Store {
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
                 })
-                })
+            })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -710,6 +772,12 @@ impl Store {
         for id in &deleted_ids {
             self.conn
                 .execute(
+                    "DELETE FROM quiz_attempts WHERE tree_id = ?1 AND node_id = ?2",
+                    params![tree_id, id],
+                )
+                .map_err(|e| e.to_string())?;
+            self.conn
+                .execute(
                     "DELETE FROM messages WHERE tree_id = ?1 AND node_id = ?2",
                     params![tree_id, id],
                 )
@@ -887,6 +955,115 @@ impl Store {
         })
     }
 
+    pub fn save_quiz_attempt(
+        &self,
+        tree_id: &str,
+        node_id: &str,
+        message_id: &str,
+        quiz_id: &str,
+        quiz_type: &str,
+        answer_json: &str,
+        is_correct: bool,
+        score: f64,
+        max_score: f64,
+        explanation: &str,
+    ) -> Result<QuizAttempt, String> {
+        let quiz_id = quiz_id.trim().chars().take(96).collect::<String>();
+        if quiz_id.is_empty() {
+            return Err("Quiz id is empty.".to_string());
+        }
+        let quiz_type = quiz_type.trim().chars().take(48).collect::<String>();
+        if quiz_type.is_empty() {
+            return Err("Quiz type is empty.".to_string());
+        }
+        let answer_json = answer_json.trim();
+        if answer_json.is_empty() {
+            return Err("Quiz answer is empty.".to_string());
+        }
+
+        self.conn
+            .query_row(
+                "SELECT 1 FROM messages
+                 WHERE id = ?1 AND tree_id = ?2 AND node_id = ?3 AND role = 'assistant'",
+                params![message_id, tree_id, node_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Quiz message not found.".to_string())?;
+
+        let ts = Self::now();
+        let attempt = QuizAttempt {
+            id: Uuid::new_v4().to_string(),
+            tree_id: tree_id.to_string(),
+            node_id: node_id.to_string(),
+            message_id: message_id.to_string(),
+            quiz_id,
+            quiz_type,
+            answer_json: answer_json.to_string(),
+            is_correct,
+            score,
+            max_score,
+            explanation: explanation.trim().chars().take(4_000).collect(),
+            created_at: ts,
+        };
+        self.conn
+            .execute(
+                "INSERT INTO quiz_attempts(
+                    id, tree_id, node_id, message_id, quiz_id, quiz_type,
+                    answer_json, is_correct, score, max_score, explanation, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    &attempt.id,
+                    &attempt.tree_id,
+                    &attempt.node_id,
+                    &attempt.message_id,
+                    &attempt.quiz_id,
+                    &attempt.quiz_type,
+                    &attempt.answer_json,
+                    attempt.is_correct,
+                    attempt.score,
+                    attempt.max_score,
+                    &attempt.explanation,
+                    attempt.created_at
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(attempt)
+    }
+
+    pub fn get_quiz_attempts_for_path(
+        &self,
+        tree_id: &str,
+        node_id: &str,
+    ) -> Result<Vec<QuizAttempt>, String> {
+        let path = self.get_path_node_ids(tree_id, node_id)?;
+        if path.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = path.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, tree_id, node_id, message_id, quiz_id, quiz_type, answer_json,
+                    is_correct, score, max_score, explanation, created_at
+             FROM quiz_attempts
+             WHERE tree_id = ? AND node_id IN ({placeholders})
+             ORDER BY created_at, rowid"
+        );
+        let mut values: Vec<Box<dyn ToSql>> = vec![Box::new(tree_id.to_string())];
+        for id in path {
+            values.push(Box::new(id));
+        }
+        let params = values.iter().map(|value| value.as_ref());
+
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params_from_iter(params), quiz_attempt_from_row)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
     pub fn get_messages_for_path(
         &self,
         tree_id: &str,
@@ -1029,7 +1206,7 @@ impl Store {
             .map(|row| row.id.clone());
         let mut messages = vec![ChatContextMessage {
             role: "system".to_string(),
-            content: "You are a helpful assistant inside a polished local tree-based AI chat app. The user can write only in leaf branches; parent nodes are navigation/context only. Answer clearly and keep context from the selected tree path. If the current branch contains a message starting with \"Контекст ветки\", treat it as the branch contract and do not drift back to the parent topic unless the user explicitly asks to compare with it. When the user says \"распиши\", \"расшарь\", \"разверни\", \"подробнее\", \"раскрой\", \"объясни глубже\", or similar, produce a complete, branch-specific expansion with concrete structure, examples, caveats, and next steps. Use Markdown, and render formulas in LaTeX when math is useful. Prefer visual Mermaid diagrams when they make the answer clearer; avoid large ASCII diagrams unless the user explicitly asks for text-only output. Use fenced ```mermaid blocks for static diagrams and choose the diagram type by meaning: flowchart for processes/graphs/networks, sequenceDiagram for interactions/protocols, stateDiagram for automata/states, classDiagram or erDiagram for data models, gitGraph for branches/commits, pie for proportions/statistics, xychart for simple numeric trends, timeline for chronology, gantt for schedules/plans, mindmap for topic maps, journey for user flows, quadrantChart for prioritization, and sankey for flows/distribution. For step-by-step algorithms or evolving systems, use a fenced ```graphsteps block containing ONLY a JSON array of objects with fields step, description, and graph, where graph is Mermaid code. Do not use HTML or iframes.".to_string(),
+            content: "You are a helpful assistant inside a polished local tree-based AI chat app. The user can write only in leaf branches; parent nodes are navigation/context only. Answer clearly and keep context from the selected tree path. If the current branch contains a message starting with \"Контекст ветки\", treat it as the branch contract and do not drift back to the parent topic unless the user explicitly asks to compare with it. When the user says \"распиши\", \"расшарь\", \"разверни\", \"подробнее\", \"раскрой\", \"объясни глубже\", or similar, produce a complete, branch-specific expansion with concrete structure, examples, caveats, and next steps. Use Markdown, and render formulas in LaTeX when math is useful. Prefer visual Mermaid diagrams when they make the answer clearer; avoid large ASCII diagrams unless the user explicitly asks for text-only output. Use fenced ```mermaid blocks for static diagrams and choose the diagram type by meaning: flowchart for processes/graphs/networks, sequenceDiagram for interactions/protocols, stateDiagram for automata/states, classDiagram or erDiagram for data models, gitGraph for branches/commits, pie for proportions/statistics, xychart for simple numeric trends, timeline for chronology, gantt for schedules/plans, mindmap for topic maps, journey for user flows, quadrantChart for prioritization, and sankey for flows/distribution. For step-by-step algorithms or evolving systems, use a fenced ```graphsteps block containing ONLY a JSON array of objects with fields step, description, and graph, where graph is Mermaid code. You may insert one interactive quiz when it helps learning: after a complex explanation, after code, after a graph/visualization, at the end of an answer, or when the user asks to be checked. Use a fenced ```quiz block containing ONLY JSON. Supported MVP types are single_choice, multiple_choice, and text. Shape: {\"id\":\"short-stable-id\",\"type\":\"single_choice|multiple_choice|text\",\"question\":\"...\",\"options\":[{\"id\":\"a\",\"text\":\"...\"}],\"answer\":\"a\"} for single choice, {\"answers\":[\"a\",\"c\"]} for multiple choice, or {\"accepted_answers\":[\"...\"]} for text. Always include \"explanation\" and optionally \"points\". Keep correct answers only inside the quiz JSON, not in the visible prose before the user answers. Do not use HTML or iframes.".to_string(),
         }, ChatContextMessage {
             role: "system".to_string(),
             content: local_context.clone(),
@@ -1346,6 +1523,23 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Message> {
     })
 }
 
+fn quiz_attempt_from_row(row: &Row<'_>) -> rusqlite::Result<QuizAttempt> {
+    Ok(QuizAttempt {
+        id: row.get(0)?,
+        tree_id: row.get(1)?,
+        node_id: row.get(2)?,
+        message_id: row.get(3)?,
+        quiz_id: row.get(4)?,
+        quiz_type: row.get(5)?,
+        answer_json: row.get(6)?,
+        is_correct: row.get(7)?,
+        score: row.get(8)?,
+        max_score: row.get(9)?,
+        explanation: row.get(10)?,
+        created_at: row.get(11)?,
+    })
+}
+
 fn compact_path_context(nodes: &[PathContextNode]) -> String {
     let mut lines = vec!["Cached path context (node summaries, root to leaf):".to_string()];
     for (index, node) in nodes.iter().enumerate() {
@@ -1370,7 +1564,10 @@ fn truncate_for_api_context(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
     }
-    let mut truncated = value.chars().take(max_chars.saturating_sub(3)).collect::<String>();
+    let mut truncated = value
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
     truncated.push_str("...");
     truncated
 }
