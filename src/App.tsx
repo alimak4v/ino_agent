@@ -55,7 +55,8 @@ function getMinChatWidth(viewportWidth: number) {
 }
 
 export default function App() {
-  const [, setTrees] = useState<TreeSummary[]>([]);
+  const [trees, setTrees] = useState<TreeSummary[]>([]);
+  const [activeTreeId, setActiveTreeId] = useState<string | null>(null);
   const [nodes, setNodes] = useState<CanvasLayoutNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -66,7 +67,9 @@ export default function App() {
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [statusText, setStatusText] = useState("");
-  const [treeVisible, setTreeVisible] = useState(true);
+  const [treeVisible, setTreeVisible] = useState(false);
+  const [chatHomeVisible, setChatHomeVisible] = useState(true);
+  const [startingChat, setStartingChat] = useState(false);
   const [windowFullscreen, setWindowFullscreen] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(getViewportWidth);
   const [chatWidth, setChatWidth] = useState(() => {
@@ -79,9 +82,11 @@ export default function App() {
   const [dividerDragging, setDividerDragging] = useState(false);
   const [dialog, setDialog] = useState<AppDialogState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [chatsOpen, setChatsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const [savingSettings, setSavingSettings] = useState(false);
   const selectedNodeIdRef = useRef<string | null>(null);
+  const activeTreeIdRef = useRef<string | null>(null);
   const activeRequestsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
@@ -103,12 +108,20 @@ export default function App() {
   }, [selectedNodeId]);
 
   useEffect(() => {
+    activeTreeIdRef.current = activeTreeId;
+  }, [activeTreeId]);
+
+  useEffect(() => {
     activeRequestsRef.current = activeRequests;
   }, [activeRequests]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
+  );
+  const activeTree = useMemo(
+    () => trees.find((tree) => tree.id === activeTreeId) ?? null,
+    [activeTreeId, trees],
   );
 
   const selectedTreeId = selectedNode?.treeId ?? null;
@@ -121,9 +134,11 @@ export default function App() {
     : "";
   const compactLayout = viewportWidth < COMPACT_LAYOUT_WIDTH;
   const titlebarNeedsTrafficSpace = isTauriRuntime() && !windowFullscreen;
-  const titlebarTitle = selectedNode?.title ?? "treeAI";
+  const titlebarTitle = chatHomeVisible ? "ino-agent" : selectedNode?.title ?? activeTree?.title ?? "ino-agent";
   const titlebarSubtitle =
-    selectedNode && selectedNode.treeTitle !== selectedNode.title ? selectedNode.treeTitle : "";
+    !chatHomeVisible && selectedNode && selectedNode.treeTitle !== selectedNode.title
+      ? selectedNode.treeTitle
+      : "";
 
   const askText = useCallback(
     (options: {
@@ -296,50 +311,40 @@ export default function App() {
     }
   }, []);
 
-  const loadCanvas = useCallback(async (preferredNodeId?: string | null) => {
+  const loadCanvas = useCallback(async (preferredNodeId?: string | null, preferredTreeId?: string | null) => {
     setLoading(true);
     try {
       const list = await api.listTrees();
-      const layouts = await Promise.all(
-        list.map(async (tree) => ({
-          tree,
-          layout: await api.getTreeLayout(tree.id),
-        })),
-      );
-
-      let nextX = 0;
-      const combined: CanvasLayoutNode[] = [];
-      for (const { tree, layout } of layouts) {
-        if (layout.length === 0) continue;
-        const minX = Math.min(...layout.map((node) => node.x));
-        const maxX = Math.max(...layout.map((node) => node.x));
-        const treeWidth = Math.max(420, maxX - minX + 340);
-
-        combined.push(
-          ...layout.map((node) => ({
+      const requestedTreeId = preferredTreeId ?? activeTreeIdRef.current;
+      const nextTree =
+        list.find((tree) => tree.id === requestedTreeId) ??
+        list[0] ??
+        null;
+      const layout = nextTree ? await api.getTreeLayout(nextTree.id) : [];
+      const canvasNodes = nextTree
+        ? layout.map((node) => ({
             ...node,
-            treeId: tree.id,
-            treeTitle: tree.title,
+            treeId: nextTree.id,
+            treeTitle: nextTree.title,
             isRoot: !node.parent_id,
-            x: node.x - minX + nextX,
-            y: node.y + 110,
             selected: false,
-          })),
-        );
-        nextX += treeWidth;
-      }
+          }))
+        : [];
 
       const requestedSelection = preferredNodeId ?? selectedNodeIdRef.current;
       const nextSelected =
-        combined.find((node) => node.id === requestedSelection)?.id ??
-        combined.find((node) => node.isRoot)?.id ??
+        canvasNodes.find((node) => node.id === requestedSelection)?.id ??
+        canvasNodes.find((node) => node.id === nextTree?.last_node_id)?.id ??
+        canvasNodes.find((node) => node.isRoot)?.id ??
         null;
 
       selectedNodeIdRef.current = nextSelected;
+      activeTreeIdRef.current = nextTree?.id ?? null;
       setSelectedNodeId(nextSelected);
+      setActiveTreeId(nextTree?.id ?? null);
       setTrees(list);
       setNodes(
-        combined.map((node) => ({
+        canvasNodes.map((node) => ({
           ...node,
           selected: node.id === nextSelected,
         })),
@@ -407,11 +412,23 @@ export default function App() {
     try {
       const created = await api.createTree(nextTitle);
       await api.setCurrentNode(created.tree_id, created.root_node_id);
-      await loadCanvas(created.root_node_id);
+      setChatHomeVisible(false);
+      await loadCanvas(created.root_node_id, created.tree_id);
     } catch (e) {
       setStatusText(String(e));
     }
   }, [askText, loadCanvas]);
+
+  const handleSelectTree = useCallback(
+    async (treeId: string) => {
+      const tree = trees.find((item) => item.id === treeId);
+      activeTreeIdRef.current = treeId;
+      setActiveTreeId(treeId);
+      setChatHomeVisible(false);
+      await loadCanvas(tree?.last_node_id ?? null, treeId);
+    },
+    [loadCanvas, trees],
+  );
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -440,6 +457,7 @@ export default function App() {
 
   const handleSelectNode = useCallback(
     async (treeId: string, nodeId: string) => {
+      setChatHomeVisible(false);
       selectLocally(nodeId);
       try {
         await api.setCurrentNode(treeId, nodeId);
@@ -465,7 +483,7 @@ export default function App() {
       try {
         await api.renameNode(node.treeId, node.id, nextTitle);
         await api.setCurrentNode(node.treeId, node.id);
-        await loadCanvas(node.id);
+        await loadCanvas(node.id, node.treeId);
       } catch (e) {
         setStatusText(String(e));
       }
@@ -487,7 +505,7 @@ export default function App() {
       try {
         const childId = await api.createChildNode(node.treeId, node.id, nextTitle);
         await api.setCurrentNode(node.treeId, childId);
-        await loadCanvas(childId);
+        await loadCanvas(childId, node.treeId);
       } catch (e) {
         setStatusText(String(e));
       }
@@ -499,7 +517,7 @@ export default function App() {
     async (node: CanvasLayoutNode, color: string | null, includeDescendants: boolean) => {
       try {
         await api.setNodeColor(node.treeId, node.id, color, includeDescendants);
-        await loadCanvas(node.id);
+        await loadCanvas(node.id, node.treeId);
       } catch (e) {
         setStatusText(String(e));
       }
@@ -531,7 +549,7 @@ export default function App() {
         if (result.parent_id) {
           await api.setCurrentNode(node.treeId, result.parent_id);
         }
-        await loadCanvas(result.parent_id);
+        await loadCanvas(result.parent_id, node.treeId);
       } catch (e) {
         setStatusText(String(e));
       }
@@ -555,7 +573,10 @@ export default function App() {
         }
         await loadMessages(treeId, nextNodeId);
       }
-      await loadCanvas(shouldAdoptReplySelection ? nextNodeId : currentSelection);
+      await loadCanvas(
+        shouldAdoptReplySelection ? nextNodeId : currentSelection,
+        shouldAdoptReplySelection ? treeId : activeTreeIdRef.current,
+      );
       if (createdCount > 0) {
         setStatusText(
           createdCount === 1 ? "Created 1 branch" : `Created ${createdCount} branches`,
@@ -565,12 +586,8 @@ export default function App() {
     [loadCanvas, loadMessages],
   );
 
-  const handleSendMessage = useCallback(
-    async (content: string) => {
-      if (!selectedNode || !selectedNode.is_leaf) return;
-
-      const treeId = selectedNode.treeId;
-      const nodeId = selectedNode.id;
+  const sendMessageToNode = useCallback(
+    async (treeId: string, nodeId: string, content: string) => {
       if (activeRequestsRef.current[nodeId]) return;
 
       const requestId = crypto.randomUUID();
@@ -583,7 +600,7 @@ export default function App() {
         if (selectedNodeIdRef.current === nodeId) {
           setMessages((current) => [...current, userMessage]);
         }
-        await loadCanvas(nodeId);
+        await loadCanvas(nodeId, treeId);
 
         const reply = await api.generateAssistantReply(treeId, nodeId, requestId);
         await applyAssistantReply(treeId, nodeId, reply);
@@ -605,7 +622,35 @@ export default function App() {
         });
       }
     },
-    [applyAssistantReply, loadCanvas, loadMessages, selectedNode],
+    [applyAssistantReply, loadCanvas, loadMessages],
+  );
+
+  const handleSendMessage = useCallback(
+    async (content: string) => {
+      if (!selectedNode || !selectedNode.is_leaf) return;
+      setChatHomeVisible(false);
+      await sendMessageToNode(selectedNode.treeId, selectedNode.id, content);
+    },
+    [selectedNode, sendMessageToNode],
+  );
+
+  const handleStartChat = useCallback(
+    async (content: string) => {
+      setStartingChat(true);
+      setChatError("");
+      try {
+        const created = await api.createTree(titleFromPrompt(content));
+        await api.setCurrentNode(created.tree_id, created.root_node_id);
+        setChatHomeVisible(false);
+        await loadCanvas(created.root_node_id, created.tree_id);
+        await sendMessageToNode(created.tree_id, created.root_node_id, content);
+      } catch (e) {
+        setChatError(String(e));
+      } finally {
+        setStartingChat(false);
+      }
+    },
+    [loadCanvas, sendMessageToNode],
   );
 
   const handleConfirmBranches = useCallback(
@@ -656,7 +701,7 @@ export default function App() {
             return [...current.slice(0, index), edited];
           });
         }
-        await loadCanvas(nodeId);
+        await loadCanvas(nodeId, treeId);
 
         const reply = await api.generateAssistantReply(treeId, nodeId, requestId);
         await applyAssistantReply(treeId, nodeId, reply);
@@ -681,6 +726,41 @@ export default function App() {
     [applyAssistantReply, loadCanvas, loadMessages],
   );
 
+  const handleRegenerateMessage = useCallback(
+    async (message: Message) => {
+      const treeId = message.tree_id;
+      const nodeId = message.node_id;
+      if (activeRequestsRef.current[nodeId]) return;
+
+      const requestId = crypto.randomUUID();
+      setActiveRequests((current) => ({ ...current, [nodeId]: requestId }));
+      setStreamingText((current) => ({ ...current, [nodeId]: "" }));
+      setChatError("");
+
+      try {
+        const reply = await api.regenerateAssistantReply(treeId, message.id, requestId);
+        await applyAssistantReply(treeId, nodeId, reply);
+      } catch (e) {
+        setChatError(String(e));
+        if (selectedNodeIdRef.current === nodeId) {
+          await loadMessages(treeId, nodeId);
+        }
+      } finally {
+        setActiveRequests((current) => {
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        });
+        setStreamingText((current) => {
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        });
+      }
+    },
+    [applyAssistantReply, loadMessages],
+  );
+
   const handleForceBranchSplit = useCallback(
     async (content: string) => {
       if (!selectedNode || !selectedNode.is_leaf) return;
@@ -689,6 +769,7 @@ export default function App() {
       const nodeId = selectedNode.id;
       if (activeRequestsRef.current[nodeId]) return;
 
+      setChatHomeVisible(false);
       setActiveRequests((current) => ({ ...current, [nodeId]: "force-branch-split" }));
       setChatError("");
       try {
@@ -697,7 +778,7 @@ export default function App() {
           if (selectedNodeIdRef.current === nodeId) {
             setMessages((current) => [...current, userMessage]);
           }
-          await loadCanvas(nodeId);
+          await loadCanvas(nodeId, treeId);
         }
 
         const reply = await api.forceBranchSplit(treeId, nodeId);
@@ -730,6 +811,23 @@ export default function App() {
     }
   }, []);
 
+  const handleThemeChange = useCallback(
+    async (theme: ThemeName) => {
+      const nextSettings = { ...settings, theme };
+      setSettings(nextSettings);
+      setSettingsDraft((current) => ({ ...current, theme }));
+      setChatError("");
+      try {
+        const saved = await api.saveSettings(nextSettings);
+        setSettings(saved);
+        setSettingsDraft((current) => ({ ...current, theme: saved.theme }));
+      } catch (e) {
+        setChatError(String(e));
+      }
+    },
+    [settings],
+  );
+
   const saveSettings = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
@@ -747,7 +845,11 @@ export default function App() {
   return (
     <main className="no-drag relative flex h-screen flex-col overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)]">
       <div className="drag-region absolute left-0 right-0 top-0 z-20 h-2" />
-      <header className="no-drag relative z-40 flex h-12 shrink-0 items-center border-b border-[color:var(--border)] bg-[color:var(--app-bg)] px-3">
+      <header
+        className={`no-drag relative z-40 flex h-12 shrink-0 items-center bg-[color:var(--app-bg)] px-3 ${
+          chatHomeVisible ? "" : "border-b border-[color:var(--border)]"
+        }`}
+      >
         <div
           className={`absolute left-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center justify-start gap-2 ${
             titlebarNeedsTrafficSpace ? "pl-0 sm:pl-[72px]" : "pl-0"
@@ -756,34 +858,80 @@ export default function App() {
           {titlebarNeedsTrafficSpace && (
             <div className="drag-region mr-1 hidden h-8 w-2 shrink-0 sm:flex" />
           )}
-          <button
-            type="button"
-            onClick={() => setTreeVisible((value) => !value)}
-            className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
-          >
-            <PanelIcon />
-            {treeVisible ? "Focus" : "Tree"}
-          </button>
-          <div className="hidden h-8 max-w-[168px] shrink-0 items-center truncate whitespace-nowrap rounded-full border border-[color:var(--border)] px-3 text-xs text-[color:var(--muted)] lg:inline-flex">
-            {settings.model || DEFAULT_SETTINGS.model}
+          <div className="relative">
+            <button
+              type="button"
+              aria-label="Chats"
+              onClick={() => {
+                setSettingsOpen(false);
+                setChatsOpen((value) => !value);
+              }}
+              className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
+                chatsOpen ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
+              }`}
+            >
+              <ChatsIcon />
+              <span>Chats</span>
+            </button>
+            {chatsOpen && (
+              <ChatsPanel
+                trees={trees}
+                activeTreeId={activeTreeId}
+                onCreateRoot={() => {
+                  setChatsOpen(false);
+                  void handleCreateRoot();
+                }}
+                onSelectTree={(treeId) => {
+                  setChatsOpen(false);
+                  void handleSelectTree(treeId);
+                }}
+              />
+            )}
           </div>
-        </div>
-        <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(560px,42vw)] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center leading-tight">
-          <div className="max-w-full truncate text-sm font-semibold text-[color:var(--text)]">
-            {titlebarTitle}
-          </div>
-          {titlebarSubtitle && (
-            <div className="mt-0.5 max-w-full truncate text-[11px] text-[color:var(--muted)]">
-              {titlebarSubtitle}
+          {!chatHomeVisible && (
+            <button
+              type="button"
+              onClick={() => {
+                setChatsOpen(false);
+                setTreeVisible((value) => {
+                  const nextVisible = !value;
+                  if (nextVisible) {
+                    setChatHomeVisible(false);
+                  }
+                  return nextVisible;
+                });
+              }}
+              className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
+            >
+              <PanelIcon />
+              {treeVisible ? "Focus" : "Tree"}
+            </button>
+          )}
+          {!chatHomeVisible && (
+            <div className="hidden h-8 max-w-[168px] shrink-0 items-center truncate whitespace-nowrap rounded-full border border-[color:var(--border)] px-3 text-xs text-[color:var(--muted)] lg:inline-flex">
+              {settings.model || DEFAULT_SETTINGS.model}
             </div>
           )}
         </div>
+        {!chatHomeVisible && (
+          <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(560px,42vw)] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center leading-tight">
+            <div className="max-w-full truncate text-sm font-semibold text-[color:var(--text)]">
+              {titlebarTitle}
+            </div>
+            {titlebarSubtitle && (
+              <div className="mt-0.5 max-w-full truncate text-[11px] text-[color:var(--muted)]">
+                {titlebarSubtitle}
+              </div>
+            )}
+          </div>
+        )}
         <div className="absolute right-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center justify-end gap-2">
           <button
             type="button"
             aria-label="Settings"
             onClick={() => {
               setSettingsDraft(settings);
+              setChatsOpen(false);
               setSettingsOpen((value) => !value);
             }}
             className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
@@ -797,6 +945,7 @@ export default function App() {
               settingsDraft={settingsDraft}
               saving={savingSettings}
               onChange={setSettingsDraft}
+              onThemeChange={handleThemeChange}
               onCancel={() => {
                 setSettingsDraft(settings);
                 setSettingsOpen(false);
@@ -854,17 +1003,20 @@ export default function App() {
             </div>
           )}
           <ChatPanel
-            selectedNode={selectedNode}
-            messages={messages}
-            loading={messagesLoading}
-            sending={selectedNodeIsSending}
-            streamingText={selectedStreamingText}
-            canWrite={Boolean(selectedNode?.is_leaf)}
+            selectedNode={chatHomeVisible ? null : selectedNode}
+            messages={chatHomeVisible ? [] : messages}
+            loading={chatHomeVisible ? false : messagesLoading}
+            sending={startingChat || (!chatHomeVisible && selectedNodeIsSending)}
+            streamingText={chatHomeVisible ? "" : selectedStreamingText}
+            canWrite={Boolean(!chatHomeVisible && selectedNode?.is_leaf)}
+            canStartChat={chatHomeVisible}
             fullWidth={!treeVisible || compactLayout}
             error={chatError}
             panelWidth={treeVisible && !compactLayout ? chatWidth : undefined}
             onSend={handleSendMessage}
+            onStartChat={handleStartChat}
             onEditMessage={handleEditMessage}
+            onRegenerateMessage={handleRegenerateMessage}
             onConfirmBranches={handleConfirmBranches}
             onForceBranchSplit={handleForceBranchSplit}
           />
@@ -875,11 +1027,89 @@ export default function App() {
   );
 }
 
+function titleFromPrompt(content: string) {
+  const firstLine =
+    content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("[Attached file:")) ?? "New chat";
+  const normalized = firstLine.replace(/\s+/g, " ");
+  return normalized.length > 56 ? `${normalized.slice(0, 53).trim()}...` : normalized;
+}
+
+function ChatsPanel({
+  trees,
+  activeTreeId,
+  onCreateRoot,
+  onSelectTree,
+}: {
+  trees: TreeSummary[];
+  activeTreeId: string | null;
+  onCreateRoot: () => void;
+  onSelectTree: (treeId: string) => void;
+}) {
+  const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
+
+  return (
+    <div className="no-drag fixed left-3 right-3 top-12 z-50 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-0 sm:right-auto sm:top-10 sm:w-[300px]">
+      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-[color:var(--text)]">Chats</div>
+          <div className="truncate text-[11px] text-[color:var(--muted)]">Latest first</div>
+        </div>
+        <button
+          type="button"
+          onClick={onCreateRoot}
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+          aria-label="New chat"
+          title="New chat"
+        >
+          <PlusIcon />
+        </button>
+      </div>
+      <div className="max-h-[360px] overflow-y-auto p-1.5">
+        {orderedTrees.length === 0 ? (
+          <div className="px-3 py-3 text-sm text-[color:var(--muted)]">No chats</div>
+        ) : (
+          orderedTrees.map((tree) => {
+            const active = tree.id === activeTreeId;
+            return (
+              <button
+                key={tree.id}
+                type="button"
+                onClick={() => onSelectTree(tree.id)}
+                className={`flex min-h-[48px] w-full min-w-0 items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors ${
+                  active
+                    ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                    : "text-[color:var(--text)] hover:bg-[color:var(--panel-soft)]"
+                }`}
+              >
+                <span
+                  className={`h-7 w-1.5 shrink-0 rounded-full ${
+                    active ? "bg-[color:var(--accent)]" : "bg-[color:var(--muted)]/45"
+                  }`}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{tree.title}</span>
+                  <span className="block truncate text-[11px] text-[color:var(--muted)]">
+                    {tree.message_count} messages
+                  </span>
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsPanel({
   settings,
   settingsDraft,
   saving,
   onChange,
+  onThemeChange,
   onCancel,
   onSubmit,
 }: {
@@ -887,6 +1117,7 @@ function SettingsPanel({
   settingsDraft: ChatSettings;
   saving: boolean;
   onChange: (next: ChatSettings) => void;
+  onThemeChange: (theme: ThemeName) => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent) => void;
 }) {
@@ -914,9 +1145,7 @@ function SettingsPanel({
           Theme
           <select
             value={settingsDraft.theme}
-            onChange={(event) =>
-              onChange({ ...settingsDraft, theme: event.target.value as ThemeName })
-            }
+            onChange={(event) => onThemeChange(event.target.value as ThemeName)}
             className={inputClass}
           >
             {THEME_NAMES.map((themeName) => (
@@ -991,6 +1220,41 @@ function SettingsIcon() {
     >
       <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
       <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.09 1.65V21a2.1 2.1 0 0 1-4.2 0v-.06a1.8 1.8 0 0 0-1.09-1.65 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.09H3a2.1 2.1 0 0 1 0-4.2h.06A1.8 1.8 0 0 0 4.7 8.62a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04a1.8 1.8 0 0 0 1.98.36A1.8 1.8 0 0 0 10.38 2.4V2.3a2.1 2.1 0 0 1 4.2 0v.06a1.8 1.8 0 0 0 1.09 1.65 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.09H22a2.1 2.1 0 0 1 0 4.2h-.06A1.8 1.8 0 0 0 19.4 15Z" />
+    </svg>
+  );
+}
+
+function ChatsIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M7 8h10" />
+      <path d="M7 12h7" />
+      <path d="M5 19a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-8l-4 3v-3Z" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 5v14M5 12h14" />
     </svg>
   );
 }

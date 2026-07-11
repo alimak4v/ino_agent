@@ -88,6 +88,60 @@ export interface AssistantDelta {
   delta: string;
 }
 
+export type CodeLanguage = "python" | "javascript" | "cpp";
+
+export interface RunCodeRequest {
+  language: CodeLanguage;
+  code: string;
+  stdin?: string;
+  dependencies?: string[];
+  timeoutMs?: number;
+}
+
+export interface RunCodeResponse {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  durationMs: number;
+  timedOut: boolean;
+}
+
+export interface CodeTestCase {
+  id: string;
+  input: unknown[];
+  expected: unknown;
+  hidden?: boolean;
+}
+
+export interface CheckCodeRequest {
+  language: CodeLanguage;
+  code: string;
+  tests: CodeTestCase[];
+  dependencies?: string[];
+  timeoutMs?: number;
+}
+
+export interface CodeTestResult {
+  testId: string;
+  passed: boolean;
+  input?: unknown[];
+  expected?: unknown;
+  actual?: unknown;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  hidden: boolean;
+  error?: string;
+}
+
+export interface CheckCodeResponse {
+  passed: boolean;
+  passedCount: number;
+  totalCount: number;
+  results: CodeTestResult[];
+}
+
 export type SettingsInput = ChatSettings;
 
 const FALLBACK_SETTINGS: ChatSettings = {
@@ -147,6 +201,12 @@ export const api = {
     invokeDesktop<Message>("add_user_message", { treeId, nodeId, content }),
   editUserMessage: (treeId: string, messageId: string, content: string) =>
     invokeDesktop<Message>("edit_user_message", { treeId, messageId, content }),
+  regenerateAssistantReply: (treeId: string, messageId: string, requestId: string) =>
+    invokeDesktop<AssistantReplyResult>("regenerate_assistant_reply", {
+      treeId,
+      messageId,
+      requestId,
+    }),
   getQuizAttempts: (treeId: string, nodeId: string) =>
     invokeDesktop<QuizAttempt[]>("get_quiz_attempts", { treeId, nodeId }),
   saveQuizAttempt: (
@@ -179,4 +239,7 @@ export const api = {
     invokeDesktop<AssistantReplyResult>("confirm_pending_branches", { treeId, nodeId }),
   forceBranchSplit: (treeId: string, nodeId: string) =>
     invokeDesktop<AssistantReplyResult>("force_branch_split", { treeId, nodeId }),
+  runCode: (request: RunCodeRequest) => invokeDesktop<RunCodeResponse>("run_code", { request }),
+  checkCode: (request: CheckCodeRequest) =>
+    invokeDesktop<CheckCodeResponse>("check_code", { request }),
 };

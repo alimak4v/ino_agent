@@ -1,12 +1,12 @@
 [package]
-name = "treeai"
+name = "ino-agent"
 version = "0.1.0"
-description = "treeAI - local-first tree canvas"
-authors = ["treeAI"]
+description = "ino-agent - Intelligent neural operator agent"
+authors = ["ino-agent"]
 edition = "2021"
 
 [lib]
-name = "treeai_lib"
+name = "ino_agent_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

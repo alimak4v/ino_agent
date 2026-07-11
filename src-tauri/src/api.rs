@@ -322,7 +322,7 @@ fn prompt_cache_key(settings: &ChatSettings, messages: &[ChatContextMessage]) ->
         prefix.push_str(&message.content);
         prefix.push('\n');
     }
-    format!("treeai-{:016x}", stable_hash(&prefix))
+    format!("ino-agent-{:016x}", stable_hash(&prefix))
 }
 
 fn stable_hash(value: &str) -> u64 {
@@ -348,7 +348,7 @@ fn log_prompt_cache_usage(data: &Value, mode: &str, elapsed_ms: u128) {
         .and_then(Value::as_u64)
         .unwrap_or(0);
     eprintln!(
-        "[treeAI] prompt-cache {mode}: cached_tokens={cached_tokens}, prompt_tokens={prompt_tokens}, elapsed_ms={elapsed_ms}"
+        "[ino-agent] prompt-cache {mode}: cached_tokens={cached_tokens}, prompt_tokens={prompt_tokens}, elapsed_ms={elapsed_ms}"
     );
 }
 

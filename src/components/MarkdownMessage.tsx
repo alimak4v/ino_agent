@@ -4,6 +4,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
+import { CodeRunnerBlock } from "./CodeRunnerBlock";
 import { GraphSteps, MermaidDiagram } from "./MermaidGraph";
 
 interface MarkdownMessageProps {
@@ -12,6 +13,8 @@ interface MarkdownMessageProps {
 }
 
 export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
+  const markdown = normalizeMathDelimiters(content);
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -40,6 +43,32 @@ export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
             {children}
           </blockquote>
         ),
+        table: ({ children }) => (
+          <div className="my-4 max-w-full overflow-x-auto rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+            <table className="min-w-full border-separate border-spacing-0 text-left text-sm leading-6">
+              {children}
+            </table>
+          </div>
+        ),
+        thead: ({ children }) => (
+          <thead className="bg-[color:var(--panel-soft)] text-[color:var(--text)]">
+            {children}
+          </thead>
+        ),
+        tbody: ({ children }) => <tbody className="divide-y divide-[color:var(--border)]">{children}</tbody>,
+        tr: ({ children }) => (
+          <tr className="transition-colors hover:bg-[color:var(--selected)]/45">{children}</tr>
+        ),
+        th: ({ children }) => (
+          <th className="whitespace-nowrap border-b border-[color:var(--border)] px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em] text-[color:var(--muted)] first:pl-4 last:pr-4">
+            {children}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td className="min-w-[120px] align-top px-3 py-2.5 text-[color:var(--text)] first:pl-4 last:pr-4 [&_p]:my-0">
+            {children}
+          </td>
+        ),
         code: ({ children, className, ...props }) => {
           const code = String(children).replace(/\n$/, "");
           if (isMermaidClass(className)) {
@@ -56,6 +85,10 @@ export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
           }
           if (renderQuiz && looksLikeQuizJson(code)) {
             return <>{renderQuiz(code)}</>;
+          }
+          const runnableLanguage = runnableLanguageFromClass(className);
+          if (runnableLanguage) {
+            return <CodeRunnerBlock language={runnableLanguage} code={code} />;
           }
           return (
             <code
@@ -79,9 +112,53 @@ export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
         },
       }}
     >
-      {content}
+      {markdown}
     </ReactMarkdown>
   );
+}
+
+function normalizeMathDelimiters(content: string) {
+  return mapOutsideCodeFences(content, (segment) =>
+    segment
+      .replace(/\\\[([\s\S]*?)\\\]/g, (_match, math: string) => `\n\n$$\n${math.trim()}\n$$\n\n`)
+      .replace(/\\\(([^()\n]*(?:\n(?!\n)[^()\n]*)*)\\\)/g, (_match, math: string) => `$${math.trim()}$`),
+  );
+}
+
+function mapOutsideCodeFences(content: string, mapSegment: (segment: string) => string) {
+  const lines = content.split(/(\n)/);
+  let inFence = false;
+  let fenceMarker = "";
+  let current = "";
+  let result = "";
+
+  for (let index = 0; index < lines.length; index += 2) {
+    const line = lines[index] ?? "";
+    const newline = lines[index + 1] ?? "";
+    const fence = /^(\s*)(`{3,}|~{3,})/.exec(line);
+
+    if (fence) {
+      if (!inFence) {
+        result += mapSegment(current);
+        current = "";
+        inFence = true;
+        fenceMarker = fence[2][0];
+      } else if (fence[2][0] === fenceMarker) {
+        inFence = false;
+        fenceMarker = "";
+      }
+      result += line + newline;
+      continue;
+    }
+
+    if (inFence) {
+      result += line + newline;
+    } else {
+      current += line + newline;
+    }
+  }
+
+  return result + mapSegment(current);
 }
 
 function isMermaidClass(className?: string) {
@@ -121,7 +198,13 @@ function isQuizLikeObject(value: unknown) {
     return false;
   }
   const object = value as Record<string, unknown>;
-  return typeof object.question === "string" && (Array.isArray(object.options) || "answer" in object);
+  return (
+    typeof object.question === "string" &&
+    (Array.isArray(object.options) ||
+      Array.isArray(object.tests) ||
+      "answer" in object ||
+      object.type === "code_task")
+  );
 }
 
 function isSpecialCodeBlock(child: unknown, includeQuiz: boolean) {
@@ -132,9 +215,21 @@ function isSpecialCodeBlock(child: unknown, includeQuiz: boolean) {
   return (
     isMermaidClass(className) ||
     isGraphStepsClass(className) ||
+    Boolean(runnableLanguageFromClass(className)) ||
     (includeQuiz &&
       (isQuizClass(className) ||
         (isJsonClass(className) && looksLikeQuizJson(source)) ||
         looksLikeQuizJson(source)))
   );
+}
+
+function runnableLanguageFromClass(className?: string) {
+  const match = /\blanguage-([a-zA-Z0-9_+.-]+)/.exec(className ?? "");
+  const language = match?.[1]?.toLowerCase();
+  if (language === "python" || language === "py") return "python";
+  if (language === "javascript" || language === "js") return "javascript";
+  if (language === "cpp" || language === "c++" || language === "cxx" || language === "cc") {
+    return "cpp";
+  }
+  return null;
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate polished transparent app icons for treeAI."""
+"""Generate polished transparent app icons for ino-agent."""
 
 from __future__ import annotations
 
@@ -290,91 +290,69 @@ def generate_icon_rows(size: int = CANVAS_SIZE, scale: int = ICON_SCALE) -> list
     def c(value: int) -> int:
         return value * scale
 
-    # Soft material shadow, intentionally much crisper than the previous Dock icon.
+    # Minimal macOS tile with a quiet tree/topic mark.
     fill_rounded_rect_gradient(
         rows,
-        c(100),
-        c(116),
-        c(824),
+        c(122),
+        c(130),
+        c(780),
+        c(774),
+        c(184),
+        (15, 23, 42, 26),
+        (15, 23, 42, 8),
+    )
+    fill_rounded_rect_gradient(
+        rows,
+        c(102),
+        c(92),
         c(820),
-        c(206),
-        (20, 37, 52, 34),
-        (20, 37, 52, 10),
+        c(820),
+        c(190),
+        (255, 255, 255, 255),
+        (242, 246, 250, 255),
     )
     fill_rounded_rect_gradient(
         rows,
-        c(84),
-        c(72),
-        c(856),
-        c(856),
-        c(216),
-        (248, 253, 250, 255),
-        (216, 238, 255, 255),
-    )
-    fill_rounded_rect_gradient(
-        rows,
-        c(116),
-        c(104),
-        c(792),
-        c(792),
-        c(188),
-        (255, 255, 255, 76),
-        (255, 255, 255, 12),
-    )
-    fill_rounded_rect_gradient(
-        rows,
-        c(84),
-        c(72),
-        c(856),
-        c(856),
-        c(216),
-        (255, 255, 255, 42),
-        (71, 130, 177, 38),
+        c(132),
+        c(122),
+        c(760),
+        c(760),
+        c(168),
+        (255, 255, 255, 80),
+        (255, 255, 255, 18),
     )
 
-    ink = (18, 43, 56, 255)
-    ink_soft = (18, 43, 56, 58)
-    teal = (38, 200, 178, 255)
-    blue = (78, 137, 255, 255)
-    pale = (236, 255, 250, 255)
+    ink = (17, 24, 39, 255)
+    ink_soft = (17, 24, 39, 34)
+    node_fill = (255, 255, 255, 255)
 
-    # Shadow under the mark.
+    # Subtle optical shadow for the tree mark.
     for ax, ay, bx, by in [
-        (360, 380, 255, 548),
-        (360, 380, 505, 548),
-        (255, 548, 190, 704),
-        (255, 548, 430, 720),
-        (505, 548, 620, 720),
+        (512, 324, 512, 512),
+        (512, 512, 344, 700),
+        (512, 512, 512, 700),
+        (512, 512, 680, 700),
     ]:
-        draw_line(rows, c(ax + 8), c(ay + 10), c(bx + 8), c(by + 10), c(54), ink_soft)
-    fill_capsule(rows, c(716), c(425), c(80), c(276), (18, 43, 56, 42))
-    fill_circle(rows, c(756), c(343), c(48), (18, 43, 56, 38))
+        draw_line(rows, c(ax + 5), c(ay + 7), c(bx + 5), c(by + 7), c(38), ink_soft)
 
-    # Tree / A monogram.
     for ax, ay, bx, by in [
-        (360, 380, 255, 548),
-        (360, 380, 505, 548),
-        (255, 548, 190, 704),
-        (255, 548, 430, 720),
-        (505, 548, 620, 720),
+        (512, 324, 512, 512),
+        (512, 512, 344, 700),
+        (512, 512, 512, 700),
+        (512, 512, 680, 700),
     ]:
-        draw_line(rows, c(ax), c(ay), c(bx), c(by), c(52), ink)
+        draw_line(rows, c(ax), c(ay), c(bx), c(by), c(34), ink)
 
-    for cx, cy, radius, color in [
-        (360, 380, 62, blue),
-        (255, 548, 52, teal),
-        (505, 548, 52, teal),
-        (190, 704, 43, pale),
-        (430, 720, 43, pale),
-        (620, 720, 43, pale),
+    for cx, cy, radius in [
+        (512, 324, 58),
+        (512, 512, 46),
+        (344, 700, 48),
+        (512, 700, 48),
+        (680, 700, 48),
     ]:
-        fill_circle(rows, c(cx), c(cy), c(radius), (18, 43, 56, 255))
-        fill_circle(rows, c(cx), c(cy), c(radius - 12), color)
-
-    # Bold AI "i" companion.
-    fill_capsule(rows, c(718), c(424), c(76), c(276), ink)
-    fill_circle(rows, c(756), c(342), c(46), ink)
-    fill_circle(rows, c(756), c(342), c(26), teal)
+        fill_circle(rows, c(cx + 5), c(cy + 7), c(radius), ink_soft)
+        fill_circle(rows, c(cx), c(cy), c(radius), ink)
+        fill_circle(rows, c(cx), c(cy), c(max(18, radius - 22)), node_fill)
 
     return box_downsample(rows, scale)
 

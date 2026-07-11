@@ -21,7 +21,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='treeAI',
+    name='ino-agent',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -41,11 +41,11 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='treeAI',
+    name='ino-agent',
 )
 app = BUNDLE(
     coll,
-    name='treeAI.app',
+    name='ino-agent.app',
     icon='assets/app.icns',
     bundle_identifier=None,
 )

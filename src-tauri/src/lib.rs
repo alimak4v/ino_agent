@@ -1,4 +1,5 @@
 mod api;
+mod code_runner;
 mod store;
 
 use serde::Serialize;
@@ -207,6 +208,27 @@ fn edit_user_message(
 }
 
 #[tauri::command]
+async fn regenerate_assistant_reply(
+    window: Window,
+    state: State<'_, AppState>,
+    tree_id: String,
+    message_id: String,
+    request_id: Option<String>,
+) -> Result<store::AssistantReplyResult, String> {
+    let store = state.store.clone();
+    let request_id = request_id.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let node_id = {
+            let store = &mut *lock_store(&store)?;
+            store.truncate_from_assistant_message(&tree_id, &message_id)?
+        };
+        generate_assistant_reply_blocking(window, store, tree_id, node_id, request_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn generate_assistant_reply(
     window: Window,
     state: State<'_, AppState>,
@@ -249,6 +271,24 @@ async fn force_branch_split(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn run_code(
+    request: code_runner::RunCodeRequest,
+) -> Result<code_runner::RunCodeResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || code_runner::run_code(request))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn check_code(
+    request: code_runner::CheckCodeRequest,
+) -> Result<code_runner::CheckCodeResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || code_runner::check_code(request))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn force_branch_split_blocking(
@@ -995,7 +1035,7 @@ pub fn run() {
             store: Arc::new(Mutex::new(store)),
         })
         .setup(|app| {
-            let show = MenuItem::with_id(app, "show", "Show treeAI", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "Show ino-agent", true, None::<&str>)?;
             let new_tree =
                 MenuItem::with_id(app, "new_tree", "New Root", true, Some("CmdOrCtrl+N"))?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, Some("CmdOrCtrl+Q"))?;
@@ -1053,9 +1093,12 @@ pub fn run() {
             save_quiz_attempt,
             add_user_message,
             edit_user_message,
+            regenerate_assistant_reply,
             generate_assistant_reply,
             confirm_pending_branches,
             force_branch_split,
+            run_code,
+            check_code,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

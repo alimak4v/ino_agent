@@ -1,4 +1,4 @@
-# treeAI macOS build
+# ino-agent macOS build
 
 ## Prerequisites
 
@@ -10,16 +10,16 @@
 ## Build locally on macOS
 
 ```bash
-cd treeAI-macos-v5
+cd ino-agent
 ./build_macos.sh
 ```
 
 The script will create:
 
 ```text
-dist/treeAI.app
-dist/treeAI-mac.dmg
-dist/treeAI-mac.dmg.sha256
+dist/ino-agent.app
+dist/ino-agent-mac.dmg
+dist/ino-agent-mac.dmg.sha256
 ```
 
 ## Run from source (development)
@@ -31,7 +31,7 @@ npm run tauri:dev
 
 ## Data locations
 
-- SQLite database: `~/Library/Application Support/treeAI/treeai.sqlite3`
+- SQLite database: `~/Library/Application Support/ino-agent/ino-agent.sqlite3`
 - API key: stored locally in the SQLite settings table
 - App icons: generated from `assets/logo.png` via `scripts/make_icon.py`
 
@@ -47,8 +47,8 @@ Do not publish local SQLite databases, `.env` files, built `.app` bundles, or `.
 ## Shortcuts and menu bar icon
 
 - `Cmd+N` creates a new empty Tree.
-- A treeAI icon appears in the macOS menu bar while the app is running.
-- Menu bar actions: Show treeAI, New Tree, Quit.
+- An ino-agent icon appears in the macOS menu bar while the app is running.
+- Menu bar actions: Show ino-agent, New Tree, Quit.
 
 ## Prompt queue
 

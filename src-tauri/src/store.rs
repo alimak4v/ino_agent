@@ -5,7 +5,10 @@ use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const APP_NAME: &str = "treeAI";
+const APP_NAME: &str = "ino-agent";
+const DB_FILENAME: &str = "ino-agent.sqlite3";
+const LEGACY_APP_NAME: &str = "treeAI";
+const LEGACY_DB_FILENAME: &str = "treeai.sqlite3";
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL: &str = "gpt-4.1-mini";
 const DEFAULT_THEME: &str = "Minimal Light";
@@ -923,6 +926,9 @@ impl Store {
         if existing.role != "user" {
             return Err("Only user messages can be edited.".to_string());
         }
+        if !self.is_leaf_node(tree_id, &existing.node_id)? {
+            return Err("Parent branches are read-only. Select or create a leaf branch.".to_string());
+        }
 
         self.conn
             .execute(
@@ -953,6 +959,68 @@ impl Store {
             visualization_html: None,
             ..existing
         })
+    }
+
+    pub fn truncate_from_assistant_message(
+        &mut self,
+        tree_id: &str,
+        message_id: &str,
+    ) -> Result<String, String> {
+        let (message_rowid, node_id, role) = self
+            .conn
+            .query_row(
+                "SELECT rowid, node_id, role FROM messages WHERE tree_id = ?1 AND id = ?2",
+                params![tree_id, message_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Message not found.".to_string())?;
+
+        if role != "assistant" {
+            return Err("Only assistant messages can be regenerated.".to_string());
+        }
+        if !self.is_leaf_node(tree_id, &node_id)? {
+            return Err("Parent branches are read-only. Select or create a leaf branch.".to_string());
+        }
+
+        self.conn
+            .execute(
+                "DELETE FROM quiz_attempts
+                 WHERE tree_id = ?1
+                   AND node_id = ?2
+                   AND message_id IN (
+                     SELECT id FROM messages
+                     WHERE tree_id = ?3 AND node_id = ?4 AND rowid >= ?5
+                   )",
+                params![tree_id, &node_id, tree_id, &node_id, message_rowid],
+            )
+            .map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "DELETE FROM messages
+                 WHERE tree_id = ?1 AND node_id = ?2 AND rowid >= ?3",
+                params![tree_id, &node_id, message_rowid],
+            )
+            .map_err(|e| e.to_string())?;
+        self.clear_pending_branch_plan(tree_id, &node_id)?;
+
+        let ts = Self::now();
+        self.conn
+            .execute(
+                "UPDATE nodes SET updated_at = ?1 WHERE tree_id = ?2 AND id = ?3",
+                params![ts, tree_id, node_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.set_last_node(tree_id, &node_id)?;
+
+        Ok(node_id)
     }
 
     pub fn save_quiz_attempt(
@@ -1206,7 +1274,7 @@ impl Store {
             .map(|row| row.id.clone());
         let mut messages = vec![ChatContextMessage {
             role: "system".to_string(),
-            content: "You are a helpful assistant inside a polished local tree-based AI chat app. The user can write only in leaf branches; parent nodes are navigation/context only. Answer clearly and keep context from the selected tree path. If the current branch contains a message starting with \"Контекст ветки\", treat it as the branch contract and do not drift back to the parent topic unless the user explicitly asks to compare with it. When the user says \"распиши\", \"расшарь\", \"разверни\", \"подробнее\", \"раскрой\", \"объясни глубже\", or similar, produce a complete, branch-specific expansion with concrete structure, examples, caveats, and next steps. Use Markdown, and render formulas in LaTeX when math is useful. Prefer visual Mermaid diagrams when they make the answer clearer; avoid large ASCII diagrams unless the user explicitly asks for text-only output. Use fenced ```mermaid blocks for static diagrams and choose the diagram type by meaning: flowchart for processes/graphs/networks, sequenceDiagram for interactions/protocols, stateDiagram for automata/states, classDiagram or erDiagram for data models, gitGraph for branches/commits, pie for proportions/statistics, xychart for simple numeric trends, timeline for chronology, gantt for schedules/plans, mindmap for topic maps, journey for user flows, quadrantChart for prioritization, and sankey for flows/distribution. For step-by-step algorithms or evolving systems, use a fenced ```graphsteps block containing ONLY a JSON array of objects with fields step, description, and graph, where graph is Mermaid code. You may insert one interactive quiz when it helps learning: after a complex explanation, after code, after a graph/visualization, at the end of an answer, or when the user asks to be checked. If the user asks for a test, quiz, проверку, or \"проверь меня\", include the actual interactive quiz as fenced ```quiz, not plain JSON, not a ```json block, and not a bullet list of answers. Use a fenced ```quiz block containing ONLY JSON. Supported MVP types are single_choice, multiple_choice, and text. Shape: {\"id\":\"short-stable-id\",\"type\":\"single_choice|multiple_choice|text\",\"question\":\"...\",\"options\":[{\"id\":\"a\",\"text\":\"...\"}],\"answer\":\"a\"} for single choice, {\"answers\":[\"a\",\"c\"]} for multiple choice, or {\"accepted_answers\":[\"...\"]} for text. Always include \"explanation\" and optionally \"points\". Keep correct answers only inside the quiz JSON, not in the visible prose before the user answers. Do not use HTML or iframes.".to_string(),
+            content: "You are a helpful assistant inside a polished local tree-based AI chat app. The user can write only in leaf branches; parent nodes are navigation/context only. Answer clearly and keep context from the selected tree path. If the current branch contains a message starting with \"Контекст ветки\", treat it as the branch contract and do not drift back to the parent topic unless the user explicitly asks to compare with it. When the user says \"распиши\", \"расшарь\", \"разверни\", \"подробнее\", \"раскрой\", \"объясни глубже\", or similar, produce a complete, branch-specific expansion with concrete structure, examples, caveats, and next steps. Use Markdown, and render formulas in LaTeX when math is useful. When you provide runnable code examples, make the program read its data from stdin and print the result to stdout; do not hard-code demonstration inputs inside main/function bodies unless the user explicitly asks for a self-contained demo. If useful, show a short sample stdin and expected stdout outside the code block. Prefer visual Mermaid diagrams when they make the answer clearer; avoid large ASCII diagrams unless the user explicitly asks for text-only output. Use fenced ```mermaid blocks for static diagrams and choose the diagram type by meaning: flowchart for processes/graphs/networks, sequenceDiagram for interactions/protocols, stateDiagram for automata/states, classDiagram or erDiagram for data models, gitGraph for branches/commits, pie for proportions/statistics, xychart for simple numeric trends, timeline for chronology, gantt for schedules/plans, mindmap for topic maps, journey for user flows, quadrantChart for prioritization, and sankey for flows/distribution. For step-by-step algorithms or evolving systems, use a fenced ```graphsteps block containing ONLY a JSON array of objects with fields step, description, and graph, where graph is Mermaid code. You may insert one interactive quiz when it helps learning: after a complex explanation, after code, after a graph/visualization, at the end of an answer, or when the user asks to be checked. If the user asks for a test, quiz, проверку, or \"проверь меня\", include the actual interactive quiz as fenced ```quiz, not plain JSON, not a ```json block, and not a bullet list of answers. Use a fenced ```quiz block containing ONLY JSON. Supported MVP types are single_choice, multiple_choice, and text. Shape: {\"id\":\"short-stable-id\",\"type\":\"single_choice|multiple_choice|text\",\"question\":\"...\",\"options\":[{\"id\":\"a\",\"text\":\"...\"}],\"answer\":\"a\"} for single choice, {\"answers\":[\"a\",\"c\"]} for multiple choice, or {\"accepted_answers\":[\"...\"]} for text. Always include \"explanation\" and optionally \"points\". Keep correct answers only inside the quiz JSON, not in the visible prose before the user answers. Do not use HTML or iframes.".to_string(),
         }, ChatContextMessage {
             role: "system".to_string(),
             content: local_context.clone(),
@@ -1723,7 +1791,15 @@ fn first_line(value: &str) -> &str {
 
 fn db_path() -> PathBuf {
     if let Some(base) = dirs::data_dir() {
-        return base.join(APP_NAME).join("treeai.sqlite3");
+        let path = base.join(APP_NAME).join(DB_FILENAME);
+        if !path.exists() {
+            let legacy_path = base.join(LEGACY_APP_NAME).join(LEGACY_DB_FILENAME);
+            if legacy_path.exists() {
+                let _ = fs::create_dir_all(path.parent().unwrap_or_else(|| path.as_path()));
+                let _ = fs::copy(&legacy_path, &path);
+            }
+        }
+        return path;
     }
-    PathBuf::from("treeai.sqlite3")
+    PathBuf::from(DB_FILENAME)
 }

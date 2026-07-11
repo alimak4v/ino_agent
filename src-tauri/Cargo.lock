@@ -1647,6 +1647,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ino-agent"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "pdf-extract",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-shell",
+ "uuid",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3944,21 +3959,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "treeai"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "pdf-extract",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-shell",
- "uuid",
 ]
 
 [[package]]

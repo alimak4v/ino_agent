@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import type { QuizAttempt } from "../lib/api";
+import {
+  api,
+  type CheckCodeResponse,
+  type CodeLanguage,
+  type CodeTestCase,
+  type CodeTestResult,
+  type QuizAttempt,
+} from "../lib/api";
 
-type QuizType = "single_choice" | "multiple_choice" | "text";
+type QuizType = "single_choice" | "multiple_choice" | "text" | "code_task";
 
 interface QuizOption {
   id: string;
@@ -16,6 +23,10 @@ interface QuizData {
   correctValues: string[];
   explanation: string;
   points: number;
+  language?: CodeLanguage;
+  starterCode?: string;
+  dependencies?: string[];
+  tests?: CodeTestCase[];
 }
 
 interface QuizResult {
@@ -96,26 +107,34 @@ function QuizCard({
   const [singleValue, setSingleValue] = useState(() => firstAnswerValue(savedAnswer));
   const [multiValues, setMultiValues] = useState<string[]>(() => arrayAnswerValue(savedAnswer));
   const [textValue, setTextValue] = useState(() => firstAnswerValue(savedAnswer));
+  const [codeValue, setCodeValue] = useState(() => codeAnswerValue(savedAnswer) || quiz.starterCode || "");
+  const [codeResult, setCodeResult] = useState<CheckCodeResponse | null>(() => codeResultValue(savedAnswer));
   const [localResult, setLocalResult] = useState<QuizResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!attempt) return;
     setSingleValue(firstAnswerValue(savedAnswer));
     setMultiValues(arrayAnswerValue(savedAnswer));
     setTextValue(firstAnswerValue(savedAnswer));
-  }, [attempt, savedAnswer]);
+    setCodeValue(codeAnswerValue(savedAnswer) || quiz.starterCode || "");
+    setCodeResult(codeResultValue(savedAnswer));
+  }, [quiz.starterCode, savedAnswer]);
 
   const result = attempt
     ? attemptToResult(attempt, quiz)
     : localResult;
-  const answered = Boolean(result);
+  const answered = quiz.type !== "code_task" && Boolean(result);
   const currentAnswer = quiz.type === "multiple_choice" ? multiValues : quiz.type === "text" ? textValue : singleValue;
   const canSubmit =
     !answered &&
     !saving &&
+    quiz.type !== "code_task" &&
     (Array.isArray(currentAnswer) ? currentAnswer.length > 0 : currentAnswer.trim().length > 0);
+  const canCheckCode =
+    quiz.type === "code_task" &&
+    !saving &&
+    Boolean(quiz.language && quiz.tests?.length && codeValue.trim().length > 0);
 
   const toggleMultiValue = (id: string) => {
     setMultiValues((current) =>
@@ -148,6 +167,34 @@ function QuizCard({
     }
   };
 
+  const checkCode = async () => {
+    if (!canCheckCode || !quiz.language || !quiz.tests) return;
+    setSaving(true);
+    setError("");
+    try {
+      const nextResult = await api.checkCode({
+        language: quiz.language,
+        code: codeValue,
+        tests: quiz.tests,
+        dependencies: quiz.dependencies,
+      });
+      setCodeResult(nextResult);
+      await onSaveAttempt(
+        quiz.id,
+        quiz.type,
+        JSON.stringify({ code: codeValue, result: nextResult }),
+        nextResult.passed,
+        codeScore(nextResult, quiz.points),
+        quiz.points,
+        codeResultSummary(nextResult),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <section className="my-5 overflow-hidden rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] text-[14px] leading-6 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
       <div className="border-b border-[color:var(--border)] bg-[color:var(--panel-soft)] px-4 py-2">
@@ -158,7 +205,44 @@ function QuizCard({
       </div>
 
       <div className="space-y-3 px-4 py-4">
-        {quiz.type !== "text" && (
+        {quiz.type === "code_task" && (
+          <>
+            <textarea
+              value={codeValue}
+              onChange={(event) => {
+                setCodeValue(event.target.value);
+                setCodeResult(null);
+              }}
+              spellCheck={false}
+              className="min-h-[180px] w-full resize-y rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3 font-mono text-[12px] leading-5 text-[color:var(--text)] outline-none transition-shadow focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={!canCheckCode}
+                onClick={() => void checkCode()}
+                className="inline-flex h-9 items-center justify-center rounded-lg bg-[color:var(--button)] px-3 text-sm font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                {saving ? "Проверяю" : "Check solution"}
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  setCodeValue(quiz.starterCode || "");
+                  setCodeResult(null);
+                  setError("");
+                }}
+                className="inline-flex h-9 items-center justify-center rounded-lg border border-[color:var(--border)] px-3 text-sm font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Reset
+              </button>
+            </div>
+            {codeResult && <CodeCheckResult result={codeResult} points={quiz.points} />}
+          </>
+        )}
+
+        {quiz.type !== "text" && quiz.type !== "code_task" && (
           <div className="space-y-2">
             {quiz.options.map((option) => {
               const checked =
@@ -215,7 +299,7 @@ function QuizCard({
           </button>
         )}
 
-        {result && (
+        {result && quiz.type !== "code_task" && (
           <div
             className={`rounded-lg border px-3 py-2 ${
               result.isCorrect
@@ -273,8 +357,29 @@ function parseQuizObject(raw: unknown, fallbackSource: string): QuizData | null 
   const type = normalizeQuizType(stringField(object, ["type", "kind"])) ?? inferQuizType(options, correctValues);
   const explanation = stringField(object, ["explanation", "feedback", "reason"]) || "";
   const points = positiveNumber(object.points) ?? positiveNumber(object.score) ?? 1;
+  const tests = normalizeCodeTests(object.tests ?? object.test_cases ?? object.testCases);
+  const language = normalizeCodeLanguage(stringField(object, ["language", "lang"]));
+  const starterCode = stringField(object, ["starterCode", "starter_code", "initialCode", "initial_code", "code"]);
+  const dependencies = normalizeDependencies(object.dependencies ?? object.packages ?? object.libs);
 
-  if (!type || !question || correctValues.length === 0) return null;
+  if (!type || !question) return null;
+  if (type === "code_task") {
+    if (!language || tests.length === 0) return null;
+    return {
+      id,
+      type,
+      question,
+      options: [],
+      correctValues: [],
+      explanation,
+      points,
+      language,
+      starterCode,
+      dependencies,
+      tests,
+    };
+  }
+  if (correctValues.length === 0) return null;
   if (type !== "text" && options.length < 2) return null;
   return { id, type, question, options, correctValues, explanation, points };
 }
@@ -295,7 +400,49 @@ function normalizeQuizType(value: string): QuizType | null {
   if (["text", "text_answer", "short_answer", "fill_blank", "fill_in_blank"].includes(normalized)) {
     return "text";
   }
+  if (["code", "code_task", "coding", "programming"].includes(normalized)) {
+    return "code_task";
+  }
   return null;
+}
+
+function normalizeCodeLanguage(value: string): CodeLanguage | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "python" || normalized === "py") return "python";
+  if (normalized === "javascript" || normalized === "js" || normalized === "node") {
+    return "javascript";
+  }
+  return null;
+}
+
+function normalizeCodeTests(value: unknown): CodeTestCase[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map<CodeTestCase | null>((item, index) => {
+      if (!item || typeof item !== "object") return null;
+      const object = item as Record<string, unknown>;
+      const input = Array.isArray(object.input) ? object.input : [];
+      if (!("expected" in object)) return null;
+      return {
+        id: stringField(object, ["id", "testId", "name"]) || `test-${index + 1}`,
+        input,
+        expected: object.expected,
+        hidden: Boolean(object.hidden),
+      };
+    })
+    .filter((item): item is CodeTestCase => Boolean(item));
+}
+
+function normalizeDependencies(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\n,]/)
+      : [];
+  return raw
+    .filter((item): item is string | number => typeof item === "string" || typeof item === "number")
+    .map((item) => String(item).trim())
+    .filter(Boolean);
 }
 
 function normalizeOptions(value: unknown): QuizOption[] {
@@ -370,6 +517,69 @@ function attemptToResult(attempt: QuizAttempt, quiz: QuizData): QuizResult {
   };
 }
 
+function CodeCheckResult({ result, points }: { result: CheckCodeResponse; points: number }) {
+  const score = codeScore(result, points);
+  return (
+    <div
+      className={`space-y-3 rounded-lg border px-3 py-3 ${
+        result.passed
+          ? "border-emerald-500/35 bg-emerald-500/10"
+          : "border-rose-500/35 bg-rose-500/10"
+      }`}
+    >
+      <div className="font-semibold">
+        {result.passed ? "Passed" : "Failed"} · {result.passedCount} / {result.totalCount} tests ·{" "}
+        {formatScore(score)} / {formatScore(points)}
+      </div>
+      <div className="space-y-2">
+        {result.results.map((item, index) => (
+          <CodeTestResultView key={`${item.testId}-${index}`} result={item} index={index} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CodeTestResultView({ result, index }: { result: CodeTestResult; index: number }) {
+  const title = result.hidden
+    ? result.passed
+      ? `Hidden test ${index + 1} passed`
+      : "Hidden test failed"
+    : `${result.testId || `Test ${index + 1}`} ${result.passed ? "passed" : "failed"}`;
+  return (
+    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2">
+      <div className={result.passed ? "font-medium text-emerald-600" : "font-medium text-rose-600"}>
+        {result.passed ? "OK" : "Fail"} · {title}
+      </div>
+      {result.hidden && <div className="mt-1 text-[11px] text-[color:var(--muted)]">{result.durationMs} ms</div>}
+      {!result.hidden && !result.passed && (
+        <div className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
+          <ValueBox label="Input" value={result.input} />
+          <ValueBox label="Expected" value={result.expected} />
+          <ValueBox label="Actual" value={result.actual} />
+        </div>
+      )}
+      {!result.hidden && result.error && <div className="mt-2 text-xs text-rose-600">{result.error}</div>}
+      {!result.hidden && result.stdout && <ValueBox label="stdout" value={result.stdout} />}
+      {!result.hidden && result.stderr && <ValueBox label="stderr" value={result.stderr} />}
+      {!result.hidden && <div className="mt-1 text-[11px] text-[color:var(--muted)]">{result.durationMs} ms</div>}
+    </div>
+  );
+}
+
+function ValueBox({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className="mt-2 min-w-0">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--muted)]">
+        {label}
+      </div>
+      <pre className="mt-1 max-h-[160px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-2 font-mono text-[12px] leading-5">
+        {formatValue(value)}
+      </pre>
+    </div>
+  );
+}
+
 function correctOptionIds(quiz: QuizData) {
   return quiz.correctValues.map((value) => optionIdForValue(quiz.options, value) ?? value);
 }
@@ -435,6 +645,28 @@ function parseAttemptAnswer(value?: string) {
   }
 }
 
+function codeAnswerValue(value: unknown) {
+  if (!value || typeof value !== "object") return "";
+  const code = (value as Record<string, unknown>).code;
+  return typeof code === "string" ? code : "";
+}
+
+function codeResultValue(value: unknown): CheckCodeResponse | null {
+  if (!value || typeof value !== "object") return null;
+  const result = (value as Record<string, unknown>).result;
+  if (!result || typeof result !== "object") return null;
+  const object = result as Partial<CheckCodeResponse>;
+  if (
+    typeof object.passed === "boolean" &&
+    typeof object.passedCount === "number" &&
+    typeof object.totalCount === "number" &&
+    Array.isArray(object.results)
+  ) {
+    return object as CheckCodeResponse;
+  }
+  return null;
+}
+
 function firstAnswerValue(value: unknown) {
   if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : "";
   return typeof value === "string" ? value : "";
@@ -455,4 +687,23 @@ function stableQuizId(source: string) {
 
 function formatScore(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function codeScore(result: CheckCodeResponse, points: number) {
+  if (result.totalCount <= 0) return 0;
+  return result.passed ? points : (result.passedCount / result.totalCount) * points;
+}
+
+function codeResultSummary(result: CheckCodeResponse) {
+  return `${result.passedCount}/${result.totalCount} tests passed`;
+}
+
+function formatValue(value: unknown) {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }

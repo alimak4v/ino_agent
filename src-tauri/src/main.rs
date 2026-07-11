@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    treeai_lib::run()
+    ino_agent_lib::run()
 }
