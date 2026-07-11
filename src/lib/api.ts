@@ -88,6 +88,31 @@ export interface AssistantDelta {
   delta: string;
 }
 
+export interface ConnectorManifest {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  entry: string;
+  permissions: string[];
+  schedule: string | null;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ConnectorFile {
+  path: string;
+  content: string;
+}
+
+export interface ConnectorSummary {
+  manifest: ConnectorManifest;
+  path: string;
+  pending: boolean;
+  files: ConnectorFile[];
+}
+
 export type CodeLanguage = "python" | "javascript" | "cpp";
 
 export interface RunCodeRequest {
@@ -201,6 +226,8 @@ export const api = {
     invokeDesktop<Message>("add_user_message", { treeId, nodeId, content }),
   editUserMessage: (treeId: string, messageId: string, content: string) =>
     invokeDesktop<Message>("edit_user_message", { treeId, messageId, content }),
+  reviseAssistantMessage: (treeId: string, messageId: string, instruction: string) =>
+    invokeDesktop<Message>("revise_assistant_message", { treeId, messageId, instruction }),
   regenerateAssistantReply: (treeId: string, messageId: string, requestId: string) =>
     invokeDesktop<AssistantReplyResult>("regenerate_assistant_reply", {
       treeId,
@@ -239,6 +266,12 @@ export const api = {
     invokeDesktop<AssistantReplyResult>("confirm_pending_branches", { treeId, nodeId }),
   forceBranchSplit: (treeId: string, nodeId: string) =>
     invokeDesktop<AssistantReplyResult>("force_branch_split", { treeId, nodeId }),
+  listConnectors: () =>
+    isTauriRuntime() ? invoke<ConnectorSummary[]>("list_connectors") : Promise.resolve([]),
+  proposeConnector: (treeId: string, nodeId: string, request: string) =>
+    invokeDesktop<ConnectorSummary>("propose_connector", { treeId, nodeId, request }),
+  setConnectorEnabled: (id: string, enabled: boolean) =>
+    invokeDesktop<ConnectorSummary>("set_connector_enabled", { id, enabled }),
   runCode: (request: RunCodeRequest) => invokeDesktop<RunCodeResponse>("run_code", { request }),
   checkCode: (request: CheckCodeRequest) =>
     invokeDesktop<CheckCodeResponse>("check_code", { request }),

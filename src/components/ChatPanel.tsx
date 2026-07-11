@@ -31,9 +31,11 @@ interface ChatPanelProps {
   onSend: (content: string) => Promise<void>;
   onStartChat?: (content: string) => Promise<void>;
   onEditMessage: (message: Message, content: string) => Promise<void>;
+  onReviseAssistantMessage: (message: Message, instruction: string) => Promise<void>;
   onRegenerateMessage: (message: Message) => Promise<void>;
   onConfirmBranches: (message: Message) => Promise<void>;
   onForceBranchSplit: (content: string) => Promise<void>;
+  onProposeConnector: (content: string) => Promise<void>;
 }
 
 interface AttachmentDraft {
@@ -69,13 +71,16 @@ export function ChatPanel({
   onSend,
   onStartChat,
   onEditMessage,
+  onReviseAssistantMessage,
   onRegenerateMessage,
   onConfirmBranches,
   onForceBranchSplit,
+  onProposeConnector,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [branchMode, setBranchMode] = useState(false);
+  const [connectorMode, setConnectorMode] = useState(false);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [branchActionBusy, setBranchActionBusy] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
@@ -141,6 +146,7 @@ export function ChatPanel({
   const composerWritable = Boolean((selectedNode && canWrite) || (!selectedNode && canStartChat));
   const canSend = Boolean(composerWritable && !sending && (draft.trim() || attachments.length > 0));
   const canToggleBranchMode = Boolean(selectedNode && canWrite && !sending && !attachmentBusy);
+  const canToggleConnectorMode = Boolean(selectedNode && canWrite && !sending && !attachmentBusy);
 
   const attachFiles = async (files: FileList | null) => {
     if (!files?.length || !composerWritable || sending) return;
@@ -195,6 +201,7 @@ export function ChatPanel({
   const startEditingMessage = (message: Message) => {
     setEditingMessage(message);
     setBranchMode(false);
+    setConnectorMode(false);
     setAttachments([]);
     setDraft(stripBranchPlanAction(message.content));
     requestAnimationFrame(() => textareaRef.current?.focus());
@@ -204,6 +211,7 @@ export function ChatPanel({
     setEditingMessage(null);
     setDraft("");
     setAttachments([]);
+    setConnectorMode(false);
   };
 
   const copyMessage = async (message: Message) => {
@@ -229,6 +237,7 @@ export function ChatPanel({
     setDraft("");
     setAttachments([]);
     setBranchMode(false);
+    setConnectorMode(false);
     if (!selectedNode) {
       await onStartChat?.(content);
       return;
@@ -240,6 +249,10 @@ export function ChatPanel({
     }
     if (branchMode) {
       await onForceBranchSplit(content);
+      return;
+    }
+    if (connectorMode) {
+      await onProposeConnector(content);
       return;
     }
     await onSend(content);
@@ -384,7 +397,10 @@ export function ChatPanel({
               <button
                 type="button"
                 disabled={!canToggleBranchMode || Boolean(editingMessage)}
-                onClick={() => setBranchMode((value) => !value)}
+                onClick={() => {
+                  setConnectorMode(false);
+                  setBranchMode((value) => !value);
+                }}
                 className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border p-0 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                   branchMode
                     ? "border-[color:var(--button)] bg-[color:var(--button)] text-[color:var(--button-text)]"
@@ -395,6 +411,24 @@ export function ChatPanel({
                 title={branchMode ? "Split into branches after sending" : "Split into branches after sending"}
               >
                 <BranchSplitIcon />
+              </button>
+              <button
+                type="button"
+                disabled={!canToggleConnectorMode || Boolean(editingMessage)}
+                onClick={() => {
+                  setBranchMode(false);
+                  setConnectorMode((value) => !value);
+                }}
+                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border p-0 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  connectorMode
+                    ? "border-[color:var(--button)] bg-[color:var(--button)] text-[color:var(--button-text)]"
+                    : "border-[color:var(--border)] bg-transparent text-[color:var(--text)] hover:bg-[color:var(--selected)]"
+                }`}
+                aria-label={connectorMode ? "Cancel connector draft" : "Create connector draft"}
+                aria-pressed={connectorMode}
+                title={connectorMode ? "Create connector draft" : "Create connector draft"}
+              >
+                <ConnectorIcon />
               </button>
             </div>
             <button
@@ -516,6 +550,11 @@ export function ChatPanel({
                     sending={sending}
                     onCopy={() => void copyMessage(message)}
                     onEdit={() => startEditingMessage(message)}
+                    onRevise={() => {
+                      const instruction = window.prompt("How should this assistant message change?");
+                      if (!instruction?.trim()) return;
+                      void onReviseAssistantMessage(message, instruction);
+                    }}
                     onRegenerate={() => void onRegenerateMessage(message)}
                   />
                 </div>
@@ -655,6 +694,25 @@ function BranchSplitIcon() {
   );
 }
 
+function ConnectorIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="block h-[17px] w-[17px]"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+    >
+      <path d="M8 8h8v8H8z" />
+      <path d="M4 12h4M16 12h4M12 4v4M12 16v4" />
+      <path d="M6 6l2 2M18 6l-2 2M6 18l2-2M18 18l-2-2" />
+    </svg>
+  );
+}
+
 function EditIcon() {
   return (
     <svg
@@ -710,6 +768,26 @@ function RegenerateIcon() {
     </svg>
   );
 }
+
+function ReviseIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+    >
+      <path d="M4 20h6" />
+      <path d="M14 4l6 6L9 21H3v-6Z" />
+      <path d="M15 5l4 4" />
+    </svg>
+  );
+}
+
 
 function CloseIcon() {
   return (
@@ -857,6 +935,7 @@ function MessageActions({
   sending,
   onCopy,
   onEdit,
+  onRevise,
   onRegenerate,
 }: {
   message: Message;
@@ -865,6 +944,7 @@ function MessageActions({
   sending: boolean;
   onCopy: () => void;
   onEdit: () => void;
+  onRevise: () => void;
   onRegenerate: () => void;
 }) {
   const align = message.role === "user" ? "justify-end" : "justify-start";
@@ -889,6 +969,15 @@ function MessageActions({
       >
         {copied ? <CheckIcon /> : <CopyIcon />}
       </ActionIconButton>
+      {canRegenerate && (
+        <ActionIconButton
+          label="Revise"
+          disabled={sending}
+          onClick={onRevise}
+        >
+          <ReviseIcon />
+        </ActionIconButton>
+      )}
       {canRegenerate && (
         <ActionIconButton
           label="Regenerate"

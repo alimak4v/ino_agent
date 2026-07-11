@@ -1,8 +1,10 @@
 mod api;
 mod code_runner;
+mod connectors;
 mod store;
 
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{
@@ -289,6 +291,97 @@ async fn check_code(
     tauri::async_runtime::spawn_blocking(move || code_runner::check_code(request))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn list_connectors() -> Result<Vec<connectors::ConnectorSummary>, String> {
+    connectors::list_connectors()
+}
+
+#[tauri::command]
+async fn propose_connector(
+    state: State<'_, AppState>,
+    tree_id: String,
+    node_id: String,
+    request: String,
+) -> Result<connectors::ConnectorSummary, String> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (settings, tree_title, node_title) = {
+            let store = lock_store(&store)?;
+            let node = store.get_node(&tree_id, &node_id)?;
+            let tree_title = store
+                .list_trees()?
+                .into_iter()
+                .find(|tree| tree.id == tree_id)
+                .map(|tree| tree.title)
+                .unwrap_or_else(|| node.title.clone());
+            (store.get_settings()?, tree_title, node.title)
+        };
+        let messages = vec![
+            store::ChatContextMessage {
+                role: "system".to_string(),
+                content: connectors::connector_prompt(&request, &tree_title, &node_title),
+            },
+            store::ChatContextMessage {
+                role: "user".to_string(),
+                content: request,
+            },
+        ];
+        let answer = api::chat_completion(&settings, &messages)?;
+        let draft = connectors::parse_model_draft(&answer)?;
+        connectors::save_draft(draft)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn set_connector_enabled(
+    id: String,
+    enabled: bool,
+) -> Result<connectors::ConnectorSummary, String> {
+    connectors::set_enabled(&id, enabled)
+}
+
+#[tauri::command]
+async fn revise_assistant_message(
+    state: State<'_, AppState>,
+    tree_id: String,
+    message_id: String,
+    instruction: String,
+) -> Result<store::Message, String> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (settings, message) = {
+            let store = lock_store(&store)?;
+            let message = store.get_message(&tree_id, &message_id)?;
+            if message.role != "assistant" {
+                return Err("Only assistant messages can be revised in place.".to_string());
+            }
+            (store.get_settings()?, message)
+        };
+        let messages = vec![
+            store::ChatContextMessage {
+                role: "system".to_string(),
+                content: "You revise one saved assistant message in a local chat database. Apply the user's instruction to the existing message. Preserve everything unrelated, especially Markdown structure, code fences, diagrams, and quiz blocks. If the user asks to modify code in the previous message, edit that code block in place instead of rewriting the whole answer from scratch. Return ONLY JSON: {\"content\":\"full updated message content\"}.".to_string(),
+            },
+            store::ChatContextMessage {
+                role: "user".to_string(),
+                content: format!(
+                    "Instruction:\n{}\n\nExisting assistant message:\n{}",
+                    instruction.trim(),
+                    message.content
+                ),
+            },
+        ];
+        let answer = api::chat_completion(&settings, &messages)?;
+        let content = parse_revised_content(&answer)?;
+        let store = &mut *lock_store(&store)?;
+        store.update_assistant_message(&tree_id, &message_id, &content)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn force_branch_split_blocking(
@@ -1025,6 +1118,70 @@ fn clean_extracted_text(value: &str) -> String {
         .join("\n")
 }
 
+fn parse_revised_content(answer: &str) -> Result<String, String> {
+    for candidate in json_object_candidates(answer) {
+        let Ok(parsed) = serde_json::from_str::<Value>(&candidate) else {
+            continue;
+        };
+        if let Some(content) = parsed.get("content").and_then(Value::as_str) {
+            let content = content.trim();
+            if !content.is_empty() {
+                return Ok(content.to_string());
+            }
+        }
+    }
+    let trimmed = answer.trim();
+    if trimmed.is_empty() {
+        Err("The model returned an empty revision.".to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+fn json_object_candidates(answer: &str) -> Vec<String> {
+    let trimmed = answer.trim();
+    let mut candidates = Vec::new();
+    if trimmed.starts_with('{') {
+        candidates.push(trimmed.to_string());
+    }
+    let mut offset = 0;
+    while let Some(start_rel) = trimmed[offset..].find('{') {
+        let start = offset + start_rel;
+        let mut depth = 0_i32;
+        let mut in_string = false;
+        let mut escaped = false;
+        for (index, ch) in trimmed[start..].char_indices() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match ch {
+                '"' => in_string = true,
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        candidates.push(trimmed[start..start + index + ch.len_utf8()].to_string());
+                        offset = start + index + ch.len_utf8();
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if offset <= start {
+            break;
+        }
+    }
+    candidates
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let store = store::Store::new().expect("failed to open local store");
@@ -1099,6 +1256,10 @@ pub fn run() {
             force_branch_split,
             run_code,
             check_code,
+            list_connectors,
+            propose_connector,
+            set_connector_enabled,
+            revise_assistant_message,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

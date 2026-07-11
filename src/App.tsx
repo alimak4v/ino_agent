@@ -17,6 +17,7 @@ import {
   type AssistantDelta,
   type AssistantReplyResult,
   type ChatSettings,
+  type ConnectorSummary,
   type Message,
   type SettingsInput,
   type TreeSummary,
@@ -84,6 +85,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatsOpen, setChatsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
+  const [connectorsLoading, setConnectorsLoading] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const selectedNodeIdRef = useRef<string | null>(null);
   const activeTreeIdRef = useRef<string | null>(null);
@@ -102,6 +105,22 @@ export default function App() {
       })
       .catch((e) => setChatError(String(e)));
   }, []);
+
+  const loadConnectors = useCallback(async () => {
+    setConnectorsLoading(true);
+    try {
+      setConnectors(await api.listConnectors());
+    } catch (e) {
+      setStatusText(String(e));
+    } finally {
+      setConnectorsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    void loadConnectors();
+  }, [loadConnectors]);
 
   useEffect(() => {
     selectedNodeIdRef.current = selectedNodeId;
@@ -726,6 +745,39 @@ export default function App() {
     [applyAssistantReply, loadCanvas, loadMessages],
   );
 
+  const handleReviseAssistantMessage = useCallback(
+    async (message: Message, instruction: string) => {
+      const treeId = message.tree_id;
+      const nodeId = message.node_id;
+      if (activeRequestsRef.current[nodeId]) return;
+
+      setActiveRequests((current) => ({ ...current, [nodeId]: "revise-message" }));
+      setChatError("");
+
+      try {
+        const revised = await api.reviseAssistantMessage(treeId, message.id, instruction);
+        if (selectedNodeIdRef.current === nodeId) {
+          setMessages((current) =>
+            current.map((item) => (item.id === revised.id ? revised : item)),
+          );
+        }
+        await loadCanvas(nodeId, treeId);
+      } catch (e) {
+        setChatError(String(e));
+        if (selectedNodeIdRef.current === nodeId) {
+          await loadMessages(treeId, nodeId);
+        }
+      } finally {
+        setActiveRequests((current) => {
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        });
+      }
+    },
+    [loadCanvas, loadMessages],
+  );
+
   const handleRegenerateMessage = useCallback(
     async (message: Message) => {
       const treeId = message.tree_id;
@@ -797,6 +849,45 @@ export default function App() {
       }
     },
     [applyAssistantReply, loadCanvas, loadMessages, selectedNode],
+  );
+
+  const handleProposeConnector = useCallback(
+    async (content: string) => {
+      if (!selectedNode || !selectedNode.is_leaf) return;
+      const nodeId = selectedNode.id;
+      const treeId = selectedNode.treeId;
+      if (activeRequestsRef.current[nodeId]) return;
+
+      setActiveRequests((current) => ({ ...current, [nodeId]: "connector" }));
+      setChatError("");
+      try {
+        const connector = await api.proposeConnector(treeId, nodeId, content);
+        await loadConnectors();
+        setSettingsOpen(true);
+        setStatusText(`Connector draft created: ${connector.manifest.name}`);
+      } catch (e) {
+        setChatError(String(e));
+      } finally {
+        setActiveRequests((current) => {
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        });
+      }
+    },
+    [loadConnectors, selectedNode],
+  );
+
+  const handleSetConnectorEnabled = useCallback(
+    async (id: string, enabled: boolean) => {
+      try {
+        await api.setConnectorEnabled(id, enabled);
+        await loadConnectors();
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [loadConnectors],
   );
 
   const handleSaveSettings = useCallback(async (input: SettingsInput) => {
@@ -944,8 +1035,11 @@ export default function App() {
               settings={settings}
               settingsDraft={settingsDraft}
               saving={savingSettings}
+              connectors={connectors}
+              connectorsLoading={connectorsLoading}
               onChange={setSettingsDraft}
               onThemeChange={handleThemeChange}
+              onToggleConnector={handleSetConnectorEnabled}
               onCancel={() => {
                 setSettingsDraft(settings);
                 setSettingsOpen(false);
@@ -1016,9 +1110,11 @@ export default function App() {
             onSend={handleSendMessage}
             onStartChat={handleStartChat}
             onEditMessage={handleEditMessage}
+            onReviseAssistantMessage={handleReviseAssistantMessage}
             onRegenerateMessage={handleRegenerateMessage}
             onConfirmBranches={handleConfirmBranches}
             onForceBranchSplit={handleForceBranchSplit}
+            onProposeConnector={handleProposeConnector}
           />
         </Suspense>
       </div>
@@ -1108,16 +1204,22 @@ function SettingsPanel({
   settings,
   settingsDraft,
   saving,
+  connectors,
+  connectorsLoading,
   onChange,
   onThemeChange,
+  onToggleConnector,
   onCancel,
   onSubmit,
 }: {
   settings: ChatSettings;
   settingsDraft: ChatSettings;
   saving: boolean;
+  connectors: ConnectorSummary[];
+  connectorsLoading: boolean;
   onChange: (next: ChatSettings) => void;
   onThemeChange: (theme: ThemeName) => void;
+  onToggleConnector: (id: string, enabled: boolean) => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent) => void;
 }) {
@@ -1185,6 +1287,102 @@ function SettingsPanel({
             placeholder={DEFAULT_SETTINGS.endpoint}
           />
         </label>
+      </div>
+      <div className="mt-4 border-t border-[color:var(--border)] pt-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-[color:var(--text)]">Connectors</div>
+            <div className="text-xs text-[color:var(--muted)]">
+              Generated skills stay disabled until enabled
+            </div>
+          </div>
+          <div className="rounded-full border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--muted)]">
+            {connectorsLoading ? "Loading" : connectors.length}
+          </div>
+        </div>
+        <div className="max-h-[240px] space-y-2 overflow-y-auto pr-1">
+          {connectors.length === 0 ? (
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2 text-xs text-[color:var(--muted)]">
+              No connector drafts yet.
+            </div>
+          ) : (
+            connectors.map((connector) => (
+              <div
+                key={`${connector.pending ? "pending" : "active"}-${connector.manifest.id}`}
+                className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-[color:var(--text)]">
+                      {connector.manifest.name}
+                    </div>
+                    <div className="mt-0.5 line-clamp-2 text-xs text-[color:var(--muted)]">
+                      {connector.manifest.description}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onToggleConnector(connector.manifest.id, !connector.manifest.enabled)
+                    }
+                    className={`h-7 shrink-0 rounded-full px-2.5 text-xs font-medium transition-colors ${
+                      connector.manifest.enabled
+                        ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                        : "bg-[color:var(--button)] text-[color:var(--button-text)]"
+                    }`}
+                  >
+                    {connector.manifest.enabled ? "Disable" : "Enable"}
+                  </button>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {connector.pending && (
+                    <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--muted)]">
+                      pending
+                    </span>
+                  )}
+                  {connector.manifest.schedule && (
+                    <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--muted)]">
+                      {connector.manifest.schedule}
+                    </span>
+                  )}
+                  {connector.manifest.permissions.slice(0, 4).map((permission) => (
+                    <span
+                      key={permission}
+                      className="max-w-full truncate rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--muted)]"
+                    >
+                      {permission}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 truncate text-[11px] text-[color:var(--muted)]">
+                  {connector.path}
+                </div>
+                {connector.files.length > 0 && (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-xs text-[color:var(--muted)]">
+                      Files
+                    </summary>
+                    <div className="mt-2 space-y-2">
+                      {connector.files.map((file) => (
+                        <div
+                          key={file.path}
+                          className="overflow-hidden rounded-lg border border-[color:var(--border)]"
+                        >
+                          <div className="border-b border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--muted)]">
+                            {file.path}
+                          </div>
+                          <pre className="max-h-36 overflow-auto bg-[color:var(--panel)] px-2 py-2 text-[11px] leading-4 text-[color:var(--text)]">
+                            {file.content}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            ))
+          )}
+        </div>
       </div>
       <div className="mt-3 flex items-center justify-end gap-2">
         <button

@@ -927,7 +927,9 @@ impl Store {
             return Err("Only user messages can be edited.".to_string());
         }
         if !self.is_leaf_node(tree_id, &existing.node_id)? {
-            return Err("Parent branches are read-only. Select or create a leaf branch.".to_string());
+            return Err(
+                "Parent branches are read-only. Select or create a leaf branch.".to_string(),
+            );
         }
 
         self.conn
@@ -961,6 +963,78 @@ impl Store {
         })
     }
 
+    pub fn update_assistant_message(
+        &mut self,
+        tree_id: &str,
+        message_id: &str,
+        content: &str,
+    ) -> Result<Message, String> {
+        let content = content.trim();
+        if content.is_empty() {
+            return Err("Message is empty.".into());
+        }
+
+        let existing = self
+            .conn
+            .query_row(
+                "SELECT id, tree_id, node_id, role, content, visualization_html, created_at
+                 FROM messages WHERE tree_id = ?1 AND id = ?2",
+                params![tree_id, message_id],
+                message_from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Message not found.".to_string())?;
+
+        if existing.role != "assistant" {
+            return Err("Only assistant messages can be revised in place.".to_string());
+        }
+        if !self.is_leaf_node(tree_id, &existing.node_id)? {
+            return Err(
+                "Parent branches are read-only. Select or create a leaf branch.".to_string(),
+            );
+        }
+
+        self.conn
+            .execute(
+                "UPDATE messages SET content = ?1, visualization_html = NULL WHERE id = ?2",
+                params![content, message_id],
+            )
+            .map_err(|e| e.to_string())?;
+        let ts = Self::now();
+        self.conn
+            .execute(
+                "UPDATE nodes SET summary = ?1, updated_at = ?2 WHERE tree_id = ?3 AND id = ?4",
+                params![
+                    first_line(content).chars().take(46).collect::<String>(),
+                    ts,
+                    tree_id,
+                    existing.node_id
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        self.set_last_node(tree_id, &existing.node_id)?;
+
+        Ok(Message {
+            content: content.to_string(),
+            visualization_html: None,
+            ..existing
+        })
+    }
+
+    pub fn get_message(&self, tree_id: &str, message_id: &str) -> Result<Message, String> {
+        self.conn
+            .query_row(
+                "SELECT id, tree_id, node_id, role, content, visualization_html, created_at
+                 FROM messages WHERE tree_id = ?1 AND id = ?2",
+                params![tree_id, message_id],
+                message_from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Message not found.".to_string())
+    }
+
     pub fn truncate_from_assistant_message(
         &mut self,
         tree_id: &str,
@@ -987,7 +1061,9 @@ impl Store {
             return Err("Only assistant messages can be regenerated.".to_string());
         }
         if !self.is_leaf_node(tree_id, &node_id)? {
-            return Err("Parent branches are read-only. Select or create a leaf branch.".to_string());
+            return Err(
+                "Parent branches are read-only. Select or create a leaf branch.".to_string(),
+            );
         }
 
         self.conn

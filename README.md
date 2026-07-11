@@ -110,6 +110,9 @@ macOS-сборка с `.app`, `.dmg` и checksum:
 
 ### 2026-07-06
 
+- Добавлен MVP self-written connectors: модель может сгенерировать локальный connector-пакет с `manifest.json`, `README.md` и исходниками в app data `connectors/_generated`, Settings показывает pending/enabled коннекторы и разрешает включать/выключать их вручную. Добавлено точечное AI-редактирование сохраненных assistant-сообщений через `Revise`, чтобы менять код/текст в предыдущем ответе без переписывания всей ветки.
+- Измененные файлы: `src-tauri/src/connectors.rs`, `src-tauri/src/lib.rs`, `src-tauri/src/store.rs`, `src/lib/api.ts`, `src/App.tsx`, `src/components/ChatPanel.tsx`, `README.md`.
+
 - В оконном macOS-режиме native traffic light buttons заметнее опущены через `trafficLightPosition`, чтобы системные кнопки, `Focus`, заголовок и `Settings` сидели на одной визуальной высоте без CSS-смещения всей панели.
 - Измененные файлы: `src-tauri/tauri.conf.json`, `README.md`.
 
