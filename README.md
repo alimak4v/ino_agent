@@ -110,6 +110,9 @@ macOS-сборка с `.app`, `.dmg` и checksum:
 
 ### 2026-07-12
 
+- Исправлена сборка streaming-ответа: backend теперь нормализует входящие chunks, отличая настоящие delta от cumulative content, повторных chunks и перекрывающихся фрагментов. Это убирает ответы с удвоенными словами/слогами вроде `скорее скорее`, `команда команда`, `деб деб...`.
+- Измененные файлы: `src-tauri/src/api.rs`, `README.md`.
+
 - Исправлен fallback для пошаговых Mermaid-визуализаций: JSON-массивы с `step`, `description` и `graph` теперь рендерятся через `GraphSteps` даже если модель ошибочно пометила блок как `json` или оставила fence без языка; prompt дополнительно запрещает использовать `json` fence для step-by-step визуализаций.
 - Измененные файлы: `src/components/MarkdownMessage.tsx`, `src/components/MermaidGraph.tsx`, `src-tauri/src/store.rs`, `README.md`.
 

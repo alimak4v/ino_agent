@@ -114,6 +114,7 @@ where
     let mut answer = String::new();
     let mut error_lines = Vec::new();
     let mut usage: Option<Value> = None;
+    let mut last_raw_delta = String::new();
     for line in BufReader::new(stdout).lines() {
         let line = line.map_err(|e| e.to_string())?;
         let line = line.trim();
@@ -136,7 +137,12 @@ where
         if parsed.get("usage").and_then(Value::as_object).is_some() {
             usage = Some(parsed.clone());
         }
-        let delta = extract_choice_content(&parsed, true);
+        let raw_delta = extract_choice_content(&parsed, true);
+        if raw_delta.is_empty() {
+            continue;
+        }
+        let delta = normalize_stream_delta(&answer, &raw_delta, &last_raw_delta);
+        last_raw_delta = raw_delta;
         if delta.is_empty() {
             continue;
         }
@@ -405,6 +411,49 @@ fn extract_choice_content(data: &Value, stream_delta: bool) -> String {
         .unwrap_or_default()
 }
 
+fn normalize_stream_delta(answer: &str, raw_delta: &str, last_raw_delta: &str) -> String {
+    if raw_delta.is_empty() {
+        return String::new();
+    }
+
+    if raw_delta.starts_with(answer) {
+        return raw_delta[answer.len()..].to_string();
+    }
+
+    if raw_delta == last_raw_delta && raw_delta.chars().count() > 1 {
+        return String::new();
+    }
+
+    let overlap = suffix_prefix_overlap_bytes(answer, raw_delta);
+    if overlap_char_count(raw_delta, overlap) >= 3 && overlap < raw_delta.len() {
+        return raw_delta[overlap..].to_string();
+    }
+
+    raw_delta.to_string()
+}
+
+fn suffix_prefix_overlap_bytes(left: &str, right: &str) -> usize {
+    let mut best = 0;
+    for (index, _) in right.char_indices().skip(1) {
+        let prefix = &right[..index];
+        if left.ends_with(prefix) {
+            best = index;
+        }
+    }
+    if left.ends_with(right) {
+        right.len()
+    } else {
+        best
+    }
+}
+
+fn overlap_char_count(value: &str, overlap_bytes: usize) -> usize {
+    value
+        .get(..overlap_bytes)
+        .map(|overlap| overlap.chars().count())
+        .unwrap_or(0)
+}
+
 fn extract_text_from_content(content: &Value) -> String {
     if let Some(text) = content.as_str() {
         return text.to_string();
@@ -453,6 +502,37 @@ fn json_candidates(answer: &str) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_stream_delta;
+
+    #[test]
+    fn keeps_plain_stream_delta() {
+        assert_eq!(normalize_stream_delta("Привет", ", мир", ""), ", мир");
+    }
+
+    #[test]
+    fn extracts_suffix_from_cumulative_stream_content() {
+        assert_eq!(
+            normalize_stream_delta("Привет", "Привет, мир", "Привет"),
+            ", мир"
+        );
+    }
+
+    #[test]
+    fn ignores_repeated_stream_chunk() {
+        assert_eq!(normalize_stream_delta("Привет", "вет", "вет"), "");
+    }
+
+    #[test]
+    fn trims_overlapping_stream_chunk() {
+        assert_eq!(
+            normalize_stream_delta("динамическое програм", "программирование", "програм"),
+            "мирование"
+        );
+    }
 }
 
 fn clean_title_from_value(value: &str) -> Option<String> {
