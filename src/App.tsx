@@ -828,39 +828,6 @@ export default function App() {
     [applyAssistantReply, loadCanvas, loadMessages],
   );
 
-  const handleReviseAssistantMessage = useCallback(
-    async (message: Message, instruction: string) => {
-      const treeId = message.tree_id;
-      const nodeId = message.node_id;
-      if (activeRequestsRef.current[nodeId]) return;
-
-      setActiveRequests((current) => ({ ...current, [nodeId]: "revise-message" }));
-      setChatError("");
-
-      try {
-        const revised = await api.reviseAssistantMessage(treeId, message.id, instruction);
-        if (selectedNodeIdRef.current === nodeId) {
-          setMessages((current) =>
-            current.map((item) => (item.id === revised.id ? revised : item)),
-          );
-        }
-        await loadCanvas(nodeId, treeId);
-      } catch (e) {
-        setChatError(String(e));
-        if (selectedNodeIdRef.current === nodeId) {
-          await loadMessages(treeId, nodeId);
-        }
-      } finally {
-        setActiveRequests((current) => {
-          const next = { ...current };
-          delete next[nodeId];
-          return next;
-        });
-      }
-    },
-    [loadCanvas, loadMessages],
-  );
-
   const handleRegenerateMessage = useCallback(
     async (message: Message) => {
       const treeId = message.tree_id;
@@ -1195,7 +1162,6 @@ export default function App() {
             onStartBranchSplit={handleStartBranchSplit}
             onStartConnector={handleStartConnector}
             onEditMessage={handleEditMessage}
-            onReviseAssistantMessage={handleReviseAssistantMessage}
             onRegenerateMessage={handleRegenerateMessage}
             onConfirmBranches={handleConfirmBranches}
             onForceBranchSplit={handleForceBranchSplit}

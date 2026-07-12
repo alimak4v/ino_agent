@@ -33,7 +33,6 @@ interface ChatPanelProps {
   onStartBranchSplit?: (content: string) => Promise<void>;
   onStartConnector?: (content: string) => Promise<void>;
   onEditMessage: (message: Message, content: string) => Promise<void>;
-  onReviseAssistantMessage: (message: Message, instruction: string) => Promise<void>;
   onRegenerateMessage: (message: Message) => Promise<void>;
   onConfirmBranches: (message: Message) => Promise<void>;
   onForceBranchSplit: (content: string) => Promise<void>;
@@ -75,7 +74,6 @@ export function ChatPanel({
   onStartBranchSplit,
   onStartConnector,
   onEditMessage,
-  onReviseAssistantMessage,
   onRegenerateMessage,
   onConfirmBranches,
   onForceBranchSplit,
@@ -565,11 +563,6 @@ export function ChatPanel({
                     sending={sending}
                     onCopy={() => void copyMessage(message)}
                     onEdit={() => startEditingMessage(message)}
-                    onRevise={() => {
-                      const instruction = window.prompt("How should this assistant message change?");
-                      if (!instruction?.trim()) return;
-                      void onReviseAssistantMessage(message, instruction);
-                    }}
                     onRegenerate={() => void onRegenerateMessage(message)}
                   />
                 </div>
@@ -784,26 +777,6 @@ function RegenerateIcon() {
   );
 }
 
-function ReviseIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-3.5 w-3.5"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.9"
-      viewBox="0 0 24 24"
-    >
-      <path d="M4 20h6" />
-      <path d="M14 4l6 6L9 21H3v-6Z" />
-      <path d="M15 5l4 4" />
-    </svg>
-  );
-}
-
-
 function CloseIcon() {
   return (
     <svg
@@ -950,7 +923,6 @@ function MessageActions({
   sending,
   onCopy,
   onEdit,
-  onRevise,
   onRegenerate,
 }: {
   message: Message;
@@ -959,7 +931,6 @@ function MessageActions({
   sending: boolean;
   onCopy: () => void;
   onEdit: () => void;
-  onRevise: () => void;
   onRegenerate: () => void;
 }) {
   const align = message.role === "user" ? "justify-end" : "justify-start";
@@ -984,15 +955,6 @@ function MessageActions({
       >
         {copied ? <CheckIcon /> : <CopyIcon />}
       </ActionIconButton>
-      {canRegenerate && (
-        <ActionIconButton
-          label="Revise"
-          disabled={sending}
-          onClick={onRevise}
-        >
-          <ReviseIcon />
-        </ActionIconButton>
-      )}
       {canRegenerate && (
         <ActionIconButton
           label="Regenerate"
