@@ -30,6 +30,8 @@ interface ChatPanelProps {
   panelWidth?: number;
   onSend: (content: string) => Promise<void>;
   onStartChat?: (content: string) => Promise<void>;
+  onStartBranchSplit?: (content: string) => Promise<void>;
+  onStartConnector?: (content: string) => Promise<void>;
   onEditMessage: (message: Message, content: string) => Promise<void>;
   onReviseAssistantMessage: (message: Message, instruction: string) => Promise<void>;
   onRegenerateMessage: (message: Message) => Promise<void>;
@@ -70,6 +72,8 @@ export function ChatPanel({
   panelWidth,
   onSend,
   onStartChat,
+  onStartBranchSplit,
+  onStartConnector,
   onEditMessage,
   onReviseAssistantMessage,
   onRegenerateMessage,
@@ -145,8 +149,11 @@ export function ChatPanel({
 
   const composerWritable = Boolean((selectedNode && canWrite) || (!selectedNode && canStartChat));
   const canSend = Boolean(composerWritable && !sending && (draft.trim() || attachments.length > 0));
-  const canToggleBranchMode = Boolean(selectedNode && canWrite && !sending && !attachmentBusy);
-  const canToggleConnectorMode = Boolean(selectedNode && canWrite && !sending && !attachmentBusy);
+  const canUseActionModes = Boolean(
+    ((selectedNode && canWrite) || (!selectedNode && canStartChat)) && !sending && !attachmentBusy,
+  );
+  const canToggleBranchMode = canUseActionModes;
+  const canToggleConnectorMode = canUseActionModes;
 
   const attachFiles = async (files: FileList | null) => {
     if (!files?.length || !composerWritable || sending) return;
@@ -239,6 +246,14 @@ export function ChatPanel({
     setBranchMode(false);
     setConnectorMode(false);
     if (!selectedNode) {
+      if (branchMode) {
+        await onStartBranchSplit?.(content);
+        return;
+      }
+      if (connectorMode) {
+        await onStartConnector?.(content);
+        return;
+      }
       await onStartChat?.(content);
       return;
     }

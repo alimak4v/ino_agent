@@ -20,6 +20,7 @@ import {
   type ConnectorSummary,
   type Message,
   type SettingsInput,
+  type TreeCreated,
   type TreeSummary,
 } from "./lib/api";
 import { applyThemeVars, THEMES, type ThemeName } from "./lib/theme";
@@ -644,6 +645,17 @@ export default function App() {
     [applyAssistantReply, loadCanvas, loadMessages],
   );
 
+  const createInitialTree = useCallback(
+    async (content: string): Promise<TreeCreated> => {
+      const created = await api.createTree(titleFromPrompt(content));
+      await api.setCurrentNode(created.tree_id, created.root_node_id);
+      setChatHomeVisible(false);
+      await loadCanvas(created.root_node_id, created.tree_id);
+      return created;
+    },
+    [loadCanvas],
+  );
+
   const handleSendMessage = useCallback(
     async (content: string) => {
       if (!selectedNode || !selectedNode.is_leaf) return;
@@ -658,10 +670,7 @@ export default function App() {
       setStartingChat(true);
       setChatError("");
       try {
-        const created = await api.createTree(titleFromPrompt(content));
-        await api.setCurrentNode(created.tree_id, created.root_node_id);
-        setChatHomeVisible(false);
-        await loadCanvas(created.root_node_id, created.tree_id);
+        const created = await createInitialTree(content);
         await sendMessageToNode(created.tree_id, created.root_node_id, content);
       } catch (e) {
         setChatError(String(e));
@@ -669,7 +678,81 @@ export default function App() {
         setStartingChat(false);
       }
     },
-    [loadCanvas, sendMessageToNode],
+    [createInitialTree, sendMessageToNode],
+  );
+
+  const handleStartBranchSplit = useCallback(
+    async (content: string) => {
+      let createdNodeId = "";
+      setStartingChat(true);
+      setChatError("");
+      try {
+        const created = await createInitialTree(content);
+        const treeId = created.tree_id;
+        const nodeId = created.root_node_id;
+        createdNodeId = nodeId;
+        setActiveRequests((current) => ({ ...current, [nodeId]: "force-branch-split" }));
+
+        const userMessage = await api.addUserMessage(treeId, nodeId, content);
+        if (selectedNodeIdRef.current === nodeId) {
+          setMessages([userMessage]);
+        }
+        await loadCanvas(nodeId, treeId);
+
+        const reply = await api.forceBranchSplit(treeId, nodeId);
+        await applyAssistantReply(treeId, nodeId, reply);
+      } catch (e) {
+        setChatError(String(e));
+      } finally {
+        setStartingChat(false);
+        if (createdNodeId) {
+          setActiveRequests((current) => {
+            const next = { ...current };
+            delete next[createdNodeId];
+            return next;
+          });
+        }
+      }
+    },
+    [applyAssistantReply, createInitialTree, loadCanvas],
+  );
+
+  const handleStartConnector = useCallback(
+    async (content: string) => {
+      let createdNodeId = "";
+      setStartingChat(true);
+      setChatError("");
+      try {
+        const created = await createInitialTree(content);
+        const treeId = created.tree_id;
+        const nodeId = created.root_node_id;
+        createdNodeId = nodeId;
+        setActiveRequests((current) => ({ ...current, [nodeId]: "connector" }));
+
+        const userMessage = await api.addUserMessage(treeId, nodeId, content);
+        if (selectedNodeIdRef.current === nodeId) {
+          setMessages([userMessage]);
+        }
+        await loadCanvas(nodeId, treeId);
+
+        const connector = await api.proposeConnector(treeId, nodeId, content);
+        await loadConnectors();
+        setSettingsOpen(true);
+        setStatusText(`Connector draft created: ${connector.manifest.name}`);
+      } catch (e) {
+        setChatError(String(e));
+      } finally {
+        setStartingChat(false);
+        if (createdNodeId) {
+          setActiveRequests((current) => {
+            const next = { ...current };
+            delete next[createdNodeId];
+            return next;
+          });
+        }
+      }
+    },
+    [createInitialTree, loadCanvas, loadConnectors],
   );
 
   const handleConfirmBranches = useCallback(
@@ -1109,6 +1192,8 @@ export default function App() {
             panelWidth={treeVisible && !compactLayout ? chatWidth : undefined}
             onSend={handleSendMessage}
             onStartChat={handleStartChat}
+            onStartBranchSplit={handleStartBranchSplit}
+            onStartConnector={handleStartConnector}
             onEditMessage={handleEditMessage}
             onReviseAssistantMessage={handleReviseAssistantMessage}
             onRegenerateMessage={handleRegenerateMessage}

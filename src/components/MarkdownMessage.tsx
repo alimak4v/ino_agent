@@ -234,7 +234,7 @@ function normalizeBareLatexFragments(segment: string) {
 
   return withProtectedComplexities
     .replace(
-      /((?:[A-Za-z0-9]+[_^]?(?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]+)?[+\-*/=<>., ]*)?\\(?:sqrt|frac|log|ln|sum|prod|min|max|le|ge|neq|approx|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|Omega|omega|Theta)\b(?:\{[^}\n]*\})?(?:\{[^}\n]*\})?)/g,
+      /((?:[A-Za-z0-9]+[_^]?(?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]+)?[+\-*/=<>., ]*)?\\(?:sqrt|frac|log|ln|sum|prod|min|max|le|ge|neq|approx|cdot|times|ldots|dots|cdots|vdots|ddots|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|Omega|omega|Theta)\b(?:\{[^}\n]*\})?(?:\{[^}\n]*\})?)/g,
       (_match, expression: string) => `$${expression.trim()}$`,
     )
     .replace(/@@TREEAI_MATH_(\d+)@@/g, (_match, index: string) => protectedMath[Number(index)] ?? "");

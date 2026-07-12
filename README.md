@@ -119,6 +119,12 @@ macOS-сборка с `.app`, `.dmg` и checksum:
 - Исправлен рендер сырых LaTeX-команд в обычном тексте: markdown-renderer теперь автоматически оборачивает типичные фрагменты вроде `O(n + W\sqrt{n})` и `\frac{a}{b}` в math delimiters вне code/math блоков, а системный prompt дополнительно требует не отдавать raw `\sqrt`/`\frac` в prose.
 - Измененные файлы: `src/components/MarkdownMessage.tsx`, `src-tauri/src/store.rs`, `README.md`.
 
+- Расширен whitelist auto-math для сырых LaTeX-команд: добавлены `\ldots`, `\dots`, `\cdots`, `\cdot`, `\times` и родственные точечные команды, чтобы последовательности вроде `a_1, a_2, \ldots, a_n` не оставались в prose как backslash-текст.
+- Измененные файлы: `src/components/MarkdownMessage.tsx`, `src-tauri/src/store.rs`, `README.md`.
+
+- На стартовом экране composer-кнопки split и connector больше не отключены без причины: режимы доступны до создания первого дерева и при отправке создают новый root, сохраняют исходный запрос и сразу запускают выбранное действие.
+- Измененные файлы: `src/App.tsx`, `src/components/ChatPanel.tsx`, `README.md`.
+
 ### 2026-07-06
 
 - Добавлен MVP self-written connectors: модель может сгенерировать локальный connector-пакет с `manifest.json`, `README.md` и исходниками в app data `connectors/_generated`, Settings показывает pending/enabled коннекторы и разрешает включать/выключать их вручную. Добавлено точечное AI-редактирование сохраненных assistant-сообщений через `Revise`, чтобы менять код/текст в предыдущем ответе без переписывания всей ветки.
