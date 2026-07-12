@@ -121,11 +121,12 @@ export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
 }
 
 function normalizeMathDelimiters(content: string) {
-  return mapOutsideCodeFences(content, (segment) =>
-    segment
+  return mapOutsideCodeFences(content, (segment) => {
+    const withStandardDelimiters = segment
       .replace(/\\\[([\s\S]*?)\\\]/g, (_match, math: string) => `\n\n$$\n${math.trim()}\n$$\n\n`)
-      .replace(/\\\(([^()\n]*(?:\n(?!\n)[^()\n]*)*)\\\)/g, (_match, math: string) => `$${math.trim()}$`),
-  );
+      .replace(/\\\(([^()\n]*(?:\n(?!\n)[^()\n]*)*)\\\)/g, (_match, math: string) => `$${math.trim()}$`);
+    return mapOutsideDollarMath(withStandardDelimiters, normalizeBareLatexFragments);
+  });
 }
 
 function mapOutsideCodeFences(content: string, mapSegment: (segment: string) => string) {
@@ -162,6 +163,81 @@ function mapOutsideCodeFences(content: string, mapSegment: (segment: string) => 
   }
 
   return result + mapSegment(current);
+}
+
+type MathDelimiter = "$" | "$$";
+
+function mapOutsideDollarMath(content: string, mapSegment: (segment: string) => string) {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < content.length) {
+    const start = findNextMathDelimiter(content, cursor);
+    if (!start) {
+      result += mapSegment(content.slice(cursor));
+      break;
+    }
+
+    result += mapSegment(content.slice(cursor, start.index));
+    const end = findClosingMathDelimiter(content, start.index + start.marker.length, start.marker);
+    if (end < 0) {
+      result += mapSegment(content.slice(start.index));
+      break;
+    }
+
+    result += content.slice(start.index, end + start.marker.length);
+    cursor = end + start.marker.length;
+  }
+
+  return result;
+}
+
+function findNextMathDelimiter(content: string, from: number) {
+  for (let index = from; index < content.length; index += 1) {
+    if (content[index] !== "$" || isEscaped(content, index)) continue;
+    const marker: MathDelimiter = content[index + 1] === "$" ? "$$" : "$";
+    return {
+      index,
+      marker,
+    };
+  }
+  return null;
+}
+
+function findClosingMathDelimiter(content: string, from: number, marker: MathDelimiter) {
+  for (let index = from; index < content.length; index += 1) {
+    if (content.startsWith(marker, index) && !isEscaped(content, index)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isEscaped(content: string, index: number) {
+  let slashCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && content[cursor] === "\\"; cursor -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
+
+function normalizeBareLatexFragments(segment: string) {
+  const protectedMath: string[] = [];
+  const withProtectedComplexities = segment.replace(
+    /\bO\(([^()\n]*\\[a-zA-Z]+(?:\{[^}\n]*\})?[^()\n]*)\)/g,
+    (_match, inner: string) => {
+      const token = `@@TREEAI_MATH_${protectedMath.length}@@`;
+      protectedMath.push(`$O(${inner.trim()})$`);
+      return token;
+    },
+  );
+
+  return withProtectedComplexities
+    .replace(
+      /((?:[A-Za-z0-9]+[_^]?(?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]+)?[+\-*/=<>., ]*)?\\(?:sqrt|frac|log|ln|sum|prod|min|max|le|ge|neq|approx|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|Omega|omega|Theta)\b(?:\{[^}\n]*\})?(?:\{[^}\n]*\})?)/g,
+      (_match, expression: string) => `$${expression.trim()}$`,
+    )
+    .replace(/@@TREEAI_MATH_(\d+)@@/g, (_match, index: string) => protectedMath[Number(index)] ?? "");
 }
 
 function isMermaidClass(className?: string) {
