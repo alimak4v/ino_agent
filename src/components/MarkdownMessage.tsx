@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { CodeRunnerBlock } from "./CodeRunnerBlock";
-import { GraphSteps, MermaidDiagram } from "./MermaidGraph";
+import { GraphSteps, MermaidDiagram, looksLikeGraphStepsSource } from "./MermaidGraph";
 
 interface MarkdownMessageProps {
   content: string;
@@ -75,6 +75,9 @@ export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
             return <MermaidDiagram graph={code} />;
           }
           if (isGraphStepsClass(className)) {
+            return <GraphSteps source={code} />;
+          }
+          if (looksLikeGraphStepsSource(code)) {
             return <GraphSteps source={code} />;
           }
           if (isQuizClass(className) && renderQuiz) {
@@ -215,6 +218,7 @@ function isSpecialCodeBlock(child: unknown, includeQuiz: boolean) {
   return (
     isMermaidClass(className) ||
     isGraphStepsClass(className) ||
+    looksLikeGraphStepsSource(source) ||
     Boolean(runnableLanguageFromClass(className)) ||
     (includeQuiz &&
       (isQuizClass(className) ||

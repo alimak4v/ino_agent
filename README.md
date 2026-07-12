@@ -108,6 +108,11 @@ macOS-сборка с `.app`, `.dmg` и checksum:
 
 Этот раздел нужен буквально для будущего Codex: каждый раз, когда я меняю проект, я должен дописывать сюда короткую запись с датой, сутью изменения и файлами. Не надо превращать это в release notes; это рабочая память по репозиторию.
 
+### 2026-07-12
+
+- Исправлен fallback для пошаговых Mermaid-визуализаций: JSON-массивы с `step`, `description` и `graph` теперь рендерятся через `GraphSteps` даже если модель ошибочно пометила блок как `json` или оставила fence без языка; prompt дополнительно запрещает использовать `json` fence для step-by-step визуализаций.
+- Измененные файлы: `src/components/MarkdownMessage.tsx`, `src/components/MermaidGraph.tsx`, `src-tauri/src/store.rs`, `README.md`.
+
 ### 2026-07-06
 
 - Добавлен MVP self-written connectors: модель может сгенерировать локальный connector-пакет с `manifest.json`, `README.md` и исходниками в app data `connectors/_generated`, Settings показывает pending/enabled коннекторы и разрешает включать/выключать их вручную. Добавлено точечное AI-редактирование сохраненных assistant-сообщений через `Revise`, чтобы менять код/текст в предыдущем ответе без переписывания всей ветки.

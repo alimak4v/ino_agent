@@ -161,11 +161,15 @@ function parseGraphSteps(source: string): GraphStep[] {
   }
 }
 
+export function looksLikeGraphStepsSource(source: string) {
+  return parseGraphSteps(source).length > 0;
+}
+
 function normalizeStep(item: unknown, index: number): GraphStep | null {
   if (!item || typeof item !== "object") return null;
   const value = item as Record<string, unknown>;
   const graph = typeof value.graph === "string" ? value.graph.trim() : "";
-  if (!graph) return null;
+  if (!looksLikeMermaidGraph(graph)) return null;
   const description =
     typeof value.description === "string" && value.description.trim()
       ? value.description.trim()
@@ -175,6 +179,13 @@ function normalizeStep(item: unknown, index: number): GraphStep | null {
       ? value.step
       : index + 1;
   return { step, description, graph };
+}
+
+function looksLikeMermaidGraph(graph: string) {
+  const firstLine = graph.trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
+  return /^(flowchart|graph|sequenceDiagram|stateDiagram(?:-v2)?|classDiagram|erDiagram|gitGraph|pie|xychart|timeline|gantt|mindmap|journey|quadrantChart|sankey)\b/.test(
+    firstLine,
+  );
 }
 
 function normalizeMermaidGraph(graph: string) {
