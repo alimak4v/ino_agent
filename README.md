@@ -113,6 +113,9 @@ macOS-сборка с `.app`, `.dmg` и checksum:
 - Исправлен fallback для пошаговых Mermaid-визуализаций: JSON-массивы с `step`, `description` и `graph` теперь рендерятся через `GraphSteps` даже если модель ошибочно пометила блок как `json` или оставила fence без языка; prompt дополнительно запрещает использовать `json` fence для step-by-step визуализаций.
 - Измененные файлы: `src/components/MarkdownMessage.tsx`, `src/components/MermaidGraph.tsx`, `src-tauri/src/store.rs`, `README.md`.
 
+- Уточнено поведение ассистента для широких запросов: просьбы вроде “расширь каждую/все” теперь явно сохраняют полный scope вместо выбора одного примера, а принудительный `graphsteps` prompt включается только при явной просьбе о визуализации/пошаговой схеме.
+- Измененные файлы: `src-tauri/src/store.rs`, `README.md`.
+
 ### 2026-07-06
 
 - Добавлен MVP self-written connectors: модель может сгенерировать локальный connector-пакет с `manifest.json`, `README.md` и исходниками в app data `connectors/_generated`, Settings показывает pending/enabled коннекторы и разрешает включать/выключать их вручную. Добавлено точечное AI-редактирование сохраненных assistant-сообщений через `Revise`, чтобы менять код/текст в предыдущем ответе без переписывания всей ветки.

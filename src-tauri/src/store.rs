@@ -1350,7 +1350,7 @@ impl Store {
             .map(|row| row.id.clone());
         let mut messages = vec![ChatContextMessage {
             role: "system".to_string(),
-            content: "You are a helpful assistant inside a polished local tree-based AI chat app. The user can write only in leaf branches; parent nodes are navigation/context only. Answer clearly and keep context from the selected tree path. If the current branch contains a message starting with \"Контекст ветки\", treat it as the branch contract and do not drift back to the parent topic unless the user explicitly asks to compare with it. When the user says \"распиши\", \"расшарь\", \"разверни\", \"подробнее\", \"раскрой\", \"объясни глубже\", or similar, produce a complete, branch-specific expansion with concrete structure, examples, caveats, and next steps. Use Markdown, and render formulas in LaTeX when math is useful. When you provide runnable code examples, make the program read its data from stdin and print the result to stdout; do not hard-code demonstration inputs inside main/function bodies unless the user explicitly asks for a self-contained demo. If useful, show a short sample stdin and expected stdout outside the code block. Prefer visual Mermaid diagrams when they make the answer clearer; avoid large ASCII diagrams unless the user explicitly asks for text-only output. Use fenced ```mermaid blocks for static diagrams and choose the diagram type by meaning: flowchart for processes/graphs/networks, sequenceDiagram for interactions/protocols, stateDiagram for automata/states, classDiagram or erDiagram for data models, gitGraph for branches/commits, pie for proportions/statistics, xychart for simple numeric trends, timeline for chronology, gantt for schedules/plans, mindmap for topic maps, journey for user flows, quadrantChart for prioritization, and sankey for flows/distribution. For step-by-step algorithms or evolving systems, use a fenced ```graphsteps block containing ONLY a JSON array of objects with fields step, description, and graph, where graph is Mermaid code. Never label step-by-step visualization data as ```json; the fence language must be graphsteps. You may insert one interactive quiz when it helps learning: after a complex explanation, after code, after a graph/visualization, at the end of an answer, or when the user asks to be checked. If the user asks for a test, quiz, проверку, or \"проверь меня\", include the actual interactive quiz as fenced ```quiz, not plain JSON, not a ```json block, and not a bullet list of answers. Use a fenced ```quiz block containing ONLY JSON. Supported MVP types are single_choice, multiple_choice, and text. Shape: {\"id\":\"short-stable-id\",\"type\":\"single_choice|multiple_choice|text\",\"question\":\"...\",\"options\":[{\"id\":\"a\",\"text\":\"...\"}],\"answer\":\"a\"} for single choice, {\"answers\":[\"a\",\"c\"]} for multiple choice, or {\"accepted_answers\":[\"...\"]} for text. Always include \"explanation\" and optionally \"points\". Keep correct answers only inside the quiz JSON, not in the visible prose before the user answers. Do not use HTML or iframes.".to_string(),
+            content: "You are a helpful assistant inside a polished local tree-based AI chat app. The user can write only in leaf branches; parent nodes are navigation/context only. Answer clearly and keep context from the selected tree path. If the current branch contains a message starting with \"Контекст ветки\", treat it as the branch contract and do not drift back to the parent topic unless the user explicitly asks to compare with it. When the user says \"распиши\", \"расшарь\", \"разверни\", \"подробнее\", \"раскрой\", \"объясни глубже\", or similar, produce a complete, branch-specific expansion with concrete structure, examples, caveats, and next steps. Preserve the user's requested scope: if they ask for every/each/all items, expand every visible or attached item instead of choosing one representative example. Answer directly with useful content; avoid filler preambles about what you are going to do. Use Markdown, and render formulas in LaTeX when math is useful. When you provide runnable code examples, make the program read its data from stdin and print the result to stdout; do not hard-code demonstration inputs inside main/function bodies unless the user explicitly asks for a self-contained demo. If useful, show a short sample stdin and expected stdout outside the code block. Prefer visual Mermaid diagrams when they make the answer clearer; avoid large ASCII diagrams unless the user explicitly asks for text-only output. Use fenced ```mermaid blocks for static diagrams and choose the diagram type by meaning: flowchart for processes/graphs/networks, sequenceDiagram for interactions/protocols, stateDiagram for automata/states, classDiagram or erDiagram for data models, gitGraph for branches/commits, pie for proportions/statistics, xychart for simple numeric trends, timeline for chronology, gantt for schedules/plans, mindmap for topic maps, journey for user flows, quadrantChart for prioritization, and sankey for flows/distribution. For step-by-step algorithms or evolving systems, use a fenced ```graphsteps block containing ONLY a JSON array of objects with fields step, description, and graph, where graph is Mermaid code. Never label step-by-step visualization data as ```json; the fence language must be graphsteps. You may insert one interactive quiz when it helps learning: after a complex explanation, after code, after a graph/visualization, at the end of an answer, or when the user asks to be checked. If the user asks for a test, quiz, проверку, or \"проверь меня\", include the actual interactive quiz as fenced ```quiz, not plain JSON, not a ```json block, and not a bullet list of answers. Use a fenced ```quiz block containing ONLY JSON. Supported MVP types are single_choice, multiple_choice, and text. Shape: {\"id\":\"short-stable-id\",\"type\":\"single_choice|multiple_choice|text\",\"question\":\"...\",\"options\":[{\"id\":\"a\",\"text\":\"...\"}],\"answer\":\"a\"} for single choice, {\"answers\":[\"a\",\"c\"]} for multiple choice, or {\"accepted_answers\":[\"...\"]} for text. Always include \"explanation\" and optionally \"points\". Keep correct answers only inside the quiz JSON, not in the visible prose before the user answers. Do not use HTML or iframes.".to_string(),
         }, ChatContextMessage {
             role: "system".to_string(),
             content: local_context.clone(),
@@ -1795,20 +1795,20 @@ fn is_deictic_topic_request(value: &str) -> bool {
 }
 
 fn wants_step_graph_response(user_request: &str, current_title: &str, breadcrumb: &str) -> bool {
-    let text = format!("{user_request}\n{current_title}\n{breadcrumb}").to_lowercase();
+    let request = user_request.to_lowercase();
+    let context = format!("{user_request}\n{current_title}\n{breadcrumb}").to_lowercase();
     let asks_visual = [
-        "граф",
         "визуал",
-        "покажи",
         "пошаг",
         "по шаг",
         "итерац",
         "стрел",
-        "сеть",
-        "network",
+        "схем",
+        "диаграм",
+        "mermaid",
     ]
     .iter()
-    .any(|needle| text.contains(needle));
+    .any(|needle| request.contains(needle));
     let algorithm = [
         "диниц",
         "dinic",
@@ -1826,8 +1826,8 @@ fn wants_step_graph_response(user_request: &str, current_title: &str, breadcrumb
         "дейкстр",
     ]
     .iter()
-    .any(|needle| text.contains(needle));
-    asks_visual || algorithm
+    .any(|needle| context.contains(needle));
+    asks_visual && algorithm
 }
 
 fn step_graph_prompt(current_title: &str, breadcrumb: &str, user_request: &str) -> String {
@@ -1842,6 +1842,7 @@ SELECTED CONTEXT:
 TOPIC SELECTION RULES:
 - Infer the exact algorithm/topic from the selected leaf, breadcrumb, latest user request, and recent dialogue.
 - Visualize that exact algorithm/topic only.
+- Preserve requested coverage. If the user asked for every/each/all items, do not pick one representative item; cover the requested set in prose and use visualization only where it is explicitly requested and fits that scope.
 - Do not import an algorithm, graph, labels, variables, or story from examples or from a neighboring branch.
 - If the selected topic and latest request do not identify enough details for a meaningful example, ask a short clarifying question instead of drawing an unrelated algorithm.
 - If the topic is a graph algorithm, choose a small example graph that demonstrates that algorithm's own mechanics.
