@@ -1,2 +1,5 @@
-# Dev-only: icon generation script uses stdlib only.
-# Runtime is Tauri (Rust + React).
+# Dev-only helper scripts. Runtime is Tauri (Rust + React); CI does not need these.
+# - scripts/make_icon.py: stdlib only.
+# - scripts/make_dmg_background.py: requires Pillow (run only when the DMG design
+#   changes; the generated background is committed).
+pillow>=9
