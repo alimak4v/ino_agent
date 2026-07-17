@@ -1,0 +1,22 @@
+# Render QA
+
+Current smoke check:
+
+```text
+npm run build
+```
+
+This validates TypeScript, Vite bundling, lazy-loaded chat UI, rich render block imports, and Mermaid module imports.
+
+Manual visual targets for the next QA pass:
+
+- `matrix` with `activeRow`, `activeColumn`, and `highlightCells`.
+- `vector` in row and column orientation.
+- `step_example` with active step and result.
+- static `mermaid` flowchart, sequence diagram, xychart, and mindmap.
+- `graphsteps` with at least five steps and changing highlighted graph state.
+- mobile-width chat message containing mixed Markdown, math, rich blocks, and graphsteps.
+
+Known gap:
+
+- Browser screenshot automation was not available in this session, so this pass is build-level QA only. The next production QA step should add an in-app fixture message and screenshot checks for desktop and mobile widths.
