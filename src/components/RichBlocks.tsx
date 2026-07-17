@@ -1,12 +1,23 @@
 import type { ReactNode } from "react";
 
-type RichBlockKind = "matrix" | "table" | "proof" | "source_list";
+type RichBlockKind = "matrix" | "vector" | "table" | "proof" | "source_list" | "step_example";
 
 interface MatrixBlock {
   title?: string;
   rows: unknown[][];
   rowLabels?: string[];
   columnLabels?: string[];
+  activeRow?: number;
+  activeColumn?: number;
+  highlightCells?: Array<[number, number]>;
+}
+
+interface VectorBlock {
+  title?: string;
+  values: unknown[];
+  labels?: string[];
+  orientation?: "row" | "column";
+  activeIndex?: number;
 }
 
 interface TableBlock {
@@ -39,16 +50,31 @@ interface SourceListBlock {
   sources: SourceItem[];
 }
 
+interface StepExampleBlock {
+  title?: string;
+  steps: Array<{
+    label?: string;
+    expression?: string;
+    explanation?: string;
+    result?: string;
+  }>;
+  activeStep?: number;
+}
+
 export function richBlockKindFromClass(className?: string): RichBlockKind | null {
   const match = /\blanguage-([a-zA-Z0-9_-]+)/.exec(className ?? "");
   const language = match?.[1]?.toLowerCase().replace(/-/g, "_");
   if (
     language === "matrix" ||
+    language === "vector" ||
     language === "table" ||
     language === "proof" ||
+    language === "step_example" ||
+    language === "stepexample" ||
     language === "source_list" ||
     language === "sources"
   ) {
+    if (language === "stepexample") return "step_example";
     return language === "sources" ? "source_list" : language;
   }
   return null;
@@ -70,14 +96,17 @@ export function RichBlock({
     );
   }
   if (kind === "matrix") return <MatrixRenderer block={parsed as MatrixBlock} />;
+  if (kind === "vector") return <VectorRenderer block={parsed as VectorBlock} />;
   if (kind === "table") return <TableRenderer block={parsed as TableBlock} />;
   if (kind === "proof") return <ProofRenderer block={parsed as ProofBlock} />;
+  if (kind === "step_example") return <StepExampleRenderer block={parsed as StepExampleBlock} />;
   return <SourceListRenderer block={parsed as SourceListBlock} />;
 }
 
 function MatrixRenderer({ block }: { block: MatrixBlock }) {
   const rows = block.rows;
   const hasColumnLabels = Boolean(block.columnLabels?.length);
+  const highlightedCells = new Set((block.highlightCells ?? []).map(([row, column]) => `${row}:${column}`));
   return (
     <section className="my-4 max-w-full overflow-x-auto rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3">
       {block.title && <div className="mb-2 text-sm font-semibold text-[color:var(--text)]">{block.title}</div>}
@@ -107,7 +136,15 @@ function MatrixRenderer({ block }: { block: MatrixBlock }) {
                 {row.map((cell, cellIndex) => (
                   <td
                     key={cellIndex}
-                    className="min-w-10 rounded-md bg-[color:var(--panel-soft)] px-3 py-1.5 font-mono text-[13px] text-[color:var(--text)]"
+                    className={`min-w-10 rounded-md px-3 py-1.5 font-mono text-[13px] text-[color:var(--text)] ${
+                      highlightedCells.has(`${rowIndex}:${cellIndex}`)
+                        ? "bg-amber-500/20 ring-1 ring-amber-400/70"
+                        : rowIndex === block.activeRow
+                          ? "bg-sky-500/15"
+                          : cellIndex === block.activeColumn
+                            ? "bg-emerald-500/15"
+                            : "bg-[color:var(--panel-soft)]"
+                    }`}
                   >
                     {formatCell(cell)}
                   </td>
@@ -117,6 +154,35 @@ function MatrixRenderer({ block }: { block: MatrixBlock }) {
           </tbody>
         </table>
         <div className="w-2 rounded-r-xl border-y border-r border-[color:var(--muted)]" />
+      </div>
+    </section>
+  );
+}
+
+function VectorRenderer({ block }: { block: VectorBlock }) {
+  const column = block.orientation === "column";
+  const cells = block.values.map((value, index) => {
+    const active = index === block.activeIndex;
+    return (
+      <div key={index} className={column ? "flex items-center gap-2" : "space-y-1 text-center"}>
+        {block.labels?.[index] && (
+          <div className="text-[11px] font-medium text-[color:var(--muted)]">{block.labels[index]}</div>
+        )}
+        <div
+          className={`min-w-10 rounded-md px-3 py-1.5 text-center font-mono text-[13px] text-[color:var(--text)] ${
+            active ? "bg-amber-500/20 ring-1 ring-amber-400/70" : "bg-[color:var(--panel-soft)]"
+          }`}
+        >
+          {formatCell(value)}
+        </div>
+      </div>
+    );
+  });
+  return (
+    <section className="my-4 max-w-full overflow-x-auto rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3">
+      {block.title && <div className="mb-2 text-sm font-semibold text-[color:var(--text)]">{block.title}</div>}
+      <div className={`inline-flex ${column ? "flex-col" : "items-end"} gap-1`}>
+        {cells}
       </div>
     </section>
   );
@@ -202,11 +268,47 @@ function SourceListRenderer({ block }: { block: SourceListBlock }) {
   );
 }
 
+function StepExampleRenderer({ block }: { block: StepExampleBlock }) {
+  return (
+    <section className="my-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3">
+      {block.title && <div className="mb-3 text-sm font-semibold text-[color:var(--text)]">{block.title}</div>}
+      <ol className="space-y-2">
+        {block.steps.map((step, index) => {
+          const active = block.activeStep === index;
+          return (
+            <li
+              key={index}
+              className={`grid grid-cols-[32px_minmax(0,1fr)] gap-2 rounded-lg p-1 ${
+                active ? "bg-amber-500/10" : ""
+              }`}
+            >
+              <div
+                className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
+                  active ? "bg-amber-500/20 text-[color:var(--text)]" : "bg-[color:var(--panel-soft)] text-[color:var(--muted)]"
+                }`}
+              >
+                {step.label || index + 1}
+              </div>
+              <div className="min-w-0 rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2">
+                {step.expression && <div className="font-mono text-sm text-[color:var(--text)]">{step.expression}</div>}
+                {step.explanation && <div className="mt-1 text-xs leading-5 text-[color:var(--muted)]">{step.explanation}</div>}
+                {step.result && <div className="mt-2 font-mono text-xs font-semibold text-[color:var(--text)]">{step.result}</div>}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
 function parseRichBlock(kind: RichBlockKind, source: string) {
   const json = parseJson(source);
   if (kind === "matrix") return normalizeMatrix(json ?? parseMatrixText(source));
+  if (kind === "vector") return normalizeVector(json ?? parseVectorText(source));
   if (kind === "table") return normalizeTable(json ?? parseDelimitedTable(source));
   if (kind === "proof") return normalizeProof(json);
+  if (kind === "step_example") return normalizeStepExample(json);
   return normalizeSourceList(json);
 }
 
@@ -229,6 +331,29 @@ function normalizeMatrix(value: unknown): MatrixBlock | null {
     rows: rows as unknown[][],
     rowLabels: stringArray(object.rowLabels ?? object.row_labels),
     columnLabels: stringArray(object.columnLabels ?? object.column_labels ?? object.columns),
+    activeRow: numberOrUndefined(object.activeRow ?? object.active_row),
+    activeColumn: numberOrUndefined(object.activeColumn ?? object.active_column),
+    highlightCells: cellPairs(object.highlightCells ?? object.highlight_cells),
+  };
+}
+
+function normalizeVector(value: unknown): VectorBlock | null {
+  if (Array.isArray(value)) return { values: value };
+  if (!value || typeof value !== "object") return null;
+  const object = value as Record<string, unknown>;
+  const values = Array.isArray(object.values)
+    ? object.values
+    : Array.isArray(object.vector)
+      ? object.vector
+      : null;
+  if (!values) return null;
+  const orientation = stringOrUndefined(object.orientation);
+  return {
+    title: stringOrUndefined(object.title),
+    values,
+    labels: stringArray(object.labels),
+    orientation: orientation === "column" ? "column" : "row",
+    activeIndex: numberOrUndefined(object.activeIndex ?? object.active_index),
   };
 }
 
@@ -292,6 +417,35 @@ function normalizeSourceList(value: unknown): SourceListBlock | null {
   return sources.length ? { title: stringOrUndefined(object.title), sources } : null;
 }
 
+function normalizeStepExample(value: unknown): StepExampleBlock | null {
+  if (!value || typeof value !== "object") return null;
+  const object = value as Record<string, unknown>;
+  const rawSteps = Array.isArray(object.steps) ? object.steps : null;
+  if (!rawSteps) return null;
+  const steps = rawSteps
+    .map((step): StepExampleBlock["steps"][number] | null => {
+      if (typeof step === "string") return { expression: step };
+      if (!step || typeof step !== "object") return null;
+      const record = step as Record<string, unknown>;
+      return {
+        label: stringOrUndefined(record.label ?? record.step),
+        expression: stringOrUndefined(record.expression ?? record.formula),
+        explanation: stringOrUndefined(record.explanation ?? record.reason),
+        result: stringOrUndefined(record.result),
+      };
+    })
+    .filter((step): step is StepExampleBlock["steps"][number] =>
+      Boolean(step?.label || step?.expression || step?.explanation || step?.result),
+    );
+  return steps.length
+    ? {
+        title: stringOrUndefined(object.title),
+        steps,
+        activeStep: numberOrUndefined(object.activeStep ?? object.active_step),
+      }
+    : null;
+}
+
 function parseMatrixText(source: string): unknown[][] | null {
   const rows = source
     .trim()
@@ -300,6 +454,15 @@ function parseMatrixText(source: string): unknown[][] | null {
     .filter(Boolean)
     .map((line) => line.split(/[,\s;]+/).filter(Boolean));
   return rows.length && rows.every((row) => row.length > 0) ? rows : null;
+}
+
+function parseVectorText(source: string): unknown[] | null {
+  const values = source
+    .trim()
+    .replace(/^\[|\]$/g, "")
+    .split(/[,\s;]+/)
+    .filter(Boolean);
+  return values.length ? values : null;
 }
 
 function parseDelimitedTable(source: string): TableBlock | null {
@@ -322,6 +485,23 @@ function stringOrUndefined(value: unknown): string | undefined {
 
 function stringOrNumber(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function cellPairs(value: unknown): Array<[number, number]> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const pairs = value
+    .map((item): [number, number] | null => {
+      if (!Array.isArray(item) || item.length < 2) return null;
+      const row = numberOrUndefined(item[0]);
+      const column = numberOrUndefined(item[1]);
+      return row === undefined || column === undefined ? null : [row, column];
+    })
+    .filter((item): item is [number, number] => Boolean(item));
+  return pairs.length ? pairs : undefined;
 }
 
 function formatCell(value: unknown) {

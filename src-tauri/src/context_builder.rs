@@ -345,7 +345,7 @@ fn visual_rendering_prompt() -> String {
 }
 
 fn rich_render_blocks_prompt() -> String {
-    "Rich render block module: use optional typed fenced blocks only when structure improves readability. Supported: ```matrix with JSON {\"rows\":[[...]],\"rowLabels\":[],\"columnLabels\":[]}; ```table with {\"columns\":[],\"rows\":[[...]]}; ```proof with {\"steps\":[{\"claim\":\"...\",\"reason\":\"...\",\"expression\":\"...\"}]}; ```source_list with {\"sources\":[{\"title\":\"...\",\"target\":\"...\",\"quote\":\"...\",\"score\":0.9}]}. Keep block JSON small and do not duplicate the same content in prose.".to_string()
+    "Rich render block module: use optional typed fenced blocks only when structure improves readability. Supported: ```matrix with JSON {\"rows\":[[...]],\"rowLabels\":[],\"columnLabels\":[],\"activeRow\":0,\"activeColumn\":1,\"highlightCells\":[[0,1]]}; ```vector with {\"values\":[...],\"labels\":[],\"orientation\":\"row|column\",\"activeIndex\":0}; ```step_example with {\"steps\":[{\"label\":\"1\",\"expression\":\"...\",\"explanation\":\"...\",\"result\":\"...\"}],\"activeStep\":0}; ```table with {\"columns\":[],\"rows\":[[...]]}; ```proof with {\"steps\":[{\"claim\":\"...\",\"reason\":\"...\",\"expression\":\"...\"}]}; ```source_list with {\"sources\":[{\"title\":\"...\",\"target\":\"...\",\"quote\":\"...\",\"score\":0.9}]}. Keep block JSON small and do not duplicate the same content in prose.".to_string()
 }
 
 fn quiz_rendering_prompt() -> String {
