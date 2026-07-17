@@ -1988,12 +1988,14 @@ impl Store {
                 let importance_score = (item.importance / 10.0).clamp(0.0, 1.0);
                 let access_score = ((item.access_count as f64 + 1.0).ln() / 4.0).clamp(0.0, 1.0);
                 let feedback_score = feedback_scores.get(&item.id).copied().unwrap_or(0.0);
-                let score = (0.82 * vector_score
+                let base_score = (0.82 * vector_score
                     + 0.10 * keyword_score
                     + 0.05 * importance_score
                     + 0.03 * access_score
                     + 0.08 * feedback_score)
                     .clamp(0.0, 1.0);
+                let rerank_score = rerank_memory_score(query, &query_tokens, &item);
+                let score = (0.86 * base_score + 0.14 * rerank_score).clamp(0.0, 1.0);
                 MemorySearchResult {
                     item,
                     score,
@@ -2338,12 +2340,14 @@ impl Store {
                 let age_days = ((now - source.updated_at).max(0) as f64) / 86_400.0;
                 let recency_score = (1.0 / (1.0 + age_days / 30.0)).clamp(0.0, 1.0);
                 let feedback_score = feedback_scores.get(&chunk.id).copied().unwrap_or(0.0);
-                let score = (0.62 * vector_score
+                let base_score = (0.62 * vector_score
                     + 0.28 * lexical_score
                     + 0.05 * keyword_score
                     + 0.05 * recency_score
                     + 0.08 * feedback_score)
                     .clamp(0.0, 1.0);
+                let rerank_score = rerank_knowledge_score(query, &query_tokens, &source, &chunk);
+                let score = (0.84 * base_score + 0.16 * rerank_score).clamp(0.0, 1.0);
                 KnowledgeSearchResult {
                     chunk,
                     source,
@@ -3477,6 +3481,121 @@ fn keyword_overlap_score_for_knowledge(
         .filter(|token| haystack.contains(token.as_str()))
         .count();
     (matched as f64 / query_tokens.len() as f64).clamp(0.0, 1.0)
+}
+
+fn rerank_memory_score(query: &str, query_tokens: &[String], item: &MemoryItem) -> f64 {
+    let full = normalize_search_text(&format!(
+        "{} {} {} {}",
+        item.title,
+        item.description,
+        item.target,
+        item.tags.join(" ")
+    ));
+    let title_target = normalize_search_text(&format!("{} {}", item.title, item.target));
+    let phrase = exact_phrase_score(query, &full);
+    let title_target_score = exact_phrase_score(query, &title_target)
+        .max(keyword_ratio_score(query_tokens, &title_target));
+    let proximity = ordered_token_proximity_score(query_tokens, &full);
+    (0.48 * phrase + 0.34 * title_target_score + 0.18 * proximity).clamp(0.0, 1.0)
+}
+
+fn rerank_knowledge_score(
+    query: &str,
+    query_tokens: &[String],
+    source: &KnowledgeSource,
+    chunk: &KnowledgeChunk,
+) -> f64 {
+    let full = normalize_search_text(&format!(
+        "{} {} {} {} {}",
+        source.title, source.path, source.source_type, chunk.target, chunk.text
+    ));
+    let title_target = normalize_search_text(&format!(
+        "{} {} {}",
+        source.title, source.path, chunk.target
+    ));
+    let phrase = exact_phrase_score(query, &full);
+    let title_target_score = exact_phrase_score(query, &title_target)
+        .max(keyword_ratio_score(query_tokens, &title_target));
+    let proximity = ordered_token_proximity_score(query_tokens, &full);
+    (0.50 * phrase + 0.30 * title_target_score + 0.20 * proximity).clamp(0.0, 1.0)
+}
+
+fn exact_phrase_score(query: &str, normalized_haystack: &str) -> f64 {
+    let normalized_query = normalize_search_text(query);
+    if normalized_query.chars().count() < 3 {
+        return 0.0;
+    }
+    if normalized_haystack.contains(&normalized_query) {
+        return 1.0;
+    }
+    let compact_query = normalized_query.replace(' ', "");
+    if compact_query.chars().count() >= 4
+        && normalized_haystack
+            .replace(' ', "")
+            .contains(&compact_query)
+    {
+        return 0.92;
+    }
+    0.0
+}
+
+fn keyword_ratio_score(query_tokens: &[String], normalized_haystack: &str) -> f64 {
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+    let matched = query_tokens
+        .iter()
+        .filter(|token| normalized_haystack.contains(token.as_str()))
+        .count();
+    (matched as f64 / query_tokens.len() as f64).clamp(0.0, 1.0)
+}
+
+fn ordered_token_proximity_score(query_tokens: &[String], normalized_haystack: &str) -> f64 {
+    if query_tokens.len() < 2 {
+        return keyword_ratio_score(query_tokens, normalized_haystack) * 0.5;
+    }
+    let mut cursor = 0usize;
+    let mut first = None;
+    let mut last = None;
+    let mut matched = 0usize;
+    for token in query_tokens.iter().take(8) {
+        let Some(offset) = normalized_haystack[cursor..].find(token) else {
+            continue;
+        };
+        let absolute = cursor + offset;
+        first.get_or_insert(absolute);
+        last = Some(absolute + token.len());
+        cursor = absolute + token.len();
+        matched += 1;
+    }
+    if matched == 0 {
+        return 0.0;
+    }
+    let coverage = matched as f64 / query_tokens.len().min(8) as f64;
+    let span = first
+        .zip(last)
+        .map(|(start, end)| end.saturating_sub(start).max(1))
+        .unwrap_or(usize::MAX);
+    let compactness = (1.0 / (1.0 + span as f64 / 160.0)).clamp(0.0, 1.0);
+    (0.65 * coverage + 0.35 * compactness).clamp(0.0, 1.0)
+}
+
+fn normalize_search_text(value: &str) -> String {
+    let mut output = String::new();
+    let mut last_space = true;
+    for ch in value.to_lowercase().replace('ё', "е").chars() {
+        if ch.is_alphanumeric() {
+            output.push(ch);
+            last_space = false;
+        } else if matches!(ch, '.' | '_' | '-' | '/') {
+            output.push(' ');
+            last_space = true;
+        } else if !last_space {
+            output.push(' ');
+            last_space = true;
+        }
+    }
+    output.trim().to_string()
 }
 
 fn first_line(value: &str) -> &str {
