@@ -863,9 +863,15 @@ fn run_agent_tool_turn(
     request_id: &str,
 ) -> Result<Option<AgentTurnOutput>, String> {
     let workspace_root = agent_tools::workspace_root()?;
+    let permission_profile = agent_tools::permission_profile_for_request(latest_user);
     let mut planner_messages = vec![store::ChatContextMessage {
         role: "system".to_string(),
-        content: agent_tool_planner_prompt(tree_id, node_id, &workspace_root.display().to_string()),
+        content: agent_tool_planner_prompt(
+            tree_id,
+            node_id,
+            &workspace_root.display().to_string(),
+            permission_profile,
+        ),
     }];
     planner_messages.extend(messages.iter().cloned());
 
@@ -895,6 +901,7 @@ fn run_agent_tool_turn(
         request_id,
         tree_id,
         node_id,
+        permission_profile,
         AGENT_MAX_TOOL_CALLS_PER_ROUND.min(AGENT_MAX_TOTAL_TOOL_CALLS),
     )?;
     for _round in 1..AGENT_MAX_TOOL_ROUNDS {
@@ -931,6 +938,7 @@ fn run_agent_tool_turn(
             request_id,
             tree_id,
             node_id,
+            permission_profile,
             remaining.min(AGENT_MAX_TOOL_CALLS_PER_ROUND),
         )?;
         tool_results.append(&mut next_results);
@@ -982,6 +990,7 @@ fn execute_agent_tool_calls(
     request_id: &str,
     tree_id: &str,
     node_id: &str,
+    permission_profile: agent_tools::AgentToolPermissionProfile,
     limit: usize,
 ) -> Result<Vec<agent_tools::AgentToolResult>, String> {
     calls
@@ -990,11 +999,17 @@ fn execute_agent_tool_calls(
         .map(|call| {
             if agent_tools::tool_needs_store(&call.tool) {
                 let store = &mut *lock_store(&store)?;
-                let result = agent_tools::execute_tool(Some(store), workspace_root, call);
+                let result = agent_tools::execute_tool(
+                    Some(store),
+                    workspace_root,
+                    permission_profile,
+                    call,
+                );
                 emit_agent_tool_event(window, request_id, tree_id, node_id, &result);
                 Ok(result)
             } else {
-                let result = agent_tools::execute_tool(None, workspace_root, call);
+                let result =
+                    agent_tools::execute_tool(None, workspace_root, permission_profile, call);
                 emit_agent_tool_event(window, request_id, tree_id, node_id, &result);
                 Ok(result)
             }
@@ -1281,7 +1296,13 @@ fn auto_memory_fingerprint(target: &str, latest_user: &str, assistant_answer: &s
     format!("{:016x}", hasher.finish())
 }
 
-fn agent_tool_planner_prompt(tree_id: &str, node_id: &str, workspace_root: &str) -> String {
+fn agent_tool_planner_prompt(
+    tree_id: &str,
+    node_id: &str,
+    workspace_root: &str,
+    permission_profile: agent_tools::AgentToolPermissionProfile,
+) -> String {
+    let permission_summary = agent_tools::permission_profile_summary(permission_profile);
     format!(
         r#"You are the tool planner for ino-agent. Decide whether the latest user request needs local tools.
 
@@ -1289,23 +1310,17 @@ Return ONLY compact JSON in one of these shapes:
 {{"final_answer":"..."}}
 {{"tool_calls":[{{"tool":"search_memory","args":{{"query":"...","limit":8}}}}]}}
 
-Available tools:
-- search_memory: semantic recall over long-term memory. Args: query string, optional limit number.
-- add_memory: save important long-term memory. Args: description string, target string, optional title, source_type, tags array, importance 0-10, memory_kind, confidence 0-1, stability.
-- list_files: list files inside workspace. Args: path string, optional limit number.
-- read_file: read one text file inside workspace. Args: path string, optional maxBytes number.
-- run_command: run a safe command inside workspace without shell. Args: command string, optional cwd string, timeoutMs number.
-- open_target: resolve a saved memory target into an openable chat/url/file descriptor. Args: target string.
-- index_path: index one supported file or a workspace directory into memory chunks. Args: path string, optional limitFiles and limitChunks numbers.
+{permission_summary}
 
 Rules:
-- Use tools only when the user explicitly asks to search memory, inspect files, run/check/build code, or save memory.
+- Use only tools allowed by the permission profile.
+- Use tools only when the user explicitly asks to search memory, inspect files, run/check/build code, index files, or save memory.
 - Prefer search_memory for "remember/найди в памяти/что мы сохраняли" style requests.
-- Prefer add_memory only when the user explicitly asks to remember/save a fact.
-- Prefer index_path when the user asks to index, remember a file/folder, or add local files to knowledge.
+- Prefer add_memory only when the user explicitly asks to remember/save a fact and the profile allows it.
+- Prefer index_path when the user asks to index, remember a file/folder, or add local files to knowledge and the profile allows it.
 - Prefer open_target when the user asks where a memory points or how to open a saved source.
 - Prefer list_files/read_file for file inspection.
-- Use run_command only for explicit command execution, tests, builds, or local inspection.
+- Use run_command only for explicit command execution, tests, builds, or local inspection and only when the profile allows it.
 - Never request destructive actions. Commands run without shell operators and inside workspace only.
 - For chat memories, use target "chat://tree/{tree_id}/node/{node_id}".
 - Current workspace root: {workspace_root}

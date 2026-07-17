@@ -40,8 +40,144 @@ pub struct AgentToolResult {
     pub content: Value,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolPermissionProfile {
+    ReadOnly,
+    MemoryWrite,
+    CommandRunner,
+    WorkspaceWrite,
+}
+
+impl AgentToolPermissionProfile {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::MemoryWrite => "memory_write",
+            Self::CommandRunner => "command_runner",
+            Self::WorkspaceWrite => "workspace_write",
+        }
+    }
+
+    pub fn allows(self, tool: &str) -> bool {
+        match self {
+            Self::ReadOnly => matches!(
+                tool,
+                "search_memory" | "list_files" | "read_file" | "open_target"
+            ),
+            Self::MemoryWrite => matches!(
+                tool,
+                "search_memory"
+                    | "add_memory"
+                    | "list_files"
+                    | "read_file"
+                    | "open_target"
+                    | "index_path"
+            ),
+            Self::CommandRunner => matches!(
+                tool,
+                "search_memory" | "list_files" | "read_file" | "run_command" | "open_target"
+            ),
+            Self::WorkspaceWrite => matches!(
+                tool,
+                "search_memory"
+                    | "add_memory"
+                    | "list_files"
+                    | "read_file"
+                    | "run_command"
+                    | "open_target"
+                    | "index_path"
+            ),
+        }
+    }
+}
+
 pub fn tool_needs_store(tool: &str) -> bool {
     matches!(tool, "search_memory" | "add_memory" | "index_path")
+}
+
+pub fn permission_profile_for_request(request: &str) -> AgentToolPermissionProfile {
+    let lower = request.to_lowercase();
+    let wants_write_memory = contains_any(
+        &lower,
+        &[
+            "запомни",
+            "сохрани в память",
+            "добавь в память",
+            "проиндексируй",
+            "индексируй",
+            "index",
+            "remember",
+            "save memory",
+        ],
+    );
+    let wants_command = contains_any(
+        &lower,
+        &[
+            "запусти",
+            "выполни команд",
+            "команд",
+            "проверь сбор",
+            "прогони",
+            "тест",
+            "build",
+            "check",
+            "run",
+            "command",
+            "cargo",
+            "npm",
+        ],
+    );
+    match (wants_write_memory, wants_command) {
+        (true, true) => AgentToolPermissionProfile::WorkspaceWrite,
+        (true, false) => AgentToolPermissionProfile::MemoryWrite,
+        (false, true) => AgentToolPermissionProfile::CommandRunner,
+        (false, false) => AgentToolPermissionProfile::ReadOnly,
+    }
+}
+
+pub fn permission_profile_summary(profile: AgentToolPermissionProfile) -> String {
+    let tools = [
+        (
+            "search_memory",
+            "semantic recall over long-term memory and indexed knowledge. Args: query string, optional limit number.",
+        ),
+        (
+            "add_memory",
+            "save important long-term memory. Args: description string, target string, optional title, source_type, tags array, importance 0-10, memory_kind, confidence 0-1, stability.",
+        ),
+        (
+            "list_files",
+            "list files inside workspace. Args: path string, optional limit number.",
+        ),
+        (
+            "read_file",
+            "read one text file inside workspace. Args: path string, optional maxBytes number.",
+        ),
+        (
+            "run_command",
+            "run a safe command inside workspace without shell. Args: command string, optional cwd string, timeoutMs number.",
+        ),
+        (
+            "open_target",
+            "resolve a saved memory target into an openable chat/url/file descriptor. Args: target string.",
+        ),
+        (
+            "index_path",
+            "index one supported file or a workspace directory into knowledge chunks. Args: path string, optional limitFiles and limitChunks numbers.",
+        ),
+    ];
+    let allowed = tools
+        .iter()
+        .filter(|(tool, _)| profile.allows(tool))
+        .map(|(tool, description)| format!("- {tool}: {description}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Permission profile: {}\nAllowed tools for this turn:\n{}",
+        profile.name(),
+        allowed
+    )
 }
 
 pub fn resolve_target(workspace_root: &Path, target: &str) -> Result<Value, String> {
@@ -51,8 +187,19 @@ pub fn resolve_target(workspace_root: &Path, target: &str) -> Result<Value, Stri
 pub fn execute_tool(
     store: Option<&mut Store>,
     workspace_root: &Path,
+    profile: AgentToolPermissionProfile,
     call: AgentToolCall,
 ) -> AgentToolResult {
+    if !profile.allows(&call.tool) {
+        return AgentToolResult {
+            tool: call.tool,
+            ok: false,
+            content: json!({
+                "error": "Tool is not allowed by the current permission profile.",
+                "permissionProfile": profile.name(),
+            }),
+        };
+    }
     let result = match call.tool.as_str() {
         "search_memory" => {
             let Some(store) = store else {
@@ -748,4 +895,8 @@ fn split_command(command: &str) -> Result<Vec<String>, String> {
         parts.push(current);
     }
     Ok(parts)
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
 }
