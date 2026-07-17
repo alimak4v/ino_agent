@@ -300,7 +300,7 @@ pub fn index_workspace_path(
         }
         let metadata = fs::metadata(&file).map_err(|e| e.to_string())?;
         let relative = display_workspace_path(workspace_root, &file);
-        if metadata.len() as usize > MAX_INDEX_FILE_BYTES {
+        if metadata.len() as usize > MAX_INDEX_FILE_BYTES && !is_image_file(&file) {
             skipped.push(json!({
                 "path": relative,
                 "reason": "file too large",
@@ -696,12 +696,20 @@ fn is_indexable_file(path: &Path) -> bool {
                     | "hpp"
                     | "h"
                     | "pdf"
+                    | "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "webp"
+                    | "gif"
             )
         })
         .unwrap_or(false)
 }
 
 fn read_index_text(path: &Path) -> Result<String, String> {
+    if is_image_file(path) {
+        return read_image_index_text(path);
+    }
     if path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -712,6 +720,45 @@ fn read_index_text(path: &Path) -> Result<String, String> {
     }
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+fn read_image_index_text(path: &Path) -> Result<String, String> {
+    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(file_name);
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image");
+    let mut parts = vec![
+        format!("Image file: {file_name}"),
+        format!("Image title tokens: {}", readable_path_tokens(stem)),
+        format!("Image extension: {extension}"),
+        format!("Image size bytes: {}", metadata.len()),
+        format!("Image path: {}", path.display()),
+    ];
+    for sidecar in image_sidecar_paths(path) {
+        if sidecar.is_file() {
+            let text = fs::read_to_string(&sidecar).unwrap_or_default();
+            if !text.trim().is_empty() {
+                parts.push(format!(
+                    "Sidecar description from {}:\n{}",
+                    sidecar
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("sidecar"),
+                    text.trim()
+                ));
+            }
+        }
+    }
+    Ok(parts.join("\n"))
 }
 
 fn chunk_index_text(text: &str) -> Vec<IndexedTextChunk> {
@@ -777,6 +824,14 @@ fn infer_source_type_for_path(path: &Path) -> String {
         Some(extension)
             if matches!(
                 extension.to_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "gif"
+            ) =>
+        {
+            "image".to_string()
+        }
+        Some(extension)
+            if matches!(
+                extension.to_lowercase().as_str(),
                 "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "cpp" | "hpp" | "h"
             ) =>
         {
@@ -784,6 +839,38 @@ fn infer_source_type_for_path(path: &Path) -> String {
         }
         _ => "file".to_string(),
     }
+}
+
+fn is_image_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "gif"
+            )
+        })
+}
+
+fn image_sidecar_paths(path: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    paths.push(path.with_extension(format!(
+        "{}.txt",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("image")
+    )));
+    paths.push(path.with_extension("txt"));
+    paths.push(path.with_extension("md"));
+    paths
+}
+
+fn readable_path_tokens(value: &str) -> String {
+    value
+        .replace(['_', '-', '.', '+'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn display_workspace_path(workspace_root: &Path, path: &Path) -> String {
