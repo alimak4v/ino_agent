@@ -19,6 +19,7 @@ const API_CONTEXT_SUMMARY_CHAR_LIMIT: usize = 420;
 const API_CONTEXT_MESSAGE_CHAR_LIMIT: usize = 12_000;
 const MEMORY_VECTOR_DIM: usize = 384;
 const MEMORY_GRAPH_LINK_LIMIT: usize = 6;
+const WATCHED_PATHS_SETTING: &str = "knowledge_watched_paths";
 
 fn normalize_theme(theme: &str) -> &'static str {
     match theme.trim() {
@@ -29,6 +30,14 @@ fn normalize_theme(theme: &str) -> &'static str {
     }
 }
 const NODE_COLORS: [&str; 6] = ["slate", "sky", "mint", "amber", "rose", "violet"];
+
+fn normalize_watched_path(path: &str) -> Result<String, String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("Path is empty.".to_string());
+    }
+    Ok(path.chars().take(4096).collect())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeSummary {
@@ -333,6 +342,12 @@ pub struct FeedbackInput {
     pub target: Option<String>,
     pub rating: String,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchedPath {
+    pub path: String,
 }
 
 pub struct Store {
@@ -750,6 +765,38 @@ impl Store {
 
     pub fn clear_pending_branch_plan(&self, tree_id: &str, node_id: &str) -> Result<(), String> {
         self.set_setting(&Self::branch_plan_key(tree_id, node_id), "")
+    }
+
+    pub fn list_watched_paths(&self) -> Result<Vec<WatchedPath>, String> {
+        let raw = self.get_setting(WATCHED_PATHS_SETTING, "[]")?;
+        let mut paths = serde_json::from_str::<Vec<WatchedPath>>(&raw).unwrap_or_default();
+        paths.sort_by(|a, b| a.path.cmp(&b.path));
+        paths.dedup_by(|a, b| a.path == b.path);
+        Ok(paths)
+    }
+
+    pub fn add_watched_path(&self, path: &str) -> Result<Vec<WatchedPath>, String> {
+        let path = normalize_watched_path(path)?;
+        let mut paths = self.list_watched_paths()?;
+        if !paths.iter().any(|item| item.path == path) {
+            paths.push(WatchedPath { path });
+        }
+        paths.sort_by(|a, b| a.path.cmp(&b.path));
+        self.save_watched_paths(&paths)?;
+        Ok(paths)
+    }
+
+    pub fn remove_watched_path(&self, path: &str) -> Result<Vec<WatchedPath>, String> {
+        let path = normalize_watched_path(path)?;
+        let mut paths = self.list_watched_paths()?;
+        paths.retain(|item| item.path != path);
+        self.save_watched_paths(&paths)?;
+        Ok(paths)
+    }
+
+    fn save_watched_paths(&self, paths: &[WatchedPath]) -> Result<(), String> {
+        let raw = serde_json::to_string(paths).map_err(|e| e.to_string())?;
+        self.set_setting(WATCHED_PATHS_SETTING, &raw)
     }
 
     fn remove_seed_data(&self) -> Result<(), String> {

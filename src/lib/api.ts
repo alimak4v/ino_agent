@@ -151,6 +151,10 @@ export interface RetrievalKnowledgeTrace {
   keywordScore: number;
 }
 
+export interface WatchedPath {
+  path: string;
+}
+
 export interface ConnectorManifest {
   id: string;
   name: string;
@@ -460,6 +464,13 @@ export const api = {
     isTauriRuntime()
       ? invoke<MemoryGraph>("get_memory_graph", { limit })
       : Promise.resolve({ nodes: [], links: [] }),
+  listWatchedPaths: () =>
+    isTauriRuntime() ? invoke<WatchedPath[]>("list_watched_paths") : Promise.resolve([]),
+  watchPath: (path: string) =>
+    invokeDesktop<WatchedPath[]>("watch_path", { path }),
+  unwatchPath: (path: string) =>
+    invokeDesktop<WatchedPath[]>("unwatch_path", { path }),
+  pollWatchedPaths: () => invokeDesktop<unknown>("poll_watched_paths"),
   resolveTarget: (target: string) =>
     invokeDesktop<ResolvedTarget>("resolve_target", { target }),
 };

@@ -51,6 +51,11 @@ const MIN_CHAT_WIDTH = 420;
 const TARGET_CHAT_WIDTH = 760;
 const DIVIDER_WIDTH = 8;
 
+interface KnowledgeWatchEvent {
+  ok: boolean;
+  content: unknown;
+}
+
 function getViewportWidth() {
   return typeof window === "undefined" ? 1440 : window.innerWidth;
 }
@@ -435,6 +440,40 @@ export default function App() {
         ...current,
         [payload.nodeId]: [...(current[payload.nodeId] ?? []), payload],
       }));
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<KnowledgeWatchEvent>("knowledge-watch-indexed", (event) => {
+      const payload = event.payload;
+      if (!payload.ok) {
+        const error =
+          payload.content && typeof payload.content === "object"
+            ? String((payload.content as Record<string, unknown>).error ?? "Watcher failed")
+            : "Watcher failed";
+        setStatusText(error);
+        return;
+      }
+      const content = payload.content as Record<string, unknown>;
+      const indexed = Array.isArray(content.indexed) ? content.indexed.length : 0;
+      const errors = Array.isArray(content.errors) ? content.errors.length : 0;
+      if (indexed > 0 || errors > 0) {
+        setStatusText(`Watched knowledge indexed: ${indexed} path(s), ${errors} error(s)`);
+      }
     }).then((fn) => {
       if (disposed) {
         fn();

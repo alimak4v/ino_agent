@@ -276,6 +276,16 @@ fn index_path(store: &mut Store, workspace_root: &Path, args: &Value) -> Result<
         .and_then(Value::as_u64)
         .unwrap_or(80)
         .clamp(1, MAX_INDEX_CHUNKS as u64) as usize;
+    index_workspace_path(store, workspace_root, &path, limit_files, limit_chunks)
+}
+
+pub fn index_workspace_path(
+    store: &mut Store,
+    workspace_root: &Path,
+    path: &str,
+    limit_files: usize,
+    limit_chunks: usize,
+) -> Result<Value, String> {
     let root = resolve_workspace_path(workspace_root, &path)?;
     let files = collect_indexable_files(&root, limit_files)?;
     let mut indexed_files = 0_usize;

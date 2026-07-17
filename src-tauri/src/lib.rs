@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Emitter, Manager, State, Window,
+    AppHandle, Emitter, Manager, State, Window,
 };
 
 #[derive(Clone)]
@@ -37,6 +37,13 @@ struct AgentToolEvent {
     node_id: String,
     permission_profile: String,
     tool: String,
+    ok: bool,
+    content: Value,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnowledgeWatchEvent {
     ok: bool,
     content: Value,
 }
@@ -498,9 +505,67 @@ fn get_memory_graph(
 }
 
 #[tauri::command]
+fn list_watched_paths(state: State<AppState>) -> Result<Vec<store::WatchedPath>, String> {
+    lock_store(&state.store)?.list_watched_paths()
+}
+
+#[tauri::command]
+fn watch_path(state: State<AppState>, path: String) -> Result<Vec<store::WatchedPath>, String> {
+    lock_store(&state.store)?.add_watched_path(&path)
+}
+
+#[tauri::command]
+fn unwatch_path(state: State<AppState>, path: String) -> Result<Vec<store::WatchedPath>, String> {
+    lock_store(&state.store)?.remove_watched_path(&path)
+}
+
+#[tauri::command]
+fn poll_watched_paths(state: State<AppState>) -> Result<Value, String> {
+    index_watched_paths(state.store.clone())
+}
+
+#[tauri::command]
 fn resolve_target(target: String) -> Result<Value, String> {
     let workspace_root = agent_tools::workspace_root()?;
     agent_tools::resolve_target(&workspace_root, &target)
+}
+
+fn start_knowledge_watcher(app: AppHandle, store: Arc<Mutex<store::Store>>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(45));
+        let event = match index_watched_paths(store.clone()) {
+            Ok(content) => KnowledgeWatchEvent { ok: true, content },
+            Err(error) => KnowledgeWatchEvent {
+                ok: false,
+                content: serde_json::json!({ "error": error }),
+            },
+        };
+        let _ = app.emit("knowledge-watch-indexed", event);
+    });
+}
+
+fn index_watched_paths(store: Arc<Mutex<store::Store>>) -> Result<Value, String> {
+    let workspace_root = agent_tools::workspace_root()?;
+    let watched = lock_store(&store)?.list_watched_paths()?;
+    let mut indexed = Vec::new();
+    let mut errors = Vec::new();
+    for item in watched {
+        let result = {
+            let store = &mut *lock_store(&store)?;
+            agent_tools::index_workspace_path(store, &workspace_root, &item.path, 80, 240)
+        };
+        match result {
+            Ok(content) => indexed.push(content),
+            Err(error) => errors.push(serde_json::json!({
+                "path": item.path,
+                "error": error,
+            })),
+        }
+    }
+    Ok(serde_json::json!({
+        "indexed": indexed,
+        "errors": errors,
+    }))
 }
 
 fn force_branch_split_blocking(
@@ -2206,13 +2271,16 @@ fn json_object_candidates(answer: &str) -> Vec<String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let store = store::Store::new().expect("failed to open local store");
+    let store = Arc::new(Mutex::new(store));
+    let watcher_store = store.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
-            store: Arc::new(Mutex::new(store)),
+            store: store.clone(),
         })
-        .setup(|app| {
+        .setup(move |app| {
+            start_knowledge_watcher(app.handle().clone(), watcher_store.clone());
             let show = MenuItem::with_id(app, "show", "Show ino-agent", true, None::<&str>)?;
             let new_tree =
                 MenuItem::with_id(app, "new_tree", "New Root", true, Some("CmdOrCtrl+N"))?;
@@ -2290,6 +2358,10 @@ pub fn run() {
             delete_memory,
             record_feedback,
             get_memory_graph,
+            list_watched_paths,
+            watch_path,
+            unwatch_path,
+            poll_watched_paths,
             resolve_target,
         ])
         .run(tauri::generate_context!())
