@@ -3,6 +3,7 @@ mod api;
 mod code_runner;
 mod connectors;
 mod context_builder;
+mod local_embedding;
 mod retrieval_context;
 mod store;
 

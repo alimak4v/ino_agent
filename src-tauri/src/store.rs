@@ -1,9 +1,9 @@
 use crate::context_builder;
+use crate::local_embedding;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, ToSql, Transaction};
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -17,7 +17,6 @@ const DEFAULT_THEME: &str = "Minimal Light";
 const API_CONTEXT_RECENT_MESSAGE_LIMIT: usize = 16;
 const API_CONTEXT_SUMMARY_CHAR_LIMIT: usize = 420;
 const API_CONTEXT_MESSAGE_CHAR_LIMIT: usize = 12_000;
-const MEMORY_VECTOR_DIM: usize = 384;
 const MEMORY_GRAPH_LINK_LIMIT: usize = 6;
 const WATCHED_PATHS_SETTING: &str = "knowledge_watched_paths";
 
@@ -1919,7 +1918,7 @@ impl Store {
         let confidence = input.confidence.unwrap_or(0.7).clamp(0.0, 1.0);
         let stability = normalize_memory_stability(input.stability.as_deref().unwrap_or("durable"));
         let embedding_text = memory_embedding_text(&title, &description, &tags);
-        let embedding_blob = encode_embedding(&embed_memory_text(&embedding_text));
+        let embedding_blob = local_embedding::encode(&local_embedding::embed_text(&embedding_text));
         let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
         let ts = Self::now();
         let id = Uuid::new_v4().to_string();
@@ -1973,7 +1972,7 @@ impl Store {
         let confidence = input.confidence.unwrap_or(0.7).clamp(0.0, 1.0);
         let stability = normalize_memory_stability(input.stability.as_deref().unwrap_or("durable"));
         let embedding_text = memory_embedding_text(&title, &description, &tags);
-        let embedding_blob = encode_embedding(&embed_memory_text(&embedding_text));
+        let embedding_blob = local_embedding::encode(&local_embedding::embed_text(&embedding_text));
         let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
         let ts = Self::now();
 
@@ -2061,14 +2060,15 @@ impl Store {
         if query.is_empty() {
             return Ok(Vec::new());
         }
-        let query_embedding = embed_memory_text(query);
-        let query_tokens = memory_tokens(query);
+        let query_embedding = local_embedding::embed_text(query);
+        let query_tokens = local_embedding::tokenize(query);
         let feedback_scores = self.feedback_scores_for_type("memory")?;
         let mut results = self
             .memory_rows_with_embeddings()?
             .into_iter()
             .map(|(item, embedding)| {
-                let vector_score = cosine_similarity(&query_embedding, &embedding).clamp(0.0, 1.0);
+                let vector_score = local_embedding::cosine_similarity(&query_embedding, &embedding)
+                    .clamp(0.0, 1.0);
                 let keyword_score = keyword_overlap_score(&query_tokens, &item);
                 let importance_score = (item.importance / 10.0).clamp(0.0, 1.0);
                 let access_score = ((item.access_count as f64 + 1.0).ln() / 4.0).clamp(0.0, 1.0);
@@ -2432,7 +2432,8 @@ impl Store {
         let target = clean_memory_text(&input.target, 4096, "Knowledge target")?;
         let fingerprint =
             clean_memory_text(&input.fingerprint, 256, "Knowledge chunk fingerprint")?;
-        let embedding_blob = encode_embedding(&embed_memory_text(&format!("{target}\n{text}")));
+        let embedding_blob =
+            local_embedding::encode(&local_embedding::embed_text(&format!("{target}\n{text}")));
         let ts = Self::now();
         let id = Uuid::new_v4().to_string();
         self.conn
@@ -2472,8 +2473,8 @@ impl Store {
         if query.is_empty() {
             return Ok(Vec::new());
         }
-        let query_embedding = embed_memory_text(query);
-        let query_tokens = memory_tokens(query);
+        let query_embedding = local_embedding::embed_text(query);
+        let query_tokens = local_embedding::tokenize(query);
         let fts_scores = self.knowledge_fts_scores(query, limit.saturating_mul(4).max(20))?;
         let feedback_scores = self.feedback_scores_for_type("knowledge_chunk")?;
         let now = Self::now();
@@ -2481,7 +2482,8 @@ impl Store {
             .knowledge_rows_with_embeddings()?
             .into_iter()
             .map(|(source, chunk, embedding)| {
-                let vector_score = cosine_similarity(&query_embedding, &embedding).clamp(0.0, 1.0);
+                let vector_score = local_embedding::cosine_similarity(&query_embedding, &embedding)
+                    .clamp(0.0, 1.0);
                 let lexical_score = fts_scores
                     .get(&chunk.id)
                     .copied()
@@ -2688,7 +2690,7 @@ impl Store {
             .query_map([], |row| {
                 let item = memory_item_from_row(row)?;
                 let blob: Vec<u8> = row.get(14)?;
-                Ok((item, decode_embedding(&blob)))
+                Ok((item, local_embedding::decode(&blob)))
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -2739,7 +2741,7 @@ impl Store {
                     updated_at: row.get(20)?,
                 };
                 let blob: Vec<u8> = row.get(21)?;
-                Ok((source, chunk, decode_embedding(&blob)))
+                Ok((source, chunk, local_embedding::decode(&blob)))
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -2838,7 +2840,7 @@ impl Store {
             .map(|(other, other_embedding)| {
                 (
                     other.id.clone(),
-                    cosine_similarity(embedding, other_embedding),
+                    local_embedding::cosine_similarity(embedding, other_embedding),
                 )
             })
             .filter(|(_, score)| *score >= 0.18)
@@ -3477,28 +3479,9 @@ fn memory_embedding_text(title: &str, description: &str, tags: &[String]) -> Str
     }
 }
 
-fn memory_tokens(value: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    for ch in value.to_lowercase().replace('ё', "е").chars() {
-        if ch.is_alphanumeric() {
-            current.push(ch);
-        } else if !current.is_empty() {
-            if current.chars().count() >= 2 {
-                tokens.push(current.clone());
-            }
-            current.clear();
-        }
-    }
-    if current.chars().count() >= 2 {
-        tokens.push(current);
-    }
-    tokens
-}
-
 fn fts_query_from_text(value: &str) -> Option<String> {
     let mut seen = HashSet::new();
-    let tokens = memory_tokens(value)
+    let tokens = local_embedding::tokenize(value)
         .into_iter()
         .filter(|token| seen.insert(token.clone()))
         .take(16)
@@ -3509,66 +3492,6 @@ fn fts_query_from_text(value: &str) -> Option<String> {
     } else {
         Some(tokens.join(" OR "))
     }
-}
-
-fn embed_memory_text(value: &str) -> Vec<f32> {
-    let mut vector = vec![0.0_f32; MEMORY_VECTOR_DIM];
-    let tokens = memory_tokens(value);
-    for token in &tokens {
-        add_hashed_feature(&mut vector, token, 1.0);
-        let chars = token.chars().collect::<Vec<_>>();
-        for window in chars.windows(3) {
-            let trigram = window.iter().collect::<String>();
-            add_hashed_feature(&mut vector, &trigram, 0.35);
-        }
-    }
-    let norm = vector
-        .iter()
-        .map(|value| (*value as f64) * (*value as f64))
-        .sum::<f64>()
-        .sqrt();
-    if norm > 0.0 {
-        for value in &mut vector {
-            *value /= norm as f32;
-        }
-    }
-    vector
-}
-
-fn add_hashed_feature(vector: &mut [f32], feature: &str, weight: f32) {
-    let mut hasher = DefaultHasher::new();
-    feature.hash(&mut hasher);
-    let hash = hasher.finish();
-    let index = (hash as usize) % vector.len();
-    let sign: f32 = if (hash >> 63) == 0 { 1.0 } else { -1.0 };
-    vector[index] += sign * weight;
-}
-
-fn encode_embedding(vector: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(vector.len() * 4);
-    for value in vector {
-        bytes.extend_from_slice(&value.to_le_bytes());
-    }
-    bytes
-}
-
-fn decode_embedding(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
-    if a.is_empty() || b.is_empty() {
-        return 0.0;
-    }
-    let dot = a
-        .iter()
-        .zip(b.iter())
-        .map(|(x, y)| (*x as f64) * (*y as f64))
-        .sum::<f64>();
-    dot.clamp(0.0, 1.0)
 }
 
 fn keyword_overlap_score(query_tokens: &[String], item: &MemoryItem) -> f64 {
