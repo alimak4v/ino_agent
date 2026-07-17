@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type KnowledgeSearchResult } from "../lib/api";
+import { api, type KnowledgeSearchResult, type WatchedPath } from "../lib/api";
 
 interface KnowledgePanelProps {
   onClose: () => void;
@@ -9,8 +9,20 @@ interface KnowledgePanelProps {
 export function KnowledgePanel({ onClose, onOpenTarget }: KnowledgePanelProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<KnowledgeSearchResult[]>([]);
+  const [watchedPaths, setWatchedPaths] = useState<WatchedPath[]>([]);
+  const [watchPath, setWatchPath] = useState("");
   const [busy, setBusy] = useState(false);
+  const [watchBusy, setWatchBusy] = useState(false);
   const [error, setError] = useState("");
+  const [watchStatus, setWatchStatus] = useState("");
+
+  const loadWatchedPaths = async () => {
+    setWatchedPaths(await api.listWatchedPaths());
+  };
+
+  useEffect(() => {
+    void loadWatchedPaths().catch((e) => setError(formatError(e)));
+  }, []);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -41,6 +53,52 @@ export function KnowledgePanel({ onClose, onOpenTarget }: KnowledgePanelProps) {
     };
   }, [query]);
 
+  const handleWatchPath = async () => {
+    const path = watchPath.trim();
+    if (!path) return;
+    setWatchBusy(true);
+    setError("");
+    setWatchStatus("");
+    try {
+      setWatchedPaths(await api.watchPath(path));
+      setWatchPath("");
+      setWatchStatus(`Watching ${path}`);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setWatchBusy(false);
+    }
+  };
+
+  const handleUnwatchPath = async (path: string) => {
+    setWatchBusy(true);
+    setError("");
+    setWatchStatus("");
+    try {
+      setWatchedPaths(await api.unwatchPath(path));
+      setWatchStatus(`Stopped watching ${path}`);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setWatchBusy(false);
+    }
+  };
+
+  const handlePollWatchedPaths = async () => {
+    setWatchBusy(true);
+    setError("");
+    setWatchStatus("");
+    try {
+      const result = await api.pollWatchedPaths();
+      setWatchStatus(summarizePollResult(result));
+      await loadWatchedPaths();
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setWatchBusy(false);
+    }
+  };
+
   return (
     <aside className="no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)]/95 shadow-[0_12px_40px_rgba(0,0,0,0.14)] backdrop-blur-xl lg:left-auto lg:right-3 lg:w-[720px]">
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
@@ -60,12 +118,79 @@ export function KnowledgePanel({ onClose, onOpenTarget }: KnowledgePanelProps) {
       </div>
 
       <div className="max-h-[calc(100vh-122px)] overflow-y-auto p-4">
+        <section className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-xs font-semibold text-[color:var(--text)]">Watched paths</div>
+              <div className="text-[11px] text-[color:var(--muted)]">
+                Incremental reindex runs in the background.
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={watchBusy}
+              onClick={() => void handlePollWatchedPaths()}
+              className="h-7 rounded-full border border-[color:var(--border)] px-3 text-[11px] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Reindex now
+            </button>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <input
+              value={watchPath}
+              onChange={(event) => setWatchPath(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void handleWatchPath();
+              }}
+              className="h-9 min-w-0 flex-1 rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] px-3 text-xs text-[color:var(--text)] outline-none placeholder:text-[color:var(--muted)]"
+              placeholder="Path inside workspace, for example docs or src"
+            />
+            <button
+              type="button"
+              disabled={watchBusy || !watchPath.trim()}
+              onClick={() => void handleWatchPath()}
+              className="h-9 shrink-0 rounded-lg bg-[color:var(--text)] px-3 text-xs font-medium text-[color:var(--panel)] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Watch
+            </button>
+          </div>
+          <div className="mt-3 space-y-1.5">
+            {watchedPaths.length === 0 ? (
+              <div className="text-xs text-[color:var(--muted)]">No watched paths yet.</div>
+            ) : (
+              watchedPaths.map((item) => (
+                <div
+                  key={item.path}
+                  className="flex items-center gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] px-2 py-1.5"
+                >
+                  <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-[color:var(--text)]">
+                    {item.path}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={watchBusy}
+                    onClick={() => void handleUnwatchPath(item.path)}
+                    className="h-6 rounded-full px-2 text-[11px] text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Unwatch
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          {watchStatus && (
+            <div className="mt-2 text-[11px] text-[color:var(--muted)]">{watchStatus}</div>
+          )}
+        </section>
+
+        <div className="mt-4">
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           className="h-10 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(14,116,144,0.16)]"
           placeholder="Search indexed files and documents"
         />
+        </div>
         {error && <div className="mt-3 text-xs text-red-600">{error}</div>}
         <div className="mt-3 space-y-2">
           {!query.trim() ? (
@@ -183,4 +308,22 @@ function KnowledgeRow({
 
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function summarizePollResult(result: unknown) {
+  if (!result || typeof result !== "object") return "Reindex finished.";
+  const record = result as Record<string, unknown>;
+  const indexed = Array.isArray(record.indexed) ? record.indexed : [];
+  const errors = Array.isArray(record.errors) ? record.errors : [];
+  let files = 0;
+  let chunks = 0;
+  let unchanged = 0;
+  for (const item of indexed) {
+    if (!item || typeof item !== "object") continue;
+    const value = item as Record<string, unknown>;
+    files += typeof value.indexedFiles === "number" ? value.indexedFiles : 0;
+    chunks += typeof value.indexedChunks === "number" ? value.indexedChunks : 0;
+    unchanged += typeof value.unchangedFiles === "number" ? value.unchangedFiles : 0;
+  }
+  return `Reindex finished: ${files} file(s), ${chunks} chunk(s), ${unchanged} unchanged, ${errors.length} error(s).`;
 }
