@@ -8,6 +8,15 @@ npm run build
 
 This validates TypeScript, Vite bundling, lazy-loaded chat UI, rich render block imports, and Mermaid module imports.
 
+Manual fixture:
+
+```text
+npm run dev
+open http://localhost:5173/?renderSmoke=1
+```
+
+The fixture renders matrix/vector/chart/step blocks, plain Mermaid, Mermaid fence directives, graphsteps, and math without requiring a model response.
+
 Manual visual targets for the next QA pass:
 
 - `matrix` with `activeRow`, `activeColumn`, and `highlightCells`.
@@ -20,4 +29,4 @@ Manual visual targets for the next QA pass:
 
 Known gap:
 
-- Browser screenshot automation was not available in this session, so this pass is build-level QA only. The next production QA step should add an in-app fixture message and screenshot checks for desktop and mobile widths.
+- Browser screenshot automation was not available in this session, so this pass is build-level/manual-fixture QA. The next production QA step should add screenshot checks for desktop and mobile widths.

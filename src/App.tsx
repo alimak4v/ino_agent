@@ -37,6 +37,9 @@ const ChatPanel = lazy(() =>
 const TreeCanvas = lazy(() =>
   import("./components/TreeCanvas").then((module) => ({ default: module.TreeCanvas })),
 );
+const RenderSmoke = lazy(() =>
+  import("./components/RenderSmoke").then((module) => ({ default: module.RenderSmoke })),
+);
 
 const DEFAULT_SETTINGS: ChatSettings = {
   endpoint: "https://api.openai.com/v1/chat/completions",
@@ -66,6 +69,20 @@ function getMinChatWidth(viewportWidth: number) {
 }
 
 export default function App() {
+  if (typeof window !== "undefined" && window.location.search.includes("renderSmoke=1")) {
+    return (
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-[color:var(--app-bg)] p-6 text-sm text-[color:var(--muted)]">
+            Loading render fixture
+          </div>
+        }
+      >
+        <RenderSmoke />
+      </Suspense>
+    );
+  }
+
   const [trees, setTrees] = useState<TreeSummary[]>([]);
   const [activeTreeId, setActiveTreeId] = useState<string | null>(null);
   const [nodes, setNodes] = useState<CanvasLayoutNode[]>([]);
