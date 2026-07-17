@@ -2529,7 +2529,7 @@ impl Store {
             return Ok(String::new());
         }
 
-        Ok(context_builder::retrieval_context(
+        Ok(crate::retrieval_context::build_retrieval_context(
             &results,
             &related,
             &knowledge_results,
@@ -2543,47 +2543,12 @@ impl Store {
     ) -> Result<RetrievalTrace, String> {
         let (memory_results, related_memory, knowledge_results) =
             self.retrieval_parts_for_query(query, limit, false)?;
-        Ok(RetrievalTrace {
-            query: query.trim().chars().take(500).collect(),
-            memory_results: memory_results
-                .into_iter()
-                .map(|result| RetrievalMemoryTrace {
-                    id: result.item.id,
-                    title: result.item.title,
-                    target: result.item.target,
-                    source_type: result.item.source_type,
-                    score: result.score,
-                    vector_score: result.vector_score,
-                    keyword_score: result.keyword_score,
-                })
-                .collect(),
-            related_memory: related_memory
-                .into_iter()
-                .map(|(item, label, weight)| RetrievalRelatedMemoryTrace {
-                    id: item.id,
-                    title: item.title,
-                    target: item.target,
-                    source_type: item.source_type,
-                    label,
-                    weight,
-                })
-                .collect(),
-            knowledge_results: knowledge_results
-                .into_iter()
-                .map(|result| RetrievalKnowledgeTrace {
-                    chunk_id: result.chunk.id,
-                    source_id: result.source.id,
-                    title: result.source.title,
-                    target: result.chunk.target,
-                    source_type: result.source.source_type,
-                    start_offset: result.chunk.start_offset,
-                    end_offset: result.chunk.end_offset,
-                    score: result.score,
-                    vector_score: result.vector_score,
-                    keyword_score: result.keyword_score,
-                })
-                .collect(),
-        })
+        Ok(crate::retrieval_context::build_retrieval_trace(
+            query,
+            memory_results,
+            related_memory,
+            knowledge_results,
+        ))
     }
 
     fn retrieval_parts_for_query(

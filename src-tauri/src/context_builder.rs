@@ -1,5 +1,3 @@
-use crate::store::{KnowledgeSearchResult, MemoryItem, MemorySearchResult};
-
 pub fn base_assistant_prompt() -> String {
     "You are a helpful assistant inside a local tree-based AI workspace. The user writes only in leaf branches; parent nodes are navigation/context. Answer directly, keep scope from the selected branch path, and do not drift to parent or sibling topics unless asked. If the current branch contains a message starting with \"Контекст ветки\", treat it as the branch contract. Use Markdown. Keep the global context window clean: rely only on provided current context, retrieved memory/knowledge, and recent messages.".to_string()
 }
@@ -30,95 +28,6 @@ pub fn dynamic_context_modules(
         modules.push(quiz_rendering_prompt());
     }
     modules
-}
-
-pub fn retrieval_context(
-    memory_results: &[MemorySearchResult],
-    related_memory: &[(MemoryItem, String, f64)],
-    knowledge_results: &[KnowledgeSearchResult],
-) -> String {
-    if memory_results.is_empty() && related_memory.is_empty() && knowledge_results.is_empty() {
-        return String::new();
-    }
-
-    let lines = memory_results
-        .iter()
-        .map(|result| {
-            format!(
-                "- [{}] {} - {} (target: {}; score: {:.2})",
-                result.item.source_type,
-                result.item.title,
-                clip_chars(&result.item.description, 420),
-                result.item.target,
-                result.score
-            )
-        })
-        .collect::<Vec<_>>();
-    let related_lines = related_memory
-        .iter()
-        .map(|(item, label, weight)| {
-            format!(
-                "- [{}] {} - {} (target: {}; graph: {}; weight: {:.2})",
-                item.source_type,
-                item.title,
-                clip_chars(&item.description, 360),
-                item.target,
-                label,
-                weight
-            )
-        })
-        .collect::<Vec<_>>();
-    let graph_section = if related_lines.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\n\nNearby memory graph nodes. Use them only as supporting context when connected to the query:\n{}",
-            related_lines.join("\n")
-        )
-    };
-    let knowledge_lines = knowledge_results
-        .iter()
-        .map(|result| {
-            format!(
-                "- [{}] {} - {} (target: {}; offsets: {}-{}; score: {:.2})",
-                result.source.source_type,
-                result.source.title,
-                clip_chars(&result.chunk.text, 520),
-                result.chunk.target,
-                result.chunk.start_offset,
-                result.chunk.end_offset,
-                result.score
-            )
-        })
-        .collect::<Vec<_>>();
-    let memory_section = if lines.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "Relevant global long-term memory across all chats. Use it only when it helps. If you rely on it, mention the target path/location where useful:\n{}{}",
-            lines.join("\n"),
-            graph_section
-        )
-    };
-    let knowledge_section = if knowledge_lines.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "Relevant indexed knowledge chunks. Treat these as source snippets, not personal memory. Cite target path/location when useful:\n{}",
-            knowledge_lines.join("\n")
-        )
-    };
-    let mut sections = Vec::new();
-    if !memory_section.is_empty() {
-        sections.push(memory_section);
-    }
-    if !knowledge_section.is_empty() {
-        sections.push(knowledge_section);
-    }
-    format!(
-        "Global retrieval context for the next answer:\n{}",
-        sections.join("\n\n")
-    )
 }
 
 pub fn is_deictic_topic_request(value: &str) -> bool {
@@ -350,16 +259,4 @@ fn rich_render_blocks_prompt() -> String {
 
 fn quiz_rendering_prompt() -> String {
     "Quiz module: if the user asks for a test, quiz, проверку, or \"проверь меня\", include an interactive quiz as fenced ```quiz, not plain JSON and not a bullet list of answers. The block must contain only JSON. Supported types: single_choice, multiple_choice, text. Include explanation and optional points; keep correct answers only inside the quiz JSON.".to_string()
-}
-
-fn clip_chars(value: &str, limit: usize) -> String {
-    if value.chars().count() <= limit {
-        return value.to_string();
-    }
-    let mut clipped = value
-        .chars()
-        .take(limit.saturating_sub(1))
-        .collect::<String>();
-    clipped.push_str("...");
-    clipped
 }

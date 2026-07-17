@@ -3,6 +3,7 @@ mod api;
 mod code_runner;
 mod connectors;
 mod context_builder;
+mod retrieval_context;
 mod store;
 
 use serde::{Deserialize, Serialize};
