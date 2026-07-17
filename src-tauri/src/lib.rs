@@ -44,9 +44,10 @@ struct AgentToolEvent {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentTrace {
-    permission_profile: String,
+    permission_profile: Option<String>,
     tool_results: Vec<agent_tools::AgentToolResult>,
     verifier: Option<AgentVerifierTrace>,
+    retrieval: Option<store::RetrievalTrace>,
 }
 
 #[derive(Debug, Serialize)]
@@ -779,7 +780,19 @@ fn generate_assistant_reply_blocking(
     })?;
     let message = {
         let store = &mut *lock_store(&store)?;
-        store.add_message(&tree_id, &node_id, "assistant", &answer)?
+        let trace_json = assistant_trace_json(
+            None,
+            Vec::new(),
+            None,
+            store.retrieval_trace_for_query(&latest_user, 6).ok(),
+        )?;
+        store.add_message_with_visualization(
+            &tree_id,
+            &node_id,
+            "assistant",
+            &answer,
+            trace_json,
+        )?
     };
     let _ = maybe_auto_capture_memory(
         store.clone(),
@@ -1004,15 +1017,19 @@ fn run_agent_tool_turn(
         verified_answer.to_string()
     };
     let revised = final_answer.trim() != answer.trim();
-    let trace_json = serde_json::to_string(&AgentTrace {
-        permission_profile: permission_profile.name().to_string(),
-        tool_results: tool_results.clone(),
-        verifier: Some(AgentVerifierTrace {
+    let retrieval = lock_store(&store)
+        .ok()
+        .and_then(|store| store.retrieval_trace_for_query(latest_user, 6).ok());
+    let trace_json = assistant_trace_json(
+        Some(permission_profile.name().to_string()),
+        tool_results.clone(),
+        Some(AgentVerifierTrace {
             revised,
             issues: verification.issues,
         }),
-    })
-    .map_err(|e| e.to_string())?;
+        retrieval,
+    )?
+    .unwrap_or_else(|| empty_agent_trace_json(permission_profile));
     Ok(Some(AgentTurnOutput {
         answer: final_answer,
         trace_json,
@@ -1092,16 +1109,44 @@ fn emit_agent_tool_event(
 
 fn empty_agent_trace_json(permission_profile: agent_tools::AgentToolPermissionProfile) -> String {
     serde_json::to_string(&AgentTrace {
-        permission_profile: permission_profile.name().to_string(),
+        permission_profile: Some(permission_profile.name().to_string()),
         tool_results: Vec::new(),
         verifier: None,
+        retrieval: None,
     })
     .unwrap_or_else(|_| {
         format!(
-            "{{\"permissionProfile\":\"{}\",\"toolResults\":[]}}",
+            "{{\"permissionProfile\":\"{}\",\"toolResults\":[],\"verifier\":null,\"retrieval\":null}}",
             permission_profile.name()
         )
     })
+}
+
+fn assistant_trace_json(
+    permission_profile: Option<String>,
+    tool_results: Vec<agent_tools::AgentToolResult>,
+    verifier: Option<AgentVerifierTrace>,
+    retrieval: Option<store::RetrievalTrace>,
+) -> Result<Option<String>, String> {
+    let has_trace = permission_profile.is_some()
+        || !tool_results.is_empty()
+        || verifier.is_some()
+        || retrieval.as_ref().is_some_and(|trace| {
+            !trace.memory_results.is_empty()
+                || !trace.related_memory.is_empty()
+                || !trace.knowledge_results.is_empty()
+        });
+    if !has_trace {
+        return Ok(None);
+    }
+    serde_json::to_string(&AgentTrace {
+        permission_profile,
+        tool_results,
+        verifier,
+        retrieval,
+    })
+    .map(Some)
+    .map_err(|e| e.to_string())
 }
 
 fn verify_agent_answer(

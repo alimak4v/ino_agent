@@ -962,6 +962,11 @@ function MessageContent({
   const content = message.content;
   const { visibleText, attachments } = splitAttachmentPayload(stripBranchPlanAction(content));
   const agentTrace = message.role === "assistant" ? parseAgentTrace(message.visualization_html) : null;
+  const hasTrace = agentTrace
+    ? agentTrace.toolResults.length > 0 ||
+      Boolean(agentTrace.verifier) ||
+      hasRetrievalTrace(agentTrace.retrieval)
+    : false;
   const renderQuiz =
     message.role === "assistant"
       ? (source: string) => (
@@ -994,11 +999,12 @@ function MessageContent({
           renderQuiz={renderQuiz}
         />
       )}
-      {agentTrace && agentTrace.toolResults.length > 0 && (
+      {agentTrace && hasTrace && (
         <AgentToolTraceView
           results={agentTrace.toolResults}
           permissionProfile={agentTrace.permissionProfile}
           verifier={agentTrace.verifier}
+          retrieval={agentTrace.retrieval}
           onOpenTarget={onOpenTarget}
         />
       )}
@@ -1010,12 +1016,14 @@ function AgentToolTraceView({
   results,
   permissionProfile,
   verifier,
+  retrieval,
   onOpenTarget,
   live = false,
 }: {
   results: Array<AgentToolResult | AgentToolEvent>;
   permissionProfile?: string;
   verifier?: AgentTrace["verifier"];
+  retrieval?: AgentTrace["retrieval"];
   onOpenTarget: (target: string) => Promise<void>;
   live?: boolean;
 }) {
@@ -1030,7 +1038,9 @@ function AgentToolTraceView({
         className="overflow-hidden rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] text-[13px] leading-5"
       >
         <summary className="flex cursor-pointer select-none items-center gap-2 px-3 py-2 text-xs font-medium text-[color:var(--muted)]">
-          <span>Agent tools {results.length > 0 ? `(${results.length})` : ""}</span>
+          <span>Context trace</span>
+          {results.length > 0 && <span>tools {results.length}</span>}
+          {hasRetrievalTrace(retrieval) && <span>retrieval</span>}
           {profile && (
             <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 font-mono text-[10px] text-[color:var(--text)]">
               {profile}
@@ -1038,6 +1048,9 @@ function AgentToolTraceView({
           )}
         </summary>
         <div className="space-y-2 border-t border-[color:var(--border)] p-2">
+          {hasRetrievalTrace(retrieval) && (
+            <RetrievalTraceView retrieval={retrieval} onOpenTarget={onOpenTarget} />
+          )}
           {verifier && (
             <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] p-2">
               <div className="flex items-center justify-between gap-3">
@@ -1069,6 +1082,101 @@ function AgentToolTraceView({
         </div>
       </details>
     </div>
+  );
+}
+
+function RetrievalTraceView({
+  retrieval,
+  onOpenTarget,
+}: {
+  retrieval: NonNullable<AgentTrace["retrieval"]>;
+  onOpenTarget: (target: string) => Promise<void>;
+}) {
+  const memoryCount = retrieval.memoryResults.length;
+  const relatedCount = retrieval.relatedMemory.length;
+  const knowledgeCount = retrieval.knowledgeResults.length;
+  return (
+    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] p-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-mono text-xs text-[color:var(--text)]">retrieval</div>
+        <div className="flex flex-wrap gap-1">
+          <TracePill label={`memory ${memoryCount}`} />
+          <TracePill label={`graph ${relatedCount}`} />
+          <TracePill label={`knowledge ${knowledgeCount}`} />
+        </div>
+      </div>
+      {retrieval.query && (
+        <div className="mt-1 truncate text-xs text-[color:var(--muted)]">
+          query: {retrieval.query}
+        </div>
+      )}
+      <div className="mt-2 space-y-1.5">
+        {retrieval.memoryResults.slice(0, 4).map((item) => (
+          <RetrievalTraceRow
+            key={`memory-${item.id}`}
+            title={item.title}
+            target={item.target}
+            meta={`${item.sourceType} · score ${formatScore(item.score)} · v ${formatScore(item.vectorScore)} · k ${formatScore(item.keywordScore)}`}
+            onOpenTarget={onOpenTarget}
+          />
+        ))}
+        {retrieval.relatedMemory.slice(0, 3).map((item) => (
+          <RetrievalTraceRow
+            key={`related-${item.id}`}
+            title={item.title}
+            target={item.target}
+            meta={`${item.sourceType} · ${item.label} · weight ${formatScore(item.weight)}`}
+            onOpenTarget={onOpenTarget}
+          />
+        ))}
+        {retrieval.knowledgeResults.slice(0, 4).map((item) => (
+          <RetrievalTraceRow
+            key={`knowledge-${item.chunkId}`}
+            title={item.title}
+            target={item.target}
+            meta={`${item.sourceType} · offsets ${item.startOffset}-${item.endOffset} · score ${formatScore(item.score)}`}
+            onOpenTarget={onOpenTarget}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RetrievalTraceRow({
+  title,
+  target,
+  meta,
+  onOpenTarget,
+}: {
+  title: string;
+  target: string;
+  meta: string;
+  onOpenTarget: (target: string) => Promise<void>;
+}) {
+  return (
+    <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--panel)] px-2 py-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0 truncate text-xs font-medium text-[color:var(--text)]">{title}</div>
+        <button
+          type="button"
+          onClick={() => void onOpenTarget(target)}
+          className="shrink-0 rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+        >
+          Open
+        </button>
+      </div>
+      <div className="mt-0.5 truncate font-mono text-[10px] text-[color:var(--muted)]">{target}</div>
+      <div className="mt-0.5 text-[10px] text-[color:var(--muted)]">{meta}</div>
+    </div>
+  );
+}
+
+function TracePill({ label }: { label: string }) {
+  return (
+    <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px] text-[color:var(--muted)]">
+      {label}
+    </span>
   );
 }
 
@@ -1347,6 +1455,7 @@ function parseAgentTrace(raw: string | null): AgentTrace | null {
       permissionProfile:
         typeof parsed.permissionProfile === "string" ? parsed.permissionProfile : undefined,
       verifier: normalizeAgentVerifierTrace(parsed.verifier),
+      retrieval: normalizeRetrievalTrace(parsed.retrieval),
       toolResults: parsed.toolResults.filter(
         (item): item is AgentToolResult =>
           Boolean(item) &&
@@ -1360,6 +1469,75 @@ function parseAgentTrace(raw: string | null): AgentTrace | null {
   }
 }
 
+function normalizeRetrievalTrace(value: unknown): AgentTrace["retrieval"] {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    query: typeof record.query === "string" ? record.query : "",
+    memoryResults: normalizeTraceArray(record.memoryResults, normalizeRetrievalMemory),
+    relatedMemory: normalizeTraceArray(record.relatedMemory, normalizeRetrievalRelatedMemory),
+    knowledgeResults: normalizeTraceArray(record.knowledgeResults, normalizeRetrievalKnowledge),
+  };
+}
+
+function normalizeTraceArray<T>(value: unknown, mapper: (value: unknown) => T | null): T[] {
+  return Array.isArray(value) ? value.map(mapper).filter((item): item is T => Boolean(item)) : [];
+}
+
+function normalizeRetrievalMemory(value: unknown): NonNullable<AgentTrace["retrieval"]>["memoryResults"][number] | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const id = stringField(record.id);
+  const title = stringField(record.title);
+  const target = stringField(record.target);
+  if (!id || !target) return null;
+  return {
+    id,
+    title: title || target,
+    target,
+    sourceType: stringField(record.sourceType) || "memory",
+    score: numberField(record.score),
+    vectorScore: numberField(record.vectorScore),
+    keywordScore: numberField(record.keywordScore),
+  };
+}
+
+function normalizeRetrievalRelatedMemory(value: unknown): NonNullable<AgentTrace["retrieval"]>["relatedMemory"][number] | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const id = stringField(record.id);
+  const target = stringField(record.target);
+  if (!id || !target) return null;
+  return {
+    id,
+    title: stringField(record.title) || target,
+    target,
+    sourceType: stringField(record.sourceType) || "memory",
+    label: stringField(record.label) || "related",
+    weight: numberField(record.weight),
+  };
+}
+
+function normalizeRetrievalKnowledge(value: unknown): NonNullable<AgentTrace["retrieval"]>["knowledgeResults"][number] | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const chunkId = stringField(record.chunkId);
+  const target = stringField(record.target);
+  if (!chunkId || !target) return null;
+  return {
+    chunkId,
+    sourceId: stringField(record.sourceId),
+    title: stringField(record.title) || target,
+    target,
+    sourceType: stringField(record.sourceType) || "knowledge",
+    startOffset: numberField(record.startOffset),
+    endOffset: numberField(record.endOffset),
+    score: numberField(record.score),
+    vectorScore: numberField(record.vectorScore),
+    keywordScore: numberField(record.keywordScore),
+  };
+}
+
 function normalizeAgentVerifierTrace(value: unknown): AgentTrace["verifier"] {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
@@ -1369,6 +1547,27 @@ function normalizeAgentVerifierTrace(value: unknown): AgentTrace["verifier"] {
       ? record.issues.filter((item): item is string => typeof item === "string")
       : [],
   };
+}
+
+function hasRetrievalTrace(retrieval: AgentTrace["retrieval"] | undefined): retrieval is NonNullable<AgentTrace["retrieval"]> {
+  return Boolean(
+    retrieval &&
+      (retrieval.memoryResults.length > 0 ||
+        retrieval.relatedMemory.length > 0 ||
+        retrieval.knowledgeResults.length > 0),
+  );
+}
+
+function stringField(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function numberField(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function formatScore(value: number) {
+  return value.toFixed(2);
 }
 
 function summarizeToolContent(content: unknown) {

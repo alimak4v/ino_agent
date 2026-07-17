@@ -109,6 +109,46 @@ export interface AgentTrace {
     revised: boolean;
     issues: string[];
   } | null;
+  retrieval?: RetrievalTrace | null;
+}
+
+export interface RetrievalTrace {
+  query: string;
+  memoryResults: RetrievalMemoryTrace[];
+  relatedMemory: RetrievalRelatedMemoryTrace[];
+  knowledgeResults: RetrievalKnowledgeTrace[];
+}
+
+export interface RetrievalMemoryTrace {
+  id: string;
+  title: string;
+  target: string;
+  sourceType: string;
+  score: number;
+  vectorScore: number;
+  keywordScore: number;
+}
+
+export interface RetrievalRelatedMemoryTrace {
+  id: string;
+  title: string;
+  target: string;
+  sourceType: string;
+  label: string;
+  weight: number;
+}
+
+export interface RetrievalKnowledgeTrace {
+  chunkId: string;
+  sourceId: string;
+  title: string;
+  target: string;
+  sourceType: string;
+  startOffset: number;
+  endOffset: number;
+  score: number;
+  vectorScore: number;
+  keywordScore: number;
 }
 
 export interface ConnectorManifest {

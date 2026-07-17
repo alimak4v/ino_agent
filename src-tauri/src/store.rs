@@ -280,6 +280,53 @@ pub struct KnowledgeSearchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RetrievalTrace {
+    pub query: String,
+    pub memory_results: Vec<RetrievalMemoryTrace>,
+    pub related_memory: Vec<RetrievalRelatedMemoryTrace>,
+    pub knowledge_results: Vec<RetrievalKnowledgeTrace>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalMemoryTrace {
+    pub id: String,
+    pub title: String,
+    pub target: String,
+    pub source_type: String,
+    pub score: f64,
+    pub vector_score: f64,
+    pub keyword_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalRelatedMemoryTrace {
+    pub id: String,
+    pub title: String,
+    pub target: String,
+    pub source_type: String,
+    pub label: String,
+    pub weight: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalKnowledgeTrace {
+    pub chunk_id: String,
+    pub source_id: String,
+    pub title: String,
+    pub target: String,
+    pub source_type: String,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub score: f64,
+    pub vector_score: f64,
+    pub keyword_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FeedbackInput {
     pub target_type: String,
     pub target_id: String,
@@ -2318,11 +2365,84 @@ impl Store {
     }
 
     pub fn memory_context_for_query(&self, query: &str, limit: usize) -> Result<String, String> {
-        let results = self.search_memory(query, limit)?;
-        let knowledge_results = self.search_knowledge(query, limit)?;
+        let (results, related, knowledge_results) =
+            self.retrieval_parts_for_query(query, limit, true)?;
         if results.is_empty() && knowledge_results.is_empty() {
             return Ok(String::new());
         }
+
+        Ok(context_builder::retrieval_context(
+            &results,
+            &related,
+            &knowledge_results,
+        ))
+    }
+
+    pub fn retrieval_trace_for_query(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<RetrievalTrace, String> {
+        let (memory_results, related_memory, knowledge_results) =
+            self.retrieval_parts_for_query(query, limit, false)?;
+        Ok(RetrievalTrace {
+            query: query.trim().chars().take(500).collect(),
+            memory_results: memory_results
+                .into_iter()
+                .map(|result| RetrievalMemoryTrace {
+                    id: result.item.id,
+                    title: result.item.title,
+                    target: result.item.target,
+                    source_type: result.item.source_type,
+                    score: result.score,
+                    vector_score: result.vector_score,
+                    keyword_score: result.keyword_score,
+                })
+                .collect(),
+            related_memory: related_memory
+                .into_iter()
+                .map(|(item, label, weight)| RetrievalRelatedMemoryTrace {
+                    id: item.id,
+                    title: item.title,
+                    target: item.target,
+                    source_type: item.source_type,
+                    label,
+                    weight,
+                })
+                .collect(),
+            knowledge_results: knowledge_results
+                .into_iter()
+                .map(|result| RetrievalKnowledgeTrace {
+                    chunk_id: result.chunk.id,
+                    source_id: result.source.id,
+                    title: result.source.title,
+                    target: result.chunk.target,
+                    source_type: result.source.source_type,
+                    start_offset: result.chunk.start_offset,
+                    end_offset: result.chunk.end_offset,
+                    score: result.score,
+                    vector_score: result.vector_score,
+                    keyword_score: result.keyword_score,
+                })
+                .collect(),
+        })
+    }
+
+    fn retrieval_parts_for_query(
+        &self,
+        query: &str,
+        limit: usize,
+        track_access: bool,
+    ) -> Result<
+        (
+            Vec<MemorySearchResult>,
+            Vec<(MemoryItem, String, f64)>,
+            Vec<KnowledgeSearchResult>,
+        ),
+        String,
+    > {
+        let results = self.search_memory_internal(query, limit, track_access)?;
+        let knowledge_results = self.search_knowledge(query, limit)?;
         let base_ids = results
             .iter()
             .map(|result| result.item.id.clone())
@@ -2368,12 +2488,7 @@ impl Store {
                 .then_with(|| b.0.updated_at.cmp(&a.0.updated_at))
         });
         related.truncate(limit.min(8));
-
-        Ok(context_builder::retrieval_context(
-            &results,
-            &related,
-            &knowledge_results,
-        ))
+        Ok((results, related, knowledge_results))
     }
 
     fn memory_item_by_id(&self, id: &str) -> Result<MemoryItem, String> {
