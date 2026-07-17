@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   api,
+  type MemoryDecision,
   type MemoryGraph,
   type MemoryInput,
   type MemoryItem,
@@ -19,6 +20,7 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
   const [results, setResults] = useState<MemorySearchResult[]>([]);
   const [recent, setRecent] = useState<MemoryItem[]>([]);
   const [graph, setGraph] = useState<MemoryGraph>(EMPTY_GRAPH);
+  const [decisions, setDecisions] = useState<MemoryDecision[]>([]);
   const [selectedMemoryId, setSelectedMemoryId] = useState("");
   const [editingMemoryId, setEditingMemoryId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,12 +41,14 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
     setBusy(true);
     setError("");
     try {
-      const [nextRecent, nextGraph] = await Promise.all([
+      const [nextRecent, nextGraph, nextDecisions] = await Promise.all([
         api.listMemoryRecent(24),
         api.getMemoryGraph(36),
+        api.listMemoryDecisions(24),
       ]);
       setRecent(nextRecent);
       setGraph(nextGraph);
+      setDecisions(nextDecisions);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -425,6 +429,7 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
             graph={graph}
             selected={selectedMemory}
             selectedId={selectedMemoryId}
+            decisions={decisions}
             onSelect={setSelectedMemoryId}
           />
         </div>
@@ -614,11 +619,13 @@ function MemoryGraphDebug({
   graph,
   selected,
   selectedId,
+  decisions,
   onSelect,
 }: {
   graph: MemoryGraph;
   selected: MemoryItem | null;
   selectedId: string;
+  decisions: MemoryDecision[];
   onSelect: (id: string) => void;
 }) {
   const degrees = useMemo(() => {
@@ -656,6 +663,7 @@ function MemoryGraphDebug({
       <div className="grid grid-cols-3 gap-2 text-[11px] text-[color:var(--muted)]">
         <DebugMetric label="nodes" value={graph.nodes.length} />
         <DebugMetric label="links" value={graph.links.length} />
+        <DebugMetric label="decisions" value={decisions.length} />
         <DebugMetric
           label="selected"
           value={selected ? String(degrees.get(selected.id) ?? 0) : "-"}
@@ -681,6 +689,35 @@ function MemoryGraphDebug({
           <div className="text-[11px] text-[color:var(--muted)]">Click a graph node.</div>
         )}
       </div>
+
+      <details open className="rounded-lg border border-[color:var(--border)] p-2">
+        <summary className="cursor-pointer text-[11px] font-medium text-[color:var(--text)]">
+          Auto memory policy
+        </summary>
+        <div className="mt-2 max-h-44 space-y-1 overflow-y-auto pr-1">
+          {decisions.length === 0 ? (
+            <div className="text-[11px] text-[color:var(--muted)]">No decisions yet.</div>
+          ) : (
+            decisions.map((decision) => (
+              <div
+                key={decision.id}
+                className="rounded-lg border border-[color:var(--border)] px-2 py-1.5 text-[11px] text-[color:var(--muted)]"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-[color:var(--text)]">
+                    {decision.action} / {decision.reason}
+                  </span>
+                  <span>{formatDecisionScore(decision.score)}</span>
+                </div>
+                <div className="mt-1 truncate">
+                  {decision.itemTitle || decision.itemDescription || decision.target}
+                </div>
+                <code className="mt-1 block truncate">{decision.target}</code>
+              </div>
+            ))
+          )}
+        </div>
+      </details>
 
       <details open className="rounded-lg border border-[color:var(--border)] p-2">
         <summary className="cursor-pointer text-[11px] font-medium text-[color:var(--text)]">
@@ -806,6 +843,10 @@ function shortId(value: string) {
 
 function formatWeight(value: number) {
   return value.toFixed(3);
+}
+
+function formatDecisionScore(value: number | null | undefined) {
+  return typeof value === "number" ? value.toFixed(2) : "-";
 }
 
 function formatError(value: unknown) {

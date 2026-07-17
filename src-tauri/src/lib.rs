@@ -485,6 +485,14 @@ fn list_memory_recent(
 }
 
 #[tauri::command]
+fn list_memory_decisions(
+    state: State<AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<store::MemoryDecision>, String> {
+    lock_store(&state.store)?.list_memory_decisions(limit.unwrap_or(24))
+}
+
+#[tauri::command]
 fn delete_memory(state: State<AppState>, id: String) -> Result<(), String> {
     let store = &mut *lock_store(&state.store)?;
     store.delete_memory(&id)
@@ -1300,13 +1308,33 @@ fn maybe_auto_capture_memory(
     latest_user: &str,
     assistant_answer: &str,
 ) -> Result<usize, String> {
-    if !looks_auto_memory_worthy(latest_user, assistant_answer) {
-        return Ok(0);
-    }
-
     let current_target = chat_target(tree_id, node_id, latest_user_id);
     let fingerprint = auto_memory_fingerprint(&current_target, latest_user, assistant_answer);
     if lock_store(&store)?.has_memory_ingest_run(&fingerprint)? {
+        record_auto_memory_decision(
+            &store,
+            &fingerprint,
+            &current_target,
+            "skipped",
+            "already_processed",
+            None,
+            Some(latest_user),
+            None,
+        )?;
+        return Ok(0);
+    }
+    if !looks_auto_memory_worthy(latest_user, assistant_answer) {
+        let store = &mut *lock_store(&store)?;
+        store.record_memory_decision(
+            &fingerprint,
+            &current_target,
+            "skipped",
+            "low_signal_turn",
+            None,
+            Some(latest_user),
+            None,
+        )?;
+        store.mark_memory_ingest_run(&fingerprint, "chat-turn", &current_target)?;
         return Ok(0);
     }
 
@@ -1327,6 +1355,15 @@ fn maybe_auto_capture_memory(
     let raw_plan = api::chat_completion(settings, &extractor_messages)?;
     let Some(plan) = parse_auto_memory_plan(&raw_plan) else {
         let store = &mut *lock_store(&store)?;
+        store.record_memory_decision(
+            &fingerprint,
+            &current_target,
+            "skipped",
+            "extractor_parse_failed",
+            None,
+            Some(&raw_plan),
+            None,
+        )?;
         store.mark_memory_ingest_run(&fingerprint, "chat-turn", &current_target)?;
         return Ok(0);
     };
@@ -1335,10 +1372,30 @@ fn maybe_auto_capture_memory(
     for item in plan.items.into_iter().take(3) {
         let description = item.description.trim();
         if description.chars().count() < 16 {
+            record_auto_memory_decision(
+                &store,
+                &fingerprint,
+                &current_target,
+                "skipped",
+                "description_too_short",
+                item.title.as_deref(),
+                Some(description),
+                item.importance,
+            )?;
             continue;
         }
         let importance = item.importance.unwrap_or(6.0).clamp(0.0, 10.0);
         if importance < 6.0 {
+            record_auto_memory_decision(
+                &store,
+                &fingerprint,
+                &current_target,
+                "skipped",
+                "importance_below_threshold",
+                item.title.as_deref(),
+                Some(description),
+                Some(importance),
+            )?;
             continue;
         }
         let is_duplicate = {
@@ -1349,6 +1406,16 @@ fn maybe_auto_capture_memory(
                 .is_some_and(|result| result.score >= 0.92)
         };
         if is_duplicate {
+            record_auto_memory_decision(
+                &store,
+                &fingerprint,
+                &current_target,
+                "skipped",
+                "duplicate_memory",
+                item.title.as_deref(),
+                Some(description),
+                Some(importance),
+            )?;
             continue;
         }
 
@@ -1381,12 +1448,54 @@ fn maybe_auto_capture_memory(
             stability: item.stability,
         };
         let store = &mut *lock_store(&store)?;
-        store.add_memory(input)?;
+        let memory = store.add_memory(input)?;
+        store.record_memory_decision(
+            &fingerprint,
+            &current_target,
+            "saved",
+            "accepted_by_policy",
+            Some(&memory.title),
+            Some(&memory.description),
+            Some(memory.importance),
+        )?;
         saved += 1;
     }
     let store = &mut *lock_store(&store)?;
+    if saved == 0 {
+        store.record_memory_decision(
+            &fingerprint,
+            &current_target,
+            "skipped",
+            "no_items_passed_policy",
+            None,
+            Some(latest_user),
+            None,
+        )?;
+    }
     store.mark_memory_ingest_run(&fingerprint, "chat-turn", &current_target)?;
     Ok(saved)
+}
+
+fn record_auto_memory_decision(
+    store: &Arc<Mutex<store::Store>>,
+    fingerprint: &str,
+    target: &str,
+    action: &str,
+    reason: &str,
+    item_title: Option<&str>,
+    item_description: Option<&str>,
+    score: Option<f64>,
+) -> Result<(), String> {
+    let store = &mut *lock_store(store)?;
+    store.record_memory_decision(
+        fingerprint,
+        target,
+        action,
+        reason,
+        item_title,
+        item_description,
+        score,
+    )
 }
 
 fn auto_memory_extractor_prompt() -> String {
@@ -2375,6 +2484,7 @@ pub fn run() {
             search_memory,
             search_knowledge,
             list_memory_recent,
+            list_memory_decisions,
             delete_memory,
             record_feedback,
             get_memory_graph,

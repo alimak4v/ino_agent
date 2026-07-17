@@ -270,6 +270,18 @@ export interface MemorySearchResult {
   keywordScore: number;
 }
 
+export interface MemoryDecision {
+  id: string;
+  fingerprint: string;
+  target: string;
+  action: string;
+  reason: string;
+  itemTitle?: string | null;
+  itemDescription?: string | null;
+  score?: number | null;
+  createdAt: number;
+}
+
 export interface MemoryLink {
   sourceId: string;
   targetId: string;
@@ -457,6 +469,10 @@ export const api = {
   listMemoryRecent: (limit = 24) =>
     isTauriRuntime()
       ? invoke<MemoryItem[]>("list_memory_recent", { limit })
+      : Promise.resolve([]),
+  listMemoryDecisions: (limit = 24) =>
+    isTauriRuntime()
+      ? invoke<MemoryDecision[]>("list_memory_decisions", { limit })
       : Promise.resolve([]),
   deleteMemory: (id: string) => invokeDesktop<void>("delete_memory", { id }),
   recordFeedback: (input: FeedbackInput) => invokeDesktop<void>("record_feedback", { input }),

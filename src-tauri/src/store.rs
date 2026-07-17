@@ -210,6 +210,20 @@ pub struct MemorySearchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MemoryDecision {
+    pub id: String,
+    pub fingerprint: String,
+    pub target: String,
+    pub action: String,
+    pub reason: String,
+    pub item_title: Option<String>,
+    pub item_description: Option<String>,
+    pub score: Option<f64>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MemoryLink {
     pub source_id: String,
     pub target_id: String,
@@ -467,6 +481,17 @@ impl Store {
                     target TEXT NOT NULL,
                     created_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS memory_decisions (
+                    id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    item_title TEXT,
+                    item_description TEXT,
+                    score REAL,
+                    created_at INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS knowledge_sources (
                     id TEXT PRIMARY KEY,
                     path TEXT NOT NULL UNIQUE,
@@ -646,6 +671,17 @@ impl Store {
                     fingerprint TEXT PRIMARY KEY,
                     source_kind TEXT NOT NULL,
                     target TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS memory_decisions (
+                    id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    item_title TEXT,
+                    item_description TEXT,
+                    score REAL,
                     created_at INTEGER NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS knowledge_sources (
@@ -2240,6 +2276,75 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    pub fn record_memory_decision(
+        &mut self,
+        fingerprint: &str,
+        target: &str,
+        action: &str,
+        reason: &str,
+        item_title: Option<&str>,
+        item_description: Option<&str>,
+        score: Option<f64>,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO memory_decisions(
+                    id, fingerprint, target, action, reason, item_title, item_description, score, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    fingerprint,
+                    target,
+                    action,
+                    reason,
+                    item_title.map(|value| value.chars().take(160).collect::<String>()),
+                    item_description.map(|value| value.chars().take(420).collect::<String>()),
+                    score,
+                    Self::now(),
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "DELETE FROM memory_decisions
+                 WHERE id NOT IN (
+                    SELECT id FROM memory_decisions ORDER BY created_at DESC LIMIT 240
+                 )",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn list_memory_decisions(&self, limit: usize) -> Result<Vec<MemoryDecision>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, fingerprint, target, action, reason, item_title, item_description, score, created_at
+                 FROM memory_decisions
+                 ORDER BY created_at DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![limit.clamp(1, 80) as i64], |row| {
+                Ok(MemoryDecision {
+                    id: row.get(0)?,
+                    fingerprint: row.get(1)?,
+                    target: row.get(2)?,
+                    action: row.get(3)?,
+                    reason: row.get(4)?,
+                    item_title: row.get(5)?,
+                    item_description: row.get(6)?,
+                    score: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn prepare_knowledge_source(
