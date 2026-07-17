@@ -11,8 +11,7 @@ This validates TypeScript, Vite bundling, lazy-loaded chat UI, rich render block
 Manual fixture:
 
 ```text
-npm run dev
-open http://localhost:5173/?renderSmoke=1
+npm run dev:render-smoke
 ```
 
 The fixture renders matrix/vector/chart/step blocks, plain Mermaid, Mermaid fence directives, graphsteps, and math without requiring a model response.

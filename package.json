@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:render-smoke": "vite --open /?renderSmoke=1",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
