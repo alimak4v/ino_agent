@@ -92,15 +92,18 @@ export interface AgentToolResult {
   tool: string;
   ok: boolean;
   content: unknown;
+  permissionProfile?: string;
 }
 
 export interface AgentToolEvent extends AgentToolResult {
   requestId: string;
   treeId: string;
   nodeId: string;
+  permissionProfile: string;
 }
 
 export interface AgentTrace {
+  permissionProfile?: string;
   toolResults: AgentToolResult[];
 }
 

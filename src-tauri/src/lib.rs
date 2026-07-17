@@ -35,6 +35,7 @@ struct AgentToolEvent {
     request_id: String,
     tree_id: String,
     node_id: String,
+    permission_profile: String,
     tool: String,
     ok: bool,
     content: Value,
@@ -43,6 +44,7 @@ struct AgentToolEvent {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentTrace {
+    permission_profile: String,
     tool_results: Vec<agent_tools::AgentToolResult>,
 }
 
@@ -889,7 +891,7 @@ fn run_agent_tool_turn(
             .filter(|answer| !answer.is_empty())
             .map(|answer| AgentTurnOutput {
                 answer,
-                trace_json: empty_agent_trace_json(),
+                trace_json: empty_agent_trace_json(permission_profile),
             }));
     }
 
@@ -946,6 +948,7 @@ fn run_agent_tool_turn(
     let tool_results_json =
         serde_json::to_string_pretty(&tool_results).map_err(|e| e.to_string())?;
     let trace_json = serde_json::to_string(&AgentTrace {
+        permission_profile: permission_profile.name().to_string(),
         tool_results: tool_results.clone(),
     })
     .map_err(|e| e.to_string())?;
@@ -1005,12 +1008,26 @@ fn execute_agent_tool_calls(
                     permission_profile,
                     call,
                 );
-                emit_agent_tool_event(window, request_id, tree_id, node_id, &result);
+                emit_agent_tool_event(
+                    window,
+                    request_id,
+                    tree_id,
+                    node_id,
+                    permission_profile,
+                    &result,
+                );
                 Ok(result)
             } else {
                 let result =
                     agent_tools::execute_tool(None, workspace_root, permission_profile, call);
-                emit_agent_tool_event(window, request_id, tree_id, node_id, &result);
+                emit_agent_tool_event(
+                    window,
+                    request_id,
+                    tree_id,
+                    node_id,
+                    permission_profile,
+                    &result,
+                );
                 Ok(result)
             }
         })
@@ -1022,6 +1039,7 @@ fn emit_agent_tool_event(
     request_id: &str,
     tree_id: &str,
     node_id: &str,
+    permission_profile: agent_tools::AgentToolPermissionProfile,
     result: &agent_tools::AgentToolResult,
 ) {
     let _ = window.emit(
@@ -1030,6 +1048,7 @@ fn emit_agent_tool_event(
             request_id: request_id.to_string(),
             tree_id: tree_id.to_string(),
             node_id: node_id.to_string(),
+            permission_profile: permission_profile.name().to_string(),
             tool: result.tool.clone(),
             ok: result.ok,
             content: result.content.clone(),
@@ -1037,11 +1056,17 @@ fn emit_agent_tool_event(
     );
 }
 
-fn empty_agent_trace_json() -> String {
+fn empty_agent_trace_json(permission_profile: agent_tools::AgentToolPermissionProfile) -> String {
     serde_json::to_string(&AgentTrace {
+        permission_profile: permission_profile.name().to_string(),
         tool_results: Vec::new(),
     })
-    .unwrap_or_else(|_| "{\"toolResults\":[]}".to_string())
+    .unwrap_or_else(|_| {
+        format!(
+            "{{\"permissionProfile\":\"{}\",\"toolResults\":[]}}",
+            permission_profile.name()
+        )
+    })
 }
 
 fn parse_agent_decision(raw: &str) -> Option<AgentDecision> {

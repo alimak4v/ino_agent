@@ -611,6 +611,7 @@ export function ChatPanel({
                   {agentToolEvents.length > 0 && (
                     <AgentToolTraceView
                       results={agentToolEvents}
+                      permissionProfile={agentToolEvents[0]?.permissionProfile}
                       live
                       onOpenTarget={onOpenTarget}
                     />
@@ -996,6 +997,7 @@ function MessageContent({
       {agentTrace && agentTrace.toolResults.length > 0 && (
         <AgentToolTraceView
           results={agentTrace.toolResults}
+          permissionProfile={agentTrace.permissionProfile}
           onOpenTarget={onOpenTarget}
         />
       )}
@@ -1005,21 +1007,32 @@ function MessageContent({
 
 function AgentToolTraceView({
   results,
+  permissionProfile,
   onOpenTarget,
   live = false,
 }: {
   results: Array<AgentToolResult | AgentToolEvent>;
+  permissionProfile?: string;
   onOpenTarget: (target: string) => Promise<void>;
   live?: boolean;
 }) {
+  const profile =
+    permissionProfile ||
+    results.find((result) => result.permissionProfile)?.permissionProfile ||
+    "";
   return (
     <div className={live ? "mb-4" : "mt-4"}>
       <details
         open={live}
         className="overflow-hidden rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] text-[13px] leading-5"
       >
-        <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-[color:var(--muted)]">
-          Agent tools {results.length > 0 ? `(${results.length})` : ""}
+        <summary className="flex cursor-pointer select-none items-center gap-2 px-3 py-2 text-xs font-medium text-[color:var(--muted)]">
+          <span>Agent tools {results.length > 0 ? `(${results.length})` : ""}</span>
+          {profile && (
+            <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 font-mono text-[10px] text-[color:var(--text)]">
+              {profile}
+            </span>
+          )}
         </summary>
         <div className="space-y-2 border-t border-[color:var(--border)] p-2">
           {results.map((result, index) => (
@@ -1307,6 +1320,8 @@ function parseAgentTrace(raw: string | null): AgentTrace | null {
     const parsed = JSON.parse(raw) as Partial<AgentTrace>;
     if (!Array.isArray(parsed.toolResults)) return null;
     return {
+      permissionProfile:
+        typeof parsed.permissionProfile === "string" ? parsed.permissionProfile : undefined,
       toolResults: parsed.toolResults.filter(
         (item): item is AgentToolResult =>
           Boolean(item) &&
