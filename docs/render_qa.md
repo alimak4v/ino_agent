@@ -14,6 +14,7 @@ Manual visual targets for the next QA pass:
 - `vector` in row and column orientation.
 - `step_example` with active step and result.
 - static `mermaid` flowchart, sequence diagram, xychart, and mindmap.
+- Mermaid fence directives without `mermaid` wrapper: `block-beta`, `architecture-beta`, `requirementDiagram`, `kanban`, and `C4Context`.
 - `graphsteps` with at least five steps and changing highlighted graph state.
 - mobile-width chat message containing mixed Markdown, math, rich blocks, and graphsteps.
 

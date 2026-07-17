@@ -5,7 +5,12 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { CodeRunnerBlock } from "./CodeRunnerBlock";
-import { GraphSteps, MermaidDiagram, looksLikeGraphStepsSource } from "./MermaidGraph";
+import {
+  GraphSteps,
+  MermaidDiagram,
+  looksLikeGraphStepsSource,
+  looksLikeMermaidGraphSource,
+} from "./MermaidGraph";
 import { RichBlock, richBlockKindFromClass } from "./RichBlocks";
 
 interface MarkdownMessageProps {
@@ -73,6 +78,13 @@ export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
         code: ({ children, className, ...props }) => {
           const code = String(children).replace(/\n$/, "");
           if (isMermaidClass(className)) {
+            return <MermaidDiagram graph={code} />;
+          }
+          const mermaidDirective = mermaidDirectiveFromClass(className);
+          if (mermaidDirective) {
+            return <MermaidDiagram graph={`${mermaidDirective}\n${code}`} />;
+          }
+          if (looksLikeMermaidGraphSource(code)) {
             return <MermaidDiagram graph={code} />;
           }
           if (isGraphStepsClass(className)) {
@@ -249,6 +261,27 @@ function isMermaidClass(className?: string) {
   return /\blanguage-mermaid\b/.test(className ?? "");
 }
 
+function mermaidDirectiveFromClass(className?: string) {
+  const match = /\blanguage-([a-zA-Z0-9_.+-]+)/.exec(className ?? "");
+  const language = match?.[1]?.toLowerCase() ?? "";
+  const directives: Record<string, string> = {
+    "block-beta": "block-beta",
+    blockdiagram: "blockDiagram",
+    architecture: "architecture",
+    "architecture-beta": "architecture-beta",
+    requirementdiagram: "requirementDiagram",
+    kanban: "kanban",
+    packet: "packet",
+    c4context: "C4Context",
+    c4container: "C4Container",
+    c4component: "C4Component",
+    c4dynamic: "C4Dynamic",
+    "xychart-beta": "xychart-beta",
+    "sankey-beta": "sankey-beta",
+  };
+  return directives[language] ?? null;
+}
+
 function isGraphStepsClass(className?: string) {
   return /\blanguage-(graphsteps|mermaid-steps)\b/.test(className ?? "");
 }
@@ -298,6 +331,8 @@ function isSpecialCodeBlock(child: unknown, includeQuiz: boolean) {
   const source = String(props.children ?? "").replace(/\n$/, "");
   return (
     isMermaidClass(className) ||
+    Boolean(mermaidDirectiveFromClass(className)) ||
+    looksLikeMermaidGraphSource(source) ||
     isGraphStepsClass(className) ||
     looksLikeGraphStepsSource(source) ||
     Boolean(richBlockKindFromClass(className)) ||

@@ -11,7 +11,7 @@ interface GraphStep {
 }
 
 const MERMAID_START_RE =
-  /^(flowchart|graph|sequenceDiagram|stateDiagram(?:-v2)?|classDiagram|erDiagram|gitGraph|pie|xychart|timeline|gantt|mindmap|journey|quadrantChart|sankey)\b/;
+  /^(flowchart|graph|sequenceDiagram|stateDiagram(?:-v2)?|classDiagram|erDiagram|gitGraph|pie|xychart(?:-beta)?|timeline|gantt|mindmap|journey|quadrantChart|sankey(?:-beta)?|block-beta|blockDiagram|architecture(?:-beta)?|requirementDiagram|kanban|packet|C4Context|C4Container|C4Component|C4Dynamic)\b/;
 
 async function getMermaid() {
   if (!mermaidModule) {
@@ -188,7 +188,7 @@ function normalizeStep(item: unknown, index: number): GraphStep | null {
           ? value.diagram
           : "";
   const graph = normalizeMermaidGraph(rawGraph);
-  if (!looksLikeMermaidGraph(graph)) return null;
+  if (!looksLikeMermaidGraphSource(graph)) return null;
   const description =
     typeof value.description === "string" && value.description.trim()
       ? value.description.trim()
@@ -200,7 +200,7 @@ function normalizeStep(item: unknown, index: number): GraphStep | null {
   return { step, description, graph };
 }
 
-function looksLikeMermaidGraph(graph: string) {
+export function looksLikeMermaidGraphSource(graph: string) {
   const firstLine = graph.trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
   return MERMAID_START_RE.test(firstLine);
 }
