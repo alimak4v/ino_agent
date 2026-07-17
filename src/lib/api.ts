@@ -337,6 +337,15 @@ export interface FeedbackInput {
   note?: string | null;
 }
 
+export interface FeedbackSummary {
+  targetType: string;
+  positive: number;
+  negative: number;
+  total: number;
+  score: number;
+  latestAt: number;
+}
+
 export interface ResolvedTarget {
   kind: "chat" | "url" | "file" | "directory" | string;
   target: string;
@@ -476,6 +485,10 @@ export const api = {
       : Promise.resolve([]),
   deleteMemory: (id: string) => invokeDesktop<void>("delete_memory", { id }),
   recordFeedback: (input: FeedbackInput) => invokeDesktop<void>("record_feedback", { input }),
+  listFeedbackSummary: (limit = 12) =>
+    isTauriRuntime()
+      ? invoke<FeedbackSummary[]>("list_feedback_summary", { limit })
+      : Promise.resolve([]),
   getMemoryGraph: (limit = 36) =>
     isTauriRuntime()
       ? invoke<MemoryGraph>("get_memory_graph", { limit })

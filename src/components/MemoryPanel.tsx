@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   api,
+  type FeedbackSummary,
   type MemoryDecision,
   type MemoryGraph,
   type MemoryInput,
@@ -21,6 +22,7 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
   const [recent, setRecent] = useState<MemoryItem[]>([]);
   const [graph, setGraph] = useState<MemoryGraph>(EMPTY_GRAPH);
   const [decisions, setDecisions] = useState<MemoryDecision[]>([]);
+  const [feedbackSummary, setFeedbackSummary] = useState<FeedbackSummary[]>([]);
   const [selectedMemoryId, setSelectedMemoryId] = useState("");
   const [editingMemoryId, setEditingMemoryId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -41,14 +43,16 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
     setBusy(true);
     setError("");
     try {
-      const [nextRecent, nextGraph, nextDecisions] = await Promise.all([
+      const [nextRecent, nextGraph, nextDecisions, nextFeedbackSummary] = await Promise.all([
         api.listMemoryRecent(24),
         api.getMemoryGraph(36),
         api.listMemoryDecisions(24),
+        api.listFeedbackSummary(12),
       ]);
       setRecent(nextRecent);
       setGraph(nextGraph);
       setDecisions(nextDecisions);
+      setFeedbackSummary(nextFeedbackSummary);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -434,6 +438,7 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
             selected={selectedMemory}
             selectedId={selectedMemoryId}
             decisions={decisions}
+            feedbackSummary={feedbackSummary}
             onSelect={setSelectedMemoryId}
           />
         </div>
@@ -624,12 +629,14 @@ function MemoryGraphDebug({
   selected,
   selectedId,
   decisions,
+  feedbackSummary,
   onSelect,
 }: {
   graph: MemoryGraph;
   selected: MemoryItem | null;
   selectedId: string;
   decisions: MemoryDecision[];
+  feedbackSummary: FeedbackSummary[];
   onSelect: (id: string) => void;
 }) {
   const degrees = useMemo(() => {
@@ -668,6 +675,7 @@ function MemoryGraphDebug({
         <DebugMetric label="nodes" value={graph.nodes.length} />
         <DebugMetric label="links" value={graph.links.length} />
         <DebugMetric label="decisions" value={decisions.length} />
+        <DebugMetric label="feedback" value={feedbackSummary.length} />
         <DebugMetric
           label="selected"
           value={selected ? String(degrees.get(selected.id) ?? 0) : "-"}
@@ -693,6 +701,29 @@ function MemoryGraphDebug({
           <div className="text-[11px] text-[color:var(--muted)]">Click a graph node.</div>
         )}
       </div>
+
+      <details open className="rounded-lg border border-[color:var(--border)] p-2">
+        <summary className="cursor-pointer text-[11px] font-medium text-[color:var(--text)]">
+          Feedback
+        </summary>
+        <div className="mt-2 max-h-36 space-y-1 overflow-y-auto pr-1">
+          {feedbackSummary.length === 0 ? (
+            <div className="text-[11px] text-[color:var(--muted)]">No feedback yet.</div>
+          ) : (
+            feedbackSummary.map((item) => (
+              <div
+                key={item.targetType}
+                className="grid grid-cols-[minmax(0,1fr)_72px] gap-2 rounded-lg border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--muted)]"
+              >
+                <span className="truncate text-[color:var(--text)]">{item.targetType}</span>
+                <span className="text-right">
+                  {item.positive}/{item.negative} · {formatFeedbackScore(item.score)}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </details>
 
       <details open className="rounded-lg border border-[color:var(--border)] p-2">
         <summary className="cursor-pointer text-[11px] font-medium text-[color:var(--text)]">
@@ -917,6 +948,10 @@ function formatWeight(value: number) {
 
 function formatDecisionScore(value: number | null | undefined) {
   return typeof value === "number" ? value.toFixed(2) : "-";
+}
+
+function formatFeedbackScore(value: number) {
+  return value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
 }
 
 function formatError(value: unknown) {

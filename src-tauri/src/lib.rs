@@ -507,6 +507,14 @@ fn record_feedback(state: State<AppState>, input: store::FeedbackInput) -> Resul
 }
 
 #[tauri::command]
+fn list_feedback_summary(
+    state: State<AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<store::FeedbackSummary>, String> {
+    lock_store(&state.store)?.feedback_summary(limit.unwrap_or(12))
+}
+
+#[tauri::command]
 fn get_memory_graph(
     state: State<AppState>,
     limit: Option<usize>,
@@ -2489,6 +2497,7 @@ pub fn run() {
             list_memory_decisions,
             delete_memory,
             record_feedback,
+            list_feedback_summary,
             get_memory_graph,
             list_watched_paths,
             watch_path,

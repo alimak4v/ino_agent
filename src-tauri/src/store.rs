@@ -359,6 +359,17 @@ pub struct FeedbackInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FeedbackSummary {
+    pub target_type: String,
+    pub positive: i64,
+    pub negative: i64,
+    pub total: i64,
+    pub score: f64,
+    pub latest_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WatchedPath {
     pub path: String,
 }
@@ -2174,6 +2185,45 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    pub fn feedback_summary(&self, limit: usize) -> Result<Vec<FeedbackSummary>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT target_type,
+                        SUM(CASE rating WHEN 'useful' THEN 1 ELSE 0 END) AS positive,
+                        SUM(CASE rating WHEN 'not_useful' THEN 1 ELSE 0 END) AS negative,
+                        COUNT(*) AS total,
+                        MAX(created_at) AS latest_at
+                 FROM feedback_events
+                 GROUP BY target_type
+                 ORDER BY latest_at DESC, total DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![limit.clamp(1, 24) as i64], |row| {
+                let positive = row.get::<_, i64>(1)?;
+                let negative = row.get::<_, i64>(2)?;
+                let total = row.get::<_, i64>(3)?;
+                let score = if total > 0 {
+                    ((positive - negative) as f64 / total as f64).clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                };
+                Ok(FeedbackSummary {
+                    target_type: row.get(0)?,
+                    positive,
+                    negative,
+                    total,
+                    score,
+                    latest_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     fn feedback_scores_for_type(&self, target_type: &str) -> Result<HashMap<String, f64>, String> {
