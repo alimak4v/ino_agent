@@ -743,6 +743,23 @@ fn read_image_index_text(path: &Path) -> Result<String, String> {
         format!("Image size bytes: {}", metadata.len()),
         format!("Image path: {}", path.display()),
     ];
+    if let Ok(bytes) = fs::read(path) {
+        if let Some((width, height)) = image_dimensions(&bytes) {
+            parts.push(format!("Image dimensions: {width}x{height}"));
+            parts.push(format!("Image width: {width}"));
+            parts.push(format!("Image height: {height}"));
+            parts.push(format!(
+                "Image orientation: {}",
+                if width > height {
+                    "landscape"
+                } else if height > width {
+                    "portrait"
+                } else {
+                    "square"
+                }
+            ));
+        }
+    }
     for sidecar in image_sidecar_paths(path) {
         if sidecar.is_file() {
             let text = fs::read_to_string(&sidecar).unwrap_or_default();
@@ -871,6 +888,123 @@ fn readable_path_tokens(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    png_dimensions(bytes)
+        .or_else(|| gif_dimensions(bytes))
+        .or_else(|| jpeg_dimensions(bytes))
+        .or_else(|| webp_dimensions(bytes))
+}
+
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || &bytes[0..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    Some((
+        u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]),
+        u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]),
+    ))
+}
+
+fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 10 || (!bytes.starts_with(b"GIF87a") && !bytes.starts_with(b"GIF89a")) {
+        return None;
+    }
+    Some((
+        u16::from_le_bytes([bytes[6], bytes[7]]) as u32,
+        u16::from_le_bytes([bytes[8], bytes[9]]) as u32,
+    ))
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 4 || bytes[0] != 0xff || bytes[1] != 0xd8 {
+        return None;
+    }
+    let mut offset = 2usize;
+    while offset + 9 < bytes.len() {
+        if bytes[offset] != 0xff {
+            offset += 1;
+            continue;
+        }
+        while offset < bytes.len() && bytes[offset] == 0xff {
+            offset += 1;
+        }
+        if offset >= bytes.len() {
+            break;
+        }
+        let marker = bytes[offset];
+        offset += 1;
+        if matches!(marker, 0xd8 | 0xd9 | 0x01) {
+            continue;
+        }
+        if offset + 2 > bytes.len() {
+            break;
+        }
+        let segment_len = u16::from_be_bytes([bytes[offset], bytes[offset + 1]]) as usize;
+        if segment_len < 2 || offset + segment_len > bytes.len() {
+            break;
+        }
+        if matches!(
+            marker,
+            0xc0 | 0xc1
+                | 0xc2
+                | 0xc3
+                | 0xc5
+                | 0xc6
+                | 0xc7
+                | 0xc9
+                | 0xca
+                | 0xcb
+                | 0xcd
+                | 0xce
+                | 0xcf
+        ) {
+            if offset + 7 > bytes.len() {
+                break;
+            }
+            let height = u16::from_be_bytes([bytes[offset + 3], bytes[offset + 4]]) as u32;
+            let width = u16::from_be_bytes([bytes[offset + 5], bytes[offset + 6]]) as u32;
+            return Some((width, height));
+        }
+        offset += segment_len;
+    }
+    None
+}
+
+fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 30 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+        return None;
+    }
+    let chunk = &bytes[12..16];
+    match chunk {
+        b"VP8 " if bytes.len() >= 30 => {
+            if bytes[23] != 0x9d || bytes[24] != 0x01 || bytes[25] != 0x2a {
+                return None;
+            }
+            let width = u16::from_le_bytes([bytes[26], bytes[27]]) as u32 & 0x3fff;
+            let height = u16::from_le_bytes([bytes[28], bytes[29]]) as u32 & 0x3fff;
+            Some((width, height))
+        }
+        b"VP8L" if bytes.len() >= 25 => {
+            if bytes[20] != 0x2f {
+                return None;
+            }
+            let b0 = bytes[21] as u32;
+            let b1 = bytes[22] as u32;
+            let b2 = bytes[23] as u32;
+            let b3 = bytes[24] as u32;
+            let width = 1 + (((b1 & 0x3f) << 8) | b0);
+            let height = 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6));
+            Some((width, height))
+        }
+        b"VP8X" if bytes.len() >= 30 => {
+            let width = 1 + u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]);
+            let height = 1 + u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]);
+            Some((width, height))
+        }
+        _ => None,
+    }
 }
 
 fn display_workspace_path(workspace_root: &Path, path: &Path) -> String {
