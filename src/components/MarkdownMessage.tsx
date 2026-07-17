@@ -6,6 +6,7 @@ import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { CodeRunnerBlock } from "./CodeRunnerBlock";
 import { GraphSteps, MermaidDiagram, looksLikeGraphStepsSource } from "./MermaidGraph";
+import { RichBlock, richBlockKindFromClass } from "./RichBlocks";
 
 interface MarkdownMessageProps {
   content: string;
@@ -79,6 +80,10 @@ export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
           }
           if (looksLikeGraphStepsSource(code)) {
             return <GraphSteps source={code} />;
+          }
+          const richBlockKind = richBlockKindFromClass(className);
+          if (richBlockKind) {
+            return <>{RichBlock({ kind: richBlockKind, source: code })}</>;
           }
           if (isQuizClass(className) && renderQuiz) {
             return <>{renderQuiz(code)}</>;
@@ -295,6 +300,7 @@ function isSpecialCodeBlock(child: unknown, includeQuiz: boolean) {
     isMermaidClass(className) ||
     isGraphStepsClass(className) ||
     looksLikeGraphStepsSource(source) ||
+    Boolean(richBlockKindFromClass(className)) ||
     Boolean(runnableLanguageFromClass(className)) ||
     (includeQuiz &&
       (isQuizClass(className) ||

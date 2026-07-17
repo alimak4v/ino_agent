@@ -1,7 +1,9 @@
+use crate::context_builder;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, ToSql, Transaction};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -15,6 +17,8 @@ const DEFAULT_THEME: &str = "Minimal Light";
 const API_CONTEXT_RECENT_MESSAGE_LIMIT: usize = 16;
 const API_CONTEXT_SUMMARY_CHAR_LIMIT: usize = 420;
 const API_CONTEXT_MESSAGE_CHAR_LIMIT: usize = 12_000;
+const MEMORY_VECTOR_DIM: usize = 384;
+const MEMORY_GRAPH_LINK_LIMIT: usize = 6;
 
 fn normalize_theme(theme: &str) -> &'static str {
     match theme.trim() {
@@ -153,6 +157,137 @@ pub struct BranchPlan {
     pub branches: Vec<BranchPlanItem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryInput {
+    pub title: Option<String>,
+    pub description: String,
+    pub target: String,
+    pub source_type: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub importance: Option<f64>,
+    pub memory_kind: Option<String>,
+    pub confidence: Option<f64>,
+    pub stability: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryItem {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub target: String,
+    pub source_type: String,
+    pub tags: Vec<String>,
+    pub importance: f64,
+    pub memory_kind: String,
+    pub confidence: f64,
+    pub stability: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_accessed_at: i64,
+    pub access_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySearchResult {
+    pub item: MemoryItem,
+    pub score: f64,
+    pub vector_score: f64,
+    pub keyword_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryLink {
+    pub source_id: String,
+    pub target_id: String,
+    pub label: String,
+    pub weight: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryGraph {
+    pub nodes: Vec<MemoryItem>,
+    pub links: Vec<MemoryLink>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KnowledgeSourceInput {
+    pub path: String,
+    pub title: String,
+    pub source_type: String,
+    pub fingerprint: String,
+    pub bytes: i64,
+    pub modified_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeSource {
+    pub id: String,
+    pub path: String,
+    pub title: String,
+    pub source_type: String,
+    pub fingerprint: String,
+    pub bytes: i64,
+    pub modified_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_indexed_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct KnowledgeChunkInput {
+    pub source_id: String,
+    pub chunk_index: i64,
+    pub text: String,
+    pub target: String,
+    pub page: Option<i64>,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeChunk {
+    pub id: String,
+    pub source_id: String,
+    pub chunk_index: i64,
+    pub text: String,
+    pub target: String,
+    pub page: Option<i64>,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub fingerprint: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeSearchResult {
+    pub chunk: KnowledgeChunk,
+    pub source: KnowledgeSource,
+    pub score: f64,
+    pub vector_score: f64,
+    pub keyword_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackInput {
+    pub target_type: String,
+    pub target_id: String,
+    pub target: Option<String>,
+    pub rating: String,
+    pub note: Option<String>,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -237,6 +372,96 @@ impl Store {
                     key TEXT PRIMARY KEY,
                     value TEXT
                 );
+                CREATE TABLE IF NOT EXISTS memory_items (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    importance REAL NOT NULL,
+                    memory_kind TEXT NOT NULL DEFAULT 'note',
+                    confidence REAL NOT NULL DEFAULT 0.7,
+                    stability TEXT NOT NULL DEFAULT 'durable',
+                    embedding BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    last_accessed_at INTEGER NOT NULL,
+                    access_count INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS memory_links (
+                    source_id TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    weight REAL NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY(source_id, target_id),
+                    FOREIGN KEY(source_id) REFERENCES memory_items(id) ON DELETE CASCADE,
+                    FOREIGN KEY(target_id) REFERENCES memory_items(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS memory_ingest_runs (
+                    fingerprint TEXT PRIMARY KEY,
+                    source_kind TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_sources (
+                    id TEXT PRIMARY KEY,
+                    path TEXT NOT NULL UNIQUE,
+                    title TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    bytes INTEGER NOT NULL,
+                    modified_at INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    last_indexed_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_chunks (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    page INTEGER,
+                    start_offset INTEGER NOT NULL,
+                    end_offset INTEGER NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    embedding BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(source_id, fingerprint),
+                    FOREIGN KEY(source_id) REFERENCES knowledge_sources(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS feedback_events (
+                    id TEXT PRIMARY KEY,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    target TEXT,
+                    rating TEXT NOT NULL,
+                    note TEXT,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_items_updated_at
+                    ON memory_items(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_memory_links_target
+                    ON memory_links(target_id);
+                CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source
+                    ON knowledge_chunks(source_id, chunk_index);
+                CREATE INDEX IF NOT EXISTS idx_knowledge_sources_updated
+                    ON knowledge_sources(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_feedback_events_target
+                    ON feedback_events(target_type, target_id, created_at DESC);
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts
+                    USING fts5(
+                        chunk_id UNINDEXED,
+                        source_id UNINDEXED,
+                        text,
+                        target,
+                        source_title,
+                        source_path,
+                        tokenize = 'unicode61'
+                    );
                 ",
             )
             .map_err(|e| e.to_string())
@@ -275,6 +500,39 @@ impl Store {
                 .execute("ALTER TABLE nodes ADD COLUMN color TEXT", [])
                 .map_err(|e| e.to_string())?;
         }
+        let mut stmt = self
+            .conn
+            .prepare("PRAGMA table_info(memory_items)")
+            .map_err(|e| e.to_string())?;
+        let memory_columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        if !memory_columns.iter().any(|column| column == "memory_kind") {
+            self.conn
+                .execute(
+                    "ALTER TABLE memory_items ADD COLUMN memory_kind TEXT NOT NULL DEFAULT 'note'",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        if !memory_columns.iter().any(|column| column == "confidence") {
+            self.conn
+                .execute(
+                    "ALTER TABLE memory_items ADD COLUMN confidence REAL NOT NULL DEFAULT 0.7",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        if !memory_columns.iter().any(|column| column == "stability") {
+            self.conn
+                .execute(
+                    "ALTER TABLE memory_items ADD COLUMN stability TEXT NOT NULL DEFAULT 'durable'",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+        }
         self.conn
             .execute_batch(
                 "
@@ -295,9 +553,100 @@ impl Store {
                     FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE,
                     FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS memory_items (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    importance REAL NOT NULL,
+                    memory_kind TEXT NOT NULL DEFAULT 'note',
+                    confidence REAL NOT NULL DEFAULT 0.7,
+                    stability TEXT NOT NULL DEFAULT 'durable',
+                    embedding BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    last_accessed_at INTEGER NOT NULL,
+                    access_count INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS memory_links (
+                    source_id TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    weight REAL NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY(source_id, target_id),
+                    FOREIGN KEY(source_id) REFERENCES memory_items(id) ON DELETE CASCADE,
+                    FOREIGN KEY(target_id) REFERENCES memory_items(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS memory_ingest_runs (
+                    fingerprint TEXT PRIMARY KEY,
+                    source_kind TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_sources (
+                    id TEXT PRIMARY KEY,
+                    path TEXT NOT NULL UNIQUE,
+                    title TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    bytes INTEGER NOT NULL,
+                    modified_at INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    last_indexed_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_chunks (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    page INTEGER,
+                    start_offset INTEGER NOT NULL,
+                    end_offset INTEGER NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    embedding BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(source_id, fingerprint),
+                    FOREIGN KEY(source_id) REFERENCES knowledge_sources(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS feedback_events (
+                    id TEXT PRIMARY KEY,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    target TEXT,
+                    rating TEXT NOT NULL,
+                    note TEXT,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_items_updated_at
+                    ON memory_items(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_memory_links_target
+                    ON memory_links(target_id);
+                CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source
+                    ON knowledge_chunks(source_id, chunk_index);
+                CREATE INDEX IF NOT EXISTS idx_knowledge_sources_updated
+                    ON knowledge_sources(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_feedback_events_target
+                    ON feedback_events(target_type, target_id, created_at DESC);
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts
+                    USING fts5(
+                        chunk_id UNINDEXED,
+                        source_id UNINDEXED,
+                        text,
+                        target,
+                        source_title,
+                        source_path,
+                        tokenize = 'unicode61'
+                    );
                 ",
             )
             .map_err(|e| e.to_string())?;
+        self.rebuild_knowledge_fts()?;
         Ok(())
     }
 
@@ -1348,13 +1697,16 @@ impl Store {
             .rev()
             .find(|row| row.role == "user")
             .map(|row| row.id.clone());
-        let mut messages = vec![ChatContextMessage {
-            role: "system".to_string(),
-            content: "You are a helpful assistant inside a polished local tree-based AI chat app. The user can write only in leaf branches; parent nodes are navigation/context only. Answer clearly and keep context from the selected tree path. If the current branch contains a message starting with \"Контекст ветки\", treat it as the branch contract and do not drift back to the parent topic unless the user explicitly asks to compare with it. When the user says \"распиши\", \"расшарь\", \"разверни\", \"подробнее\", \"раскрой\", \"объясни глубже\", or similar, produce a complete, branch-specific expansion with concrete structure, examples, caveats, and next steps. Preserve the user's requested scope: if they ask for every/each/all items, expand every visible or attached item instead of choosing one representative example. Answer directly with useful content; avoid filler preambles about what you are going to do. Use Markdown, and render formulas in LaTeX when math is useful. Always wrap formulas and LaTeX commands in math delimiters like $...$ or $$...$$; never emit raw commands such as \\sqrt, \\frac, \\sum, or \\ldots in prose. When you provide runnable code examples, make the program read its data from stdin and print the result to stdout; do not hard-code demonstration inputs inside main/function bodies unless the user explicitly asks for a self-contained demo. If useful, show a short sample stdin and expected stdout outside the code block. Prefer visual Mermaid diagrams when they make the answer clearer; avoid large ASCII diagrams unless the user explicitly asks for text-only output. Use fenced ```mermaid blocks for static diagrams and choose the diagram type by meaning: flowchart for processes/graphs/networks, sequenceDiagram for interactions/protocols, stateDiagram for automata/states, classDiagram or erDiagram for data models, gitGraph for branches/commits, pie for proportions/statistics, xychart for simple numeric trends, timeline for chronology, gantt for schedules/plans, mindmap for topic maps, journey for user flows, quadrantChart for prioritization, and sankey for flows/distribution. For step-by-step algorithms or evolving systems, use a fenced ```graphsteps block containing ONLY a JSON array of objects with fields step, description, and graph, where graph is Mermaid code. Never label step-by-step visualization data as ```json; the fence language must be graphsteps. You may insert one interactive quiz when it helps learning: after a complex explanation, after code, after a graph/visualization, at the end of an answer, or when the user asks to be checked. If the user asks for a test, quiz, проверку, or \"проверь меня\", include the actual interactive quiz as fenced ```quiz, not plain JSON, not a ```json block, and not a bullet list of answers. Use a fenced ```quiz block containing ONLY JSON. Supported MVP types are single_choice, multiple_choice, and text. Shape: {\"id\":\"short-stable-id\",\"type\":\"single_choice|multiple_choice|text\",\"question\":\"...\",\"options\":[{\"id\":\"a\",\"text\":\"...\"}],\"answer\":\"a\"} for single choice, {\"answers\":[\"a\",\"c\"]} for multiple choice, or {\"accepted_answers\":[\"...\"]} for text. Always include \"explanation\" and optionally \"points\". Keep correct answers only inside the quiz JSON, not in the visible prose before the user answers. Do not use HTML or iframes.".to_string(),
-        }, ChatContextMessage {
-            role: "system".to_string(),
-            content: local_context.clone(),
-        }];
+        let mut messages = vec![
+            ChatContextMessage {
+                role: "system".to_string(),
+                content: context_builder::base_assistant_prompt(),
+            },
+            ChatContextMessage {
+                role: "system".to_string(),
+                content: local_context.clone(),
+            },
+        ];
 
         for row in rows {
             if matches!(row.role.as_str(), "user" | "assistant" | "system") {
@@ -1365,15 +1717,40 @@ impl Store {
                             "Immediate context for the next user request:\n{local_context}\nIf the request is short or deictic, answer about \"{current_title}\" specifically, not about the broad parent/root material."
                         ),
                     });
-                    if wants_step_graph_response(&row.content, &current_title, &breadcrumb) {
+                    let memory_context = self.memory_context_for_query(&row.content, 6)?;
+                    if !memory_context.is_empty() {
                         messages.push(ChatContextMessage {
                             role: "system".to_string(),
-                            content: step_graph_prompt(&current_title, &breadcrumb, &row.content),
+                            content: memory_context,
+                        });
+                    }
+                    for module in context_builder::dynamic_context_modules(
+                        &row.content,
+                        &current_title,
+                        &breadcrumb,
+                    ) {
+                        messages.push(ChatContextMessage {
+                            role: "system".to_string(),
+                            content: module,
+                        });
+                    }
+                    if context_builder::wants_step_graph_response(
+                        &row.content,
+                        &current_title,
+                        &breadcrumb,
+                    ) {
+                        messages.push(ChatContextMessage {
+                            role: "system".to_string(),
+                            content: context_builder::step_graph_prompt(
+                                &current_title,
+                                &breadcrumb,
+                                &row.content,
+                            ),
                         });
                     }
                 }
                 let content = if latest_user_id.as_deref() == Some(row.id.as_str())
-                    && is_deictic_topic_request(&row.content)
+                    && context_builder::is_deictic_topic_request(&row.content)
                 {
                     format!(
                         "Current selected leaf/topic: {current_title}\nFull selected path: {breadcrumb}\nUser request about this current leaf/topic: {}",
@@ -1389,6 +1766,867 @@ impl Store {
             }
         }
         Ok(messages)
+    }
+
+    pub fn add_memory(&mut self, input: MemoryInput) -> Result<MemoryItem, String> {
+        let description = clean_memory_text(&input.description, 16_000, "Description")?;
+        let target = clean_memory_text(&input.target, 4096, "Target")?;
+        let source_type = input
+            .source_type
+            .as_deref()
+            .map(clean_memory_kind)
+            .unwrap_or_else(|| infer_memory_source_type(&target));
+        let title = input
+            .title
+            .as_deref()
+            .map(|value| clean_memory_title(value, &description))
+            .unwrap_or_else(|| clean_memory_title("", &description));
+        let tags = normalize_memory_tags(input.tags.unwrap_or_default());
+        let importance = input.importance.unwrap_or(5.0).clamp(0.0, 10.0);
+        let memory_kind = normalize_memory_kind(input.memory_kind.as_deref().unwrap_or("note"));
+        let confidence = input.confidence.unwrap_or(0.7).clamp(0.0, 1.0);
+        let stability = normalize_memory_stability(input.stability.as_deref().unwrap_or("durable"));
+        let embedding_text = memory_embedding_text(&title, &description, &tags);
+        let embedding_blob = encode_embedding(&embed_memory_text(&embedding_text));
+        let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
+        let ts = Self::now();
+        let id = Uuid::new_v4().to_string();
+
+        self.conn
+            .execute(
+                "INSERT INTO memory_items(
+                    id, title, description, target, source_type, tags, importance,
+                    memory_kind, confidence, stability, embedding,
+                    created_at, updated_at, last_accessed_at, access_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0)",
+                params![
+                    &id,
+                    &title,
+                    &description,
+                    &target,
+                    &source_type,
+                    &tags_json,
+                    importance,
+                    &memory_kind,
+                    confidence,
+                    &stability,
+                    &embedding_blob,
+                    ts,
+                    ts,
+                    ts
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        self.rebuild_memory_links_for(&id)?;
+        self.memory_item_by_id(&id)
+    }
+
+    pub fn update_memory(&mut self, id: &str, input: MemoryInput) -> Result<MemoryItem, String> {
+        self.memory_item_by_id(id)?;
+        let description = clean_memory_text(&input.description, 16_000, "Description")?;
+        let target = clean_memory_text(&input.target, 4096, "Target")?;
+        let source_type = input
+            .source_type
+            .as_deref()
+            .map(clean_memory_kind)
+            .unwrap_or_else(|| infer_memory_source_type(&target));
+        let title = input
+            .title
+            .as_deref()
+            .map(|value| clean_memory_title(value, &description))
+            .unwrap_or_else(|| clean_memory_title("", &description));
+        let tags = normalize_memory_tags(input.tags.unwrap_or_default());
+        let importance = input.importance.unwrap_or(5.0).clamp(0.0, 10.0);
+        let memory_kind = normalize_memory_kind(input.memory_kind.as_deref().unwrap_or("note"));
+        let confidence = input.confidence.unwrap_or(0.7).clamp(0.0, 1.0);
+        let stability = normalize_memory_stability(input.stability.as_deref().unwrap_or("durable"));
+        let embedding_text = memory_embedding_text(&title, &description, &tags);
+        let embedding_blob = encode_embedding(&embed_memory_text(&embedding_text));
+        let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
+        let ts = Self::now();
+
+        self.conn
+            .execute(
+                "UPDATE memory_items
+                 SET title = ?1, description = ?2, target = ?3, source_type = ?4,
+                     tags = ?5, importance = ?6, memory_kind = ?7, confidence = ?8,
+                     stability = ?9, embedding = ?10, updated_at = ?11
+                 WHERE id = ?12",
+                params![
+                    &title,
+                    &description,
+                    &target,
+                    &source_type,
+                    &tags_json,
+                    importance,
+                    &memory_kind,
+                    confidence,
+                    &stability,
+                    &embedding_blob,
+                    ts,
+                    id
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        self.rebuild_memory_links_for(id)?;
+        self.memory_item_by_id(id)
+    }
+
+    pub fn merge_memory(&mut self, keep_id: &str, remove_id: &str) -> Result<MemoryItem, String> {
+        if keep_id == remove_id {
+            return Err("Cannot merge a memory item into itself.".to_string());
+        }
+        let keep = self.memory_item_by_id(keep_id)?;
+        let remove = self.memory_item_by_id(remove_id)?;
+        let description = merge_memory_descriptions(&keep.description, &remove.description);
+        let mut tags = keep.tags.clone();
+        tags.extend(remove.tags);
+        let memory_kind = if keep.memory_kind == "note" && remove.memory_kind != "note" {
+            remove.memory_kind
+        } else {
+            keep.memory_kind
+        };
+        let input = MemoryInput {
+            title: Some(keep.title),
+            description,
+            target: keep.target,
+            source_type: Some(keep.source_type),
+            tags: Some(tags),
+            importance: Some(keep.importance.max(remove.importance)),
+            memory_kind: Some(memory_kind),
+            confidence: Some(keep.confidence.max(remove.confidence)),
+            stability: Some(merge_memory_stability(&keep.stability, &remove.stability)),
+        };
+        let updated = self.update_memory(keep_id, input)?;
+        self.delete_memory(remove_id)?;
+        self.rebuild_memory_links_for(keep_id)?;
+        Ok(updated)
+    }
+
+    pub fn search_memory(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemorySearchResult>, String> {
+        self.search_memory_internal(query, limit, true)
+    }
+
+    pub fn search_memory_readonly(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemorySearchResult>, String> {
+        self.search_memory_internal(query, limit, false)
+    }
+
+    fn search_memory_internal(
+        &self,
+        query: &str,
+        limit: usize,
+        record_access: bool,
+    ) -> Result<Vec<MemorySearchResult>, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_embedding = embed_memory_text(query);
+        let query_tokens = memory_tokens(query);
+        let feedback_scores = self.feedback_scores_for_type("memory")?;
+        let mut results = self
+            .memory_rows_with_embeddings()?
+            .into_iter()
+            .map(|(item, embedding)| {
+                let vector_score = cosine_similarity(&query_embedding, &embedding).clamp(0.0, 1.0);
+                let keyword_score = keyword_overlap_score(&query_tokens, &item);
+                let importance_score = (item.importance / 10.0).clamp(0.0, 1.0);
+                let access_score = ((item.access_count as f64 + 1.0).ln() / 4.0).clamp(0.0, 1.0);
+                let feedback_score = feedback_scores.get(&item.id).copied().unwrap_or(0.0);
+                let score = (0.82 * vector_score
+                    + 0.10 * keyword_score
+                    + 0.05 * importance_score
+                    + 0.03 * access_score
+                    + 0.08 * feedback_score)
+                    .clamp(0.0, 1.0);
+                MemorySearchResult {
+                    item,
+                    score,
+                    vector_score,
+                    keyword_score,
+                }
+            })
+            .filter(|result| result.score > 0.03)
+            .collect::<Vec<_>>();
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.item.updated_at.cmp(&a.item.updated_at))
+        });
+        results.truncate(limit.clamp(1, 50));
+        if record_access && !results.is_empty() {
+            let ts = Self::now();
+            for result in &results {
+                self.conn
+                    .execute(
+                        "UPDATE memory_items
+                         SET last_accessed_at = ?1, access_count = access_count + 1
+                         WHERE id = ?2",
+                        params![ts, &result.item.id],
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn list_memory_recent(&self, limit: usize) -> Result<Vec<MemoryItem>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, title, description, target, source_type, tags, importance,
+                        memory_kind, confidence, stability,
+                        created_at, updated_at, last_accessed_at, access_count
+                 FROM memory_items
+                 ORDER BY updated_at DESC, importance DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![limit.clamp(1, 100) as i64], memory_item_from_row)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn delete_memory(&mut self, id: &str) -> Result<(), String> {
+        let changed = self
+            .conn
+            .execute("DELETE FROM memory_items WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err("Memory item not found.".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn record_feedback(&mut self, input: FeedbackInput) -> Result<(), String> {
+        let target_type = normalize_feedback_target_type(&input.target_type)?;
+        let target_id = clean_memory_text(&input.target_id, 256, "Feedback target id")?;
+        let rating = normalize_feedback_rating(&input.rating)?;
+        let target = input
+            .target
+            .as_deref()
+            .map(|value| clean_memory_text(value, 4096, "Feedback target"))
+            .transpose()?;
+        let note = input
+            .note
+            .as_deref()
+            .map(|value| clean_memory_text(value, 2048, "Feedback note"))
+            .transpose()?;
+        self.conn
+            .execute(
+                "INSERT INTO feedback_events(
+                    id, target_type, target_id, target, rating, note, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    target_type,
+                    target_id,
+                    target,
+                    rating,
+                    note,
+                    Self::now()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn feedback_scores_for_type(&self, target_type: &str) -> Result<HashMap<String, f64>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT target_id,
+                        SUM(CASE rating WHEN 'useful' THEN 1 WHEN 'not_useful' THEN -1 ELSE 0 END) AS vote_sum,
+                        COUNT(*) AS vote_count
+                 FROM feedback_events
+                 WHERE target_type = ?1
+                 GROUP BY target_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![target_type], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut scores = HashMap::new();
+        for row in rows {
+            let (target_id, vote_sum, vote_count) = row.map_err(|e| e.to_string())?;
+            let denominator = (vote_count.max(0) + 2) as f64;
+            let score = (vote_sum as f64 / denominator).clamp(-1.0, 1.0);
+            scores.insert(target_id, score);
+        }
+        Ok(scores)
+    }
+
+    pub fn memory_graph(&self, limit: usize) -> Result<MemoryGraph, String> {
+        let nodes = self.list_memory_recent(limit.clamp(1, 80))?;
+        let ids = nodes
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<HashSet<_>>();
+        if ids.is_empty() {
+            return Ok(MemoryGraph {
+                nodes,
+                links: Vec::new(),
+            });
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT source_id, target_id, label, weight
+                 FROM memory_links
+                 ORDER BY weight DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(MemoryLink {
+                    source_id: row.get(0)?,
+                    target_id: row.get(1)?,
+                    label: row.get(2)?,
+                    weight: row.get(3)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let links = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|link| ids.contains(&link.source_id) && ids.contains(&link.target_id))
+            .take(limit.saturating_mul(4).max(12))
+            .collect();
+        Ok(MemoryGraph { nodes, links })
+    }
+
+    pub fn has_memory_ingest_run(&self, fingerprint: &str) -> Result<bool, String> {
+        let exists = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM memory_ingest_runs WHERE fingerprint = ?1 LIMIT 1",
+                params![fingerprint],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .is_some();
+        Ok(exists)
+    }
+
+    pub fn mark_memory_ingest_run(
+        &mut self,
+        fingerprint: &str,
+        source_kind: &str,
+        target: &str,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO memory_ingest_runs(
+                    fingerprint, source_kind, target, created_at
+                 ) VALUES (?1, ?2, ?3, ?4)",
+                params![fingerprint, source_kind, target, Self::now()],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn prepare_knowledge_source(
+        &mut self,
+        input: KnowledgeSourceInput,
+    ) -> Result<(KnowledgeSource, bool), String> {
+        let path = clean_memory_text(&input.path, 4096, "Knowledge source path")?;
+        let title = clean_memory_title(&input.title, &path);
+        let source_type = clean_memory_kind(&input.source_type);
+        let fingerprint = clean_memory_text(&input.fingerprint, 256, "Knowledge fingerprint")?;
+        let existing = self.knowledge_source_by_path(&path)?;
+        let ts = Self::now();
+
+        if let Some(source) = existing {
+            let has_chunks = self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM knowledge_chunks WHERE source_id = ?1 LIMIT 1",
+                    params![&source.id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+                .is_some();
+            if source.fingerprint == fingerprint && has_chunks {
+                return Ok((source, false));
+            }
+            self.conn
+                .execute(
+                    "DELETE FROM knowledge_chunks WHERE source_id = ?1",
+                    params![&source.id],
+                )
+                .map_err(|e| e.to_string())?;
+            self.delete_knowledge_fts_for_source(&source.id)?;
+            self.conn
+                .execute(
+                    "UPDATE knowledge_sources
+                     SET title = ?1, source_type = ?2, fingerprint = ?3, bytes = ?4,
+                         modified_at = ?5, updated_at = ?6, last_indexed_at = ?7
+                     WHERE id = ?8",
+                    params![
+                        &title,
+                        &source_type,
+                        &fingerprint,
+                        input.bytes.max(0),
+                        input.modified_at.max(0),
+                        ts,
+                        ts,
+                        &source.id
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+            return Ok((self.knowledge_source_by_id(&source.id)?, true));
+        }
+
+        let id = Uuid::new_v4().to_string();
+        self.conn
+            .execute(
+                "INSERT INTO knowledge_sources(
+                    id, path, title, source_type, fingerprint, bytes,
+                    modified_at, created_at, updated_at, last_indexed_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    &id,
+                    &path,
+                    &title,
+                    &source_type,
+                    &fingerprint,
+                    input.bytes.max(0),
+                    input.modified_at.max(0),
+                    ts,
+                    ts,
+                    ts
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok((self.knowledge_source_by_id(&id)?, true))
+    }
+
+    pub fn add_knowledge_chunk(
+        &mut self,
+        input: KnowledgeChunkInput,
+    ) -> Result<KnowledgeChunk, String> {
+        let text = clean_memory_text(&input.text, 24_000, "Knowledge chunk")?;
+        let target = clean_memory_text(&input.target, 4096, "Knowledge target")?;
+        let fingerprint =
+            clean_memory_text(&input.fingerprint, 256, "Knowledge chunk fingerprint")?;
+        let embedding_blob = encode_embedding(&embed_memory_text(&format!("{target}\n{text}")));
+        let ts = Self::now();
+        let id = Uuid::new_v4().to_string();
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO knowledge_chunks(
+                    id, source_id, chunk_index, text, target, page, start_offset, end_offset,
+                    fingerprint, embedding, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    &id,
+                    &input.source_id,
+                    input.chunk_index,
+                    &text,
+                    &target,
+                    input.page,
+                    input.start_offset.max(0),
+                    input.end_offset.max(input.start_offset),
+                    &fingerprint,
+                    &embedding_blob,
+                    ts,
+                    ts
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        let chunk = self.knowledge_chunk_by_source_fingerprint(&input.source_id, &fingerprint)?;
+        let source = self.knowledge_source_by_id(&chunk.source_id)?;
+        self.upsert_knowledge_fts(&source, &chunk)?;
+        Ok(chunk)
+    }
+
+    pub fn search_knowledge(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<KnowledgeSearchResult>, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_embedding = embed_memory_text(query);
+        let query_tokens = memory_tokens(query);
+        let fts_scores = self.knowledge_fts_scores(query, limit.saturating_mul(4).max(20))?;
+        let feedback_scores = self.feedback_scores_for_type("knowledge_chunk")?;
+        let now = Self::now();
+        let mut results = self
+            .knowledge_rows_with_embeddings()?
+            .into_iter()
+            .map(|(source, chunk, embedding)| {
+                let vector_score = cosine_similarity(&query_embedding, &embedding).clamp(0.0, 1.0);
+                let lexical_score = fts_scores
+                    .get(&chunk.id)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        keyword_overlap_score_for_knowledge(&query_tokens, &source, &chunk)
+                    })
+                    .clamp(0.0, 1.0);
+                let keyword_score =
+                    keyword_overlap_score_for_knowledge(&query_tokens, &source, &chunk);
+                let age_days = ((now - source.updated_at).max(0) as f64) / 86_400.0;
+                let recency_score = (1.0 / (1.0 + age_days / 30.0)).clamp(0.0, 1.0);
+                let feedback_score = feedback_scores.get(&chunk.id).copied().unwrap_or(0.0);
+                let score = (0.62 * vector_score
+                    + 0.28 * lexical_score
+                    + 0.05 * keyword_score
+                    + 0.05 * recency_score
+                    + 0.08 * feedback_score)
+                    .clamp(0.0, 1.0);
+                KnowledgeSearchResult {
+                    chunk,
+                    source,
+                    score,
+                    vector_score,
+                    keyword_score,
+                }
+            })
+            .filter(|result| result.score > 0.03)
+            .collect::<Vec<_>>();
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.chunk.updated_at.cmp(&a.chunk.updated_at))
+        });
+        results.truncate(limit.clamp(1, 50));
+        Ok(results)
+    }
+
+    pub fn memory_context_for_query(&self, query: &str, limit: usize) -> Result<String, String> {
+        let results = self.search_memory(query, limit)?;
+        let knowledge_results = self.search_knowledge(query, limit)?;
+        if results.is_empty() && knowledge_results.is_empty() {
+            return Ok(String::new());
+        }
+        let base_ids = results
+            .iter()
+            .map(|result| result.item.id.clone())
+            .collect::<HashSet<_>>();
+        let mut related = Vec::new();
+        let mut seen_related = base_ids.clone();
+        for id in &base_ids {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT
+                        CASE WHEN source_id = ?1 THEN target_id ELSE source_id END AS related_id,
+                        label,
+                        weight
+                     FROM memory_links
+                     WHERE source_id = ?1 OR target_id = ?1
+                     ORDER BY weight DESC
+                     LIMIT 3",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, f64>(2)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let (related_id, label, weight) = row.map_err(|e| e.to_string())?;
+                if !seen_related.insert(related_id.clone()) {
+                    continue;
+                }
+                if let Ok(item) = self.memory_item_by_id(&related_id) {
+                    related.push((item, label, weight));
+                }
+            }
+        }
+        related.sort_by(|a, b| {
+            b.2.partial_cmp(&a.2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.0.updated_at.cmp(&a.0.updated_at))
+        });
+        related.truncate(limit.min(8));
+
+        Ok(context_builder::retrieval_context(
+            &results,
+            &related,
+            &knowledge_results,
+        ))
+    }
+
+    fn memory_item_by_id(&self, id: &str) -> Result<MemoryItem, String> {
+        self.conn
+            .query_row(
+                "SELECT id, title, description, target, source_type, tags, importance,
+                        memory_kind, confidence, stability,
+                        created_at, updated_at, last_accessed_at, access_count
+                 FROM memory_items WHERE id = ?1",
+                params![id],
+                memory_item_from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Memory item not found.".to_string())
+    }
+
+    fn knowledge_source_by_id(&self, id: &str) -> Result<KnowledgeSource, String> {
+        self.conn
+            .query_row(
+                "SELECT id, path, title, source_type, fingerprint, bytes, modified_at,
+                        created_at, updated_at, last_indexed_at
+                 FROM knowledge_sources WHERE id = ?1",
+                params![id],
+                knowledge_source_from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Knowledge source not found.".to_string())
+    }
+
+    fn knowledge_source_by_path(&self, path: &str) -> Result<Option<KnowledgeSource>, String> {
+        self.conn
+            .query_row(
+                "SELECT id, path, title, source_type, fingerprint, bytes, modified_at,
+                        created_at, updated_at, last_indexed_at
+                 FROM knowledge_sources WHERE path = ?1",
+                params![path],
+                knowledge_source_from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    fn knowledge_chunk_by_source_fingerprint(
+        &self,
+        source_id: &str,
+        fingerprint: &str,
+    ) -> Result<KnowledgeChunk, String> {
+        self.conn
+            .query_row(
+                "SELECT id, source_id, chunk_index, text, target, page, start_offset,
+                        end_offset, fingerprint, created_at, updated_at
+                 FROM knowledge_chunks WHERE source_id = ?1 AND fingerprint = ?2",
+                params![source_id, fingerprint],
+                knowledge_chunk_from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Knowledge chunk not found.".to_string())
+    }
+
+    fn memory_rows_with_embeddings(&self) -> Result<Vec<(MemoryItem, Vec<f32>)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, title, description, target, source_type, tags, importance,
+                        memory_kind, confidence, stability,
+                        created_at, updated_at, last_accessed_at, access_count, embedding
+                 FROM memory_items",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                let item = memory_item_from_row(row)?;
+                let blob: Vec<u8> = row.get(14)?;
+                Ok((item, decode_embedding(&blob)))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    fn knowledge_rows_with_embeddings(
+        &self,
+    ) -> Result<Vec<(KnowledgeSource, KnowledgeChunk, Vec<f32>)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    s.id, s.path, s.title, s.source_type, s.fingerprint, s.bytes,
+                    s.modified_at, s.created_at, s.updated_at, s.last_indexed_at,
+                    c.id, c.source_id, c.chunk_index, c.text, c.target, c.page,
+                    c.start_offset, c.end_offset, c.fingerprint, c.created_at, c.updated_at,
+                    c.embedding
+                 FROM knowledge_chunks c
+                 JOIN knowledge_sources s ON s.id = c.source_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                let source = KnowledgeSource {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    title: row.get(2)?,
+                    source_type: row.get(3)?,
+                    fingerprint: row.get(4)?,
+                    bytes: row.get(5)?,
+                    modified_at: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    last_indexed_at: row.get(9)?,
+                };
+                let chunk = KnowledgeChunk {
+                    id: row.get(10)?,
+                    source_id: row.get(11)?,
+                    chunk_index: row.get(12)?,
+                    text: row.get(13)?,
+                    target: row.get(14)?,
+                    page: row.get(15)?,
+                    start_offset: row.get(16)?,
+                    end_offset: row.get(17)?,
+                    fingerprint: row.get(18)?,
+                    created_at: row.get(19)?,
+                    updated_at: row.get(20)?,
+                };
+                let blob: Vec<u8> = row.get(21)?;
+                Ok((source, chunk, decode_embedding(&blob)))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    fn rebuild_knowledge_fts(&self) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM knowledge_chunks_fts", [])
+            .map_err(|e| e.to_string())?;
+        for (source, chunk, _) in self.knowledge_rows_with_embeddings()? {
+            self.upsert_knowledge_fts(&source, &chunk)?;
+        }
+        Ok(())
+    }
+
+    fn upsert_knowledge_fts(
+        &self,
+        source: &KnowledgeSource,
+        chunk: &KnowledgeChunk,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "DELETE FROM knowledge_chunks_fts WHERE chunk_id = ?1",
+                params![&chunk.id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "INSERT INTO knowledge_chunks_fts(
+                    chunk_id, source_id, text, target, source_title, source_path
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    &chunk.id,
+                    &chunk.source_id,
+                    &chunk.text,
+                    &chunk.target,
+                    &source.title,
+                    &source.path
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn delete_knowledge_fts_for_source(&self, source_id: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "DELETE FROM knowledge_chunks_fts WHERE source_id = ?1",
+                params![source_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn knowledge_fts_scores(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<HashMap<String, f64>, String> {
+        let Some(fts_query) = fts_query_from_text(query) else {
+            return Ok(HashMap::new());
+        };
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT chunk_id
+                 FROM knowledge_chunks_fts
+                 WHERE knowledge_chunks_fts MATCH ?1
+                 ORDER BY bm25(knowledge_chunks_fts)
+                 LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![fts_query, limit.clamp(1, 200) as i64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| e.to_string())?;
+        let mut scores = HashMap::new();
+        for (index, row) in rows.enumerate() {
+            let id = row.map_err(|e| e.to_string())?;
+            let score = 1.0 / (1.0 + index as f64);
+            scores.entry(id).or_insert(score);
+        }
+        Ok(scores)
+    }
+
+    fn rebuild_memory_links_for(&mut self, id: &str) -> Result<(), String> {
+        let rows = self.memory_rows_with_embeddings()?;
+        let Some((item, embedding)) = rows.iter().find(|(item, _)| item.id == id) else {
+            return Ok(());
+        };
+        let mut related = rows
+            .iter()
+            .filter(|(other, _)| other.id != id)
+            .map(|(other, other_embedding)| {
+                (
+                    other.id.clone(),
+                    cosine_similarity(embedding, other_embedding),
+                )
+            })
+            .filter(|(_, score)| *score >= 0.18)
+            .collect::<Vec<_>>();
+        related.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        related.truncate(MEMORY_GRAPH_LINK_LIMIT);
+
+        self.conn
+            .execute(
+                "DELETE FROM memory_links WHERE source_id = ?1 OR target_id = ?1",
+                params![id],
+            )
+            .map_err(|e| e.to_string())?;
+        let ts = Self::now();
+        for (other_id, weight) in related {
+            self.conn
+                .execute(
+                    "INSERT INTO memory_links(source_id, target_id, label, weight, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(source_id, target_id)
+                     DO UPDATE SET weight = excluded.weight, label = excluded.label",
+                    params![&item.id, &other_id, "similar", weight, ts],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     pub fn layout_tree(&self, tree_id: &str) -> Result<Vec<LayoutNode>, String> {
@@ -1763,103 +3001,367 @@ fn clean_title_or(value: String, fallback: &str) -> String {
     }
 }
 
-fn is_deictic_topic_request(value: &str) -> bool {
-    let text = value.trim().to_lowercase();
-    let deictic = [
-        "эту тему",
-        "эта тема",
-        "этой теме",
-        "про эту тему",
-        "данную тему",
-        "эту ветку",
-        "эта ветка",
-        "здесь",
-        "текущий лист",
-        "текущую тему",
-    ]
-    .iter()
-    .any(|needle| text.contains(needle));
-    let action = [
-        "опиши",
-        "объясни",
-        "распиши",
-        "раскрой",
-        "расскажи",
-        "разверни",
-        "подробнее",
-        "что это",
-    ]
-    .iter()
-    .any(|needle| text.contains(needle));
-    deictic || (action && text.chars().count() <= 80)
+fn memory_item_from_row(row: &Row<'_>) -> rusqlite::Result<MemoryItem> {
+    let tags_json: String = row.get(5)?;
+    let tags = serde_json::from_str::<Vec<String>>(&tags_json).unwrap_or_default();
+    Ok(MemoryItem {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get(2)?,
+        target: row.get(3)?,
+        source_type: row.get(4)?,
+        tags,
+        importance: row.get(6)?,
+        memory_kind: row.get(7)?,
+        confidence: row.get(8)?,
+        stability: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        last_accessed_at: row.get(12)?,
+        access_count: row.get(13)?,
+    })
 }
 
-fn wants_step_graph_response(user_request: &str, current_title: &str, breadcrumb: &str) -> bool {
-    let request = user_request.to_lowercase();
-    let context = format!("{user_request}\n{current_title}\n{breadcrumb}").to_lowercase();
-    let asks_visual = [
-        "визуал",
-        "пошаг",
-        "по шаг",
-        "итерац",
-        "стрел",
-        "схем",
-        "диаграм",
-        "mermaid",
-    ]
-    .iter()
-    .any(|needle| request.contains(needle));
-    let algorithm = [
-        "диниц",
-        "dinic",
-        "максимальн",
-        "max-flow",
-        "max flow",
-        "поток",
-        "ford",
-        "fulkerson",
-        "edmonds",
-        "karp",
-        "bfs",
-        "dfs",
-        "dijkstra",
-        "дейкстр",
-    ]
-    .iter()
-    .any(|needle| context.contains(needle));
-    asks_visual && algorithm
+fn knowledge_source_from_row(row: &Row<'_>) -> rusqlite::Result<KnowledgeSource> {
+    Ok(KnowledgeSource {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        title: row.get(2)?,
+        source_type: row.get(3)?,
+        fingerprint: row.get(4)?,
+        bytes: row.get(5)?,
+        modified_at: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+        last_indexed_at: row.get(9)?,
+    })
 }
 
-fn step_graph_prompt(current_title: &str, breadcrumb: &str, user_request: &str) -> String {
-    format!(
-        r#"The current request needs an interactive step-by-step Mermaid visualization, but it must stay on the exact selected topic.
+fn knowledge_chunk_from_row(row: &Row<'_>) -> rusqlite::Result<KnowledgeChunk> {
+    Ok(KnowledgeChunk {
+        id: row.get(0)?,
+        source_id: row.get(1)?,
+        chunk_index: row.get(2)?,
+        text: row.get(3)?,
+        target: row.get(4)?,
+        page: row.get(5)?,
+        start_offset: row.get(6)?,
+        end_offset: row.get(7)?,
+        fingerprint: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
 
-SELECTED CONTEXT:
-- Current leaf/topic: {current_title}
-- Full selected path: {breadcrumb}
-- Latest user request: {user_request}
+fn clean_memory_text(value: &str, limit: usize, label: &str) -> Result<String, String> {
+    let cleaned = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() {
+        return Err(format!("{label} is empty."));
+    }
+    Ok(cleaned.chars().take(limit).collect())
+}
 
-TOPIC SELECTION RULES:
-- Infer the exact algorithm/topic from the selected leaf, breadcrumb, latest user request, and recent dialogue.
-- Visualize that exact algorithm/topic only.
-- Preserve requested coverage. If the user asked for every/each/all items, do not pick one representative item; cover the requested set in prose and use visualization only where it is explicitly requested and fits that scope.
-- Do not import an algorithm, graph, labels, variables, or story from examples or from a neighboring branch.
-- If the selected topic and latest request do not identify enough details for a meaningful example, ask a short clarifying question instead of drawing an unrelated algorithm.
-- If the topic is a graph algorithm, choose a small example graph that demonstrates that algorithm's own mechanics.
+fn clean_memory_title(value: &str, description: &str) -> String {
+    let raw = value.trim();
+    let source = if raw.is_empty() { description } else { raw };
+    let first = source
+        .split(['.', '\n', ';'])
+        .next()
+        .unwrap_or(source)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let title = first.chars().take(96).collect::<String>();
+    if title.trim().is_empty() {
+        "Memory".to_string()
+    } else {
+        title
+    }
+}
 
-MANDATORY OUTPUT RULES:
-- Include exactly one fenced ```graphsteps block.
-- The graphsteps block must contain ONLY a valid JSON array.
-- The array must have at least 4 steps, and at least 5 steps for complex algorithms.
-- Every item must have "step", "description", and "graph".
-- Every "graph" must be valid Mermaid code. For graph/flow/network algorithms, use flowchart code with arrows like S --> A and labels like |0/10| or |10/10|. For other evolving explanations, choose the Mermaid type that fits: sequenceDiagram for interactions, stateDiagram for states, gitGraph for commit history, timeline for chronology, gantt for schedules, pie/xychart for changing statistics, or mindmap for staged topic expansion.
-- Labelled flowchart arrows must be written exactly as A -->|10/10| B. Never write A --|10/10|> B.
-- Mermaid flowcharts do not accept reverse arrows like A <-- B. To show a reversed edge, write B --> A instead.
-- Do not answer with only the initial graph. Show the actual progression of the current algorithm/topic.
-- Use Mermaid classDef/class or visibly changed labels to highlight what changed in each step.
-- Do not use HTML, iframe, SVG code, or plain ASCII art.
-"#
+fn clean_memory_kind(value: &str) -> String {
+    let kind = value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .take(32)
+        .collect::<String>();
+    if kind.is_empty() {
+        "text".to_string()
+    } else {
+        kind
+    }
+}
+
+fn infer_memory_source_type(target: &str) -> String {
+    let lower = target.to_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return "link".to_string();
+    }
+    if lower.starts_with("chat://") {
+        return "chat".to_string();
+    }
+    if lower.ends_with(".pdf") {
+        return "pdf".to_string();
+    }
+    if lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".webp")
+        || lower.ends_with(".gif")
+    {
+        return "image".to_string();
+    }
+    if lower.ends_with(".rs")
+        || lower.ends_with(".ts")
+        || lower.ends_with(".tsx")
+        || lower.ends_with(".py")
+        || lower.ends_with(".cpp")
+        || lower.ends_with(".hpp")
+        || lower.ends_with(".js")
+        || lower.ends_with(".jsx")
+    {
+        return "code".to_string();
+    }
+    if lower.contains('/') || lower.contains('\\') {
+        return "file".to_string();
+    }
+    "text".to_string()
+}
+
+fn normalize_memory_tags(tags: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    for tag in tags {
+        let value = tag
+            .trim()
+            .trim_start_matches('#')
+            .to_lowercase()
+            .chars()
+            .filter(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '-')
+            .take(32)
+            .collect::<String>();
+        if !value.is_empty() && seen.insert(value.clone()) {
+            normalized.push(value);
+        }
+        if normalized.len() >= 12 {
+            break;
+        }
+    }
+    normalized
+}
+
+fn normalize_memory_kind(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "fact" => "fact",
+        "preference" => "preference",
+        "project_decision" | "project-decision" | "decision" => "project_decision",
+        "source" => "source",
+        "todo" => "todo",
+        "note" | "conversation_note" | "conversation-note" => "note",
+        _ => "note",
+    }
+    .to_string()
+}
+
+fn normalize_memory_stability(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "temporary" | "temp" => "temporary",
+        "permanent" => "permanent",
+        "durable" | "stable" => "durable",
+        _ => "durable",
+    }
+    .to_string()
+}
+
+fn merge_memory_descriptions(keep: &str, remove: &str) -> String {
+    let keep = keep.trim();
+    let remove = remove.trim();
+    if keep.is_empty() {
+        return remove.to_string();
+    }
+    if remove.is_empty() || keep.contains(remove) {
+        return keep.to_string();
+    }
+    format!("{keep}\n\nMerged note: {remove}")
+}
+
+fn merge_memory_stability(a: &str, b: &str) -> String {
+    let rank = |value: &str| match value {
+        "permanent" => 3,
+        "durable" => 2,
+        "temporary" => 1,
+        _ => 2,
+    };
+    if rank(a) >= rank(b) {
+        normalize_memory_stability(a)
+    } else {
+        normalize_memory_stability(b)
+    }
+}
+
+fn normalize_feedback_target_type(value: &str) -> Result<String, String> {
+    match value.trim().to_lowercase().as_str() {
+        "message" | "memory" | "knowledge_chunk" | "knowledge-source" | "knowledge_source"
+        | "answer" => Ok(value
+            .trim()
+            .to_lowercase()
+            .replace('-', "_")
+            .replace("answer", "message")),
+        _ => Err("Unsupported feedback target type.".to_string()),
+    }
+}
+
+fn normalize_feedback_rating(value: &str) -> Result<String, String> {
+    match value.trim().to_lowercase().as_str() {
+        "useful" | "up" | "positive" | "good" => Ok("useful".to_string()),
+        "not_useful" | "not-useful" | "down" | "negative" | "bad" => Ok("not_useful".to_string()),
+        _ => Err("Unsupported feedback rating.".to_string()),
+    }
+}
+
+fn memory_embedding_text(title: &str, description: &str, tags: &[String]) -> String {
+    if tags.is_empty() {
+        format!("{title}\n{description}")
+    } else {
+        format!("{title}\n{description}\n{}", tags.join(" "))
+    }
+}
+
+fn memory_tokens(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for ch in value.to_lowercase().replace('ё', "е").chars() {
+        if ch.is_alphanumeric() {
+            current.push(ch);
+        } else if !current.is_empty() {
+            if current.chars().count() >= 2 {
+                tokens.push(current.clone());
+            }
+            current.clear();
+        }
+    }
+    if current.chars().count() >= 2 {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn fts_query_from_text(value: &str) -> Option<String> {
+    let mut seen = HashSet::new();
+    let tokens = memory_tokens(value)
+        .into_iter()
+        .filter(|token| seen.insert(token.clone()))
+        .take(16)
+        .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" OR "))
+    }
+}
+
+fn embed_memory_text(value: &str) -> Vec<f32> {
+    let mut vector = vec![0.0_f32; MEMORY_VECTOR_DIM];
+    let tokens = memory_tokens(value);
+    for token in &tokens {
+        add_hashed_feature(&mut vector, token, 1.0);
+        let chars = token.chars().collect::<Vec<_>>();
+        for window in chars.windows(3) {
+            let trigram = window.iter().collect::<String>();
+            add_hashed_feature(&mut vector, &trigram, 0.35);
+        }
+    }
+    let norm = vector
+        .iter()
+        .map(|value| (*value as f64) * (*value as f64))
+        .sum::<f64>()
+        .sqrt();
+    if norm > 0.0 {
+        for value in &mut vector {
+            *value /= norm as f32;
+        }
+    }
+    vector
+}
+
+fn add_hashed_feature(vector: &mut [f32], feature: &str, weight: f32) {
+    let mut hasher = DefaultHasher::new();
+    feature.hash(&mut hasher);
+    let hash = hasher.finish();
+    let index = (hash as usize) % vector.len();
+    let sign: f32 = if (hash >> 63) == 0 { 1.0 } else { -1.0 };
+    vector[index] += sign * weight;
+}
+
+fn encode_embedding(vector: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(vector.len() * 4);
+    for value in vector {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn decode_embedding(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let dot = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x as f64) * (*y as f64))
+        .sum::<f64>();
+    dot.clamp(0.0, 1.0)
+}
+
+fn keyword_overlap_score(query_tokens: &[String], item: &MemoryItem) -> f64 {
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+    let haystack = format!(
+        "{} {} {} {}",
+        item.title,
+        item.description,
+        item.target,
+        item.tags.join(" ")
     )
+    .to_lowercase()
+    .replace('ё', "е");
+    let matched = query_tokens
+        .iter()
+        .filter(|token| haystack.contains(token.as_str()))
+        .count();
+    (matched as f64 / query_tokens.len() as f64).clamp(0.0, 1.0)
+}
+
+fn keyword_overlap_score_for_knowledge(
+    query_tokens: &[String],
+    source: &KnowledgeSource,
+    chunk: &KnowledgeChunk,
+) -> f64 {
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+    let haystack = format!(
+        "{} {} {} {} {}",
+        source.title, source.path, source.source_type, chunk.target, chunk.text
+    )
+    .to_lowercase()
+    .replace('ё', "е");
+    let matched = query_tokens
+        .iter()
+        .filter(|token| haystack.contains(token.as_str()))
+        .count();
+    (matched as f64 / query_tokens.len() as f64).clamp(0.0, 1.0)
 }
 
 fn first_line(value: &str) -> &str {

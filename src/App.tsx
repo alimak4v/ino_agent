@@ -11,9 +11,11 @@ import {
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open as openShell } from "@tauri-apps/plugin-shell";
 import {
   api,
   isTauriRuntime,
+  type AgentToolEvent,
   type AssistantDelta,
   type AssistantReplyResult,
   type ChatSettings,
@@ -25,6 +27,8 @@ import {
 } from "./lib/api";
 import { applyThemeVars, THEMES, type ThemeName } from "./lib/theme";
 import { AppDialog, type AppDialogState } from "./components/AppDialog";
+import { KnowledgePanel } from "./components/KnowledgePanel";
+import { MemoryPanel } from "./components/MemoryPanel";
 import type { CanvasLayoutNode } from "./components/TreeCanvas";
 
 const ChatPanel = lazy(() =>
@@ -62,9 +66,11 @@ export default function App() {
   const [nodes, setNodes] = useState<CanvasLayoutNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [targetMessageId, setTargetMessageId] = useState("");
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [activeRequests, setActiveRequests] = useState<Record<string, string>>({});
   const [streamingText, setStreamingText] = useState<Record<string, string>>({});
+  const [agentToolEvents, setAgentToolEvents] = useState<Record<string, AgentToolEvent[]>>({});
   const [chatError, setChatError] = useState("");
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
@@ -85,6 +91,8 @@ export default function App() {
   const [dialog, setDialog] = useState<AppDialogState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatsOpen, setChatsOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
   const [connectorsLoading, setConnectorsLoading] = useState(false);
@@ -152,6 +160,9 @@ export default function App() {
   const selectedStreamingText = selectedCanvasNodeId
     ? streamingText[selectedCanvasNodeId] ?? ""
     : "";
+  const selectedAgentToolEvents = selectedCanvasNodeId
+    ? agentToolEvents[selectedCanvasNodeId] ?? []
+    : [];
   const compactLayout = viewportWidth < COMPACT_LAYOUT_WIDTH;
   const titlebarNeedsTrafficSpace = isTauriRuntime() && !windowFullscreen;
   const titlebarTitle = chatHomeVisible ? "ino-agent" : selectedNode?.title ?? activeTree?.title ?? "ino-agent";
@@ -410,6 +421,34 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<AgentToolEvent>("agent-tool-result", (event) => {
+      const payload = event.payload;
+      const activeRequest = activeRequestsRef.current[payload.nodeId];
+      if (!activeRequest || activeRequest !== payload.requestId) {
+        return;
+      }
+      setAgentToolEvents((current) => ({
+        ...current,
+        [payload.nodeId]: [...(current[payload.nodeId] ?? []), payload],
+      }));
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!selectedTreeId || !selectedCanvasNodeId) {
       setMessages([]);
       setMessagesLoading(false);
@@ -478,6 +517,7 @@ export default function App() {
   const handleSelectNode = useCallback(
     async (treeId: string, nodeId: string) => {
       setChatHomeVisible(false);
+      setTargetMessageId("");
       selectLocally(nodeId);
       try {
         await api.setCurrentNode(treeId, nodeId);
@@ -486,6 +526,39 @@ export default function App() {
       }
     },
     [selectLocally],
+  );
+
+  const handleOpenTarget = useCallback(
+    async (target: string) => {
+      const trimmed = target.trim();
+      if (!trimmed) return;
+      try {
+        const resolved = await api.resolveTarget(trimmed);
+        if (resolved.kind === "chat" && resolved.treeId && resolved.nodeId) {
+          setSettingsOpen(false);
+          setChatsOpen(false);
+          setMemoryOpen(false);
+          setKnowledgeOpen(false);
+          setChatHomeVisible(false);
+          await api.setCurrentNode(resolved.treeId, resolved.nodeId);
+          await loadCanvas(resolved.nodeId, resolved.treeId);
+          setTargetMessageId(resolved.messageId ?? "");
+          await loadMessages(resolved.treeId, resolved.nodeId);
+          return;
+        }
+        const openTarget =
+          resolved.kind === "url"
+            ? resolved.target
+            : resolved.absolutePath ?? resolved.path ?? resolved.target;
+        if (!openTarget) {
+          throw new Error("Target is not openable.");
+        }
+        await openShell(openTarget);
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [loadCanvas, loadMessages],
   );
 
   const handleRenameNode = useCallback(
@@ -613,6 +686,7 @@ export default function App() {
       const requestId = crypto.randomUUID();
       setActiveRequests((current) => ({ ...current, [nodeId]: requestId }));
       setStreamingText((current) => ({ ...current, [nodeId]: "" }));
+      setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
       setChatError("");
 
       try {
@@ -692,6 +766,7 @@ export default function App() {
         const nodeId = created.root_node_id;
         createdNodeId = nodeId;
         setActiveRequests((current) => ({ ...current, [nodeId]: "force-branch-split" }));
+        setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
 
         const userMessage = await api.addUserMessage(treeId, nodeId, content);
         if (selectedNodeIdRef.current === nodeId) {
@@ -728,6 +803,7 @@ export default function App() {
         const nodeId = created.root_node_id;
         createdNodeId = nodeId;
         setActiveRequests((current) => ({ ...current, [nodeId]: "connector" }));
+        setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
 
         const userMessage = await api.addUserMessage(treeId, nodeId, content);
         if (selectedNodeIdRef.current === nodeId) {
@@ -737,6 +813,7 @@ export default function App() {
 
         const connector = await api.proposeConnector(treeId, nodeId, content);
         await loadConnectors();
+        setKnowledgeOpen(false);
         setSettingsOpen(true);
         setStatusText(`Connector draft created: ${connector.manifest.name}`);
       } catch (e) {
@@ -762,6 +839,7 @@ export default function App() {
       if (activeRequestsRef.current[nodeId]) return;
 
       setActiveRequests((current) => ({ ...current, [nodeId]: "confirm-branches" }));
+      setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
       setChatError("");
       try {
         const reply = await api.confirmPendingBranches(treeId, nodeId);
@@ -792,6 +870,7 @@ export default function App() {
       const requestId = crypto.randomUUID();
       setActiveRequests((current) => ({ ...current, [nodeId]: requestId }));
       setStreamingText((current) => ({ ...current, [nodeId]: "" }));
+      setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
       setChatError("");
 
       try {
@@ -837,6 +916,7 @@ export default function App() {
       const requestId = crypto.randomUUID();
       setActiveRequests((current) => ({ ...current, [nodeId]: requestId }));
       setStreamingText((current) => ({ ...current, [nodeId]: "" }));
+      setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
       setChatError("");
 
       try {
@@ -873,6 +953,7 @@ export default function App() {
 
       setChatHomeVisible(false);
       setActiveRequests((current) => ({ ...current, [nodeId]: "force-branch-split" }));
+      setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
       setChatError("");
       try {
         if (content) {
@@ -909,10 +990,12 @@ export default function App() {
       if (activeRequestsRef.current[nodeId]) return;
 
       setActiveRequests((current) => ({ ...current, [nodeId]: "connector" }));
+      setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
       setChatError("");
       try {
         const connector = await api.proposeConnector(treeId, nodeId, content);
         await loadConnectors();
+        setKnowledgeOpen(false);
         setSettingsOpen(true);
         setStatusText(`Connector draft created: ${connector.manifest.name}`);
       } catch (e) {
@@ -1005,6 +1088,8 @@ export default function App() {
               aria-label="Chats"
               onClick={() => {
                 setSettingsOpen(false);
+                setMemoryOpen(false);
+                setKnowledgeOpen(false);
                 setChatsOpen((value) => !value);
               }}
               className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
@@ -1069,10 +1154,58 @@ export default function App() {
         <div className="absolute right-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center justify-end gap-2">
           <button
             type="button"
+            aria-label="Memory"
+            onClick={() => {
+              setSettingsOpen(false);
+              setChatsOpen(false);
+              setKnowledgeOpen(false);
+              setMemoryOpen((value) => !value);
+            }}
+            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
+              memoryOpen ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
+            }`}
+          >
+            <MemoryIcon />
+            <span className="hidden sm:inline">Memory</span>
+          </button>
+          {memoryOpen && (
+            <MemoryPanel
+              onClose={() => setMemoryOpen(false)}
+              onOpenTarget={handleOpenTarget}
+            />
+          )}
+          <button
+            type="button"
+            aria-label="Knowledge"
+            onClick={() => {
+              setSettingsOpen(false);
+              setChatsOpen(false);
+              setMemoryOpen(false);
+              setKnowledgeOpen((value) => !value);
+            }}
+            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
+              knowledgeOpen
+                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                : "text-[color:var(--muted)]"
+            }`}
+          >
+            <KnowledgeIcon />
+            <span className="hidden sm:inline">Knowledge</span>
+          </button>
+          {knowledgeOpen && (
+            <KnowledgePanel
+              onClose={() => setKnowledgeOpen(false)}
+              onOpenTarget={handleOpenTarget}
+            />
+          )}
+          <button
+            type="button"
             aria-label="Settings"
             onClick={() => {
               setSettingsDraft(settings);
               setChatsOpen(false);
+              setMemoryOpen(false);
+              setKnowledgeOpen(false);
               setSettingsOpen((value) => !value);
             }}
             className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
@@ -1152,10 +1285,12 @@ export default function App() {
             loading={chatHomeVisible ? false : messagesLoading}
             sending={startingChat || (!chatHomeVisible && selectedNodeIsSending)}
             streamingText={chatHomeVisible ? "" : selectedStreamingText}
+            agentToolEvents={chatHomeVisible ? [] : selectedAgentToolEvents}
             canWrite={Boolean(!chatHomeVisible && selectedNode?.is_leaf)}
             canStartChat={chatHomeVisible}
             fullWidth={!treeVisible || compactLayout}
             error={chatError}
+            targetMessageId={targetMessageId}
             panelWidth={treeVisible && !compactLayout ? chatWidth : undefined}
             onSend={handleSendMessage}
             onStartChat={handleStartChat}
@@ -1166,6 +1301,7 @@ export default function App() {
             onConfirmBranches={handleConfirmBranches}
             onForceBranchSplit={handleForceBranchSplit}
             onProposeConnector={handleProposeConnector}
+            onOpenTarget={handleOpenTarget}
           />
         </Suspense>
       </div>
@@ -1452,6 +1588,46 @@ function SettingsPanel({
         </button>
       </div>
     </form>
+  );
+}
+
+function MemoryIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <circle cx="5" cy="7" r="2" />
+      <circle cx="19" cy="7" r="2" />
+      <circle cx="7" cy="19" r="2" />
+      <circle cx="17" cy="19" r="2" />
+      <path d="M7 8.5 10 11M14 11l3-2.5M10.5 14.5 8 17.5M13.5 14.5 16 17.5" />
+    </svg>
+  );
+}
+
+function KnowledgeIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z" />
+      <path d="M4 5.5v16M8 7h8M8 11h7M8 15h5" />
+    </svg>
   );
 }
 

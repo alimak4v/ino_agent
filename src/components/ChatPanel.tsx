@@ -10,6 +10,9 @@ import {
 import {
   api,
   isTauriRuntime,
+  type AgentToolEvent,
+  type AgentToolResult,
+  type AgentTrace,
   type Message,
   type QuizAttempt,
 } from "../lib/api";
@@ -23,10 +26,12 @@ interface ChatPanelProps {
   loading: boolean;
   sending: boolean;
   streamingText: string;
+  agentToolEvents: AgentToolEvent[];
   canWrite: boolean;
   canStartChat?: boolean;
   fullWidth: boolean;
   error: string;
+  targetMessageId?: string;
   panelWidth?: number;
   onSend: (content: string) => Promise<void>;
   onStartChat?: (content: string) => Promise<void>;
@@ -37,6 +42,7 @@ interface ChatPanelProps {
   onConfirmBranches: (message: Message) => Promise<void>;
   onForceBranchSplit: (content: string) => Promise<void>;
   onProposeConnector: (content: string) => Promise<void>;
+  onOpenTarget: (target: string) => Promise<void>;
 }
 
 interface AttachmentDraft {
@@ -64,10 +70,12 @@ export function ChatPanel({
   loading,
   sending,
   streamingText,
+  agentToolEvents,
   canWrite,
   canStartChat = false,
   fullWidth,
   error,
+  targetMessageId = "",
   panelWidth,
   onSend,
   onStartChat,
@@ -78,6 +86,7 @@ export function ChatPanel({
   onConfirmBranches,
   onForceBranchSplit,
   onProposeConnector,
+  onOpenTarget,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
@@ -91,12 +100,13 @@ export function ChatPanel({
   const [dropActive, setDropActive] = useState(false);
   const [quizAttempts, setQuizAttempts] = useState<Record<string, QuizAttempt[]>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastMessage = messages[messages.length - 1];
   const scrollAnchor = `${messages.length}:${lastMessage?.id ?? ""}:${
     lastMessage?.content.length ?? 0
-  }:${streamingText.length}:${sending}:${loading}`;
+  }:${streamingText.length}:${agentToolEvents.length}:${sending}:${loading}`;
 
   useEffect(() => {
     const scrollElement = scrollRef.current;
@@ -115,6 +125,15 @@ export function ChatPanel({
       cancelAnimationFrame(secondFrame);
     };
   }, [scrollAnchor]);
+
+  useEffect(() => {
+    if (!targetMessageId) return;
+    const element = messageRefs.current[targetMessageId];
+    if (!element) return;
+    window.setTimeout(() => {
+      element.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+  }, [messages.length, targetMessageId]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -494,7 +513,14 @@ export function ChatPanel({
             {messages.map((message) => (
               <div
                 key={message.id}
-                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                ref={(element) => {
+                  messageRefs.current[message.id] = element;
+                }}
+                className={`flex rounded-2xl transition-[background-color,box-shadow] duration-500 ${
+                  message.id === targetMessageId
+                    ? "bg-[color:var(--selected)] shadow-[0_0_0_1px_var(--border)]"
+                    : ""
+                } ${message.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 <div
                   className={
@@ -506,6 +532,7 @@ export function ChatPanel({
                   <MessageContent
                     message={message}
                     quizAttempts={quizAttempts[message.id] ?? []}
+                    onOpenTarget={onOpenTarget}
                     onSaveQuizAttempt={async (
                       quizId,
                       quizType,
@@ -563,21 +590,36 @@ export function ChatPanel({
                     sending={sending}
                     onCopy={() => void copyMessage(message)}
                     onEdit={() => startEditingMessage(message)}
-                    onRegenerate={() => void onRegenerateMessage(message)}
+  onRegenerate={() => void onRegenerateMessage(message)}
+  onFeedback={(rating) =>
+    void api.recordFeedback({
+      targetType: "message",
+      targetId: message.id,
+      target: `chat://tree/${message.tree_id}/node/${message.node_id}/message/${message.id}`,
+      rating,
+    })
+  }
                   />
                 </div>
               </div>
             ))}
-            {streamingText && (
+            {(agentToolEvents.length > 0 || streamingText) && (
               <div className="flex justify-start">
                 <div
                   className={`${assistantWidth} min-w-0 break-words text-[15px] leading-7 text-[color:var(--text)]`}
                 >
-                  <StreamingMessage content={streamingText} />
+                  {agentToolEvents.length > 0 && (
+                    <AgentToolTraceView
+                      results={agentToolEvents}
+                      live
+                      onOpenTarget={onOpenTarget}
+                    />
+                  )}
+                  {streamingText && <StreamingMessage content={streamingText} />}
                 </div>
               </div>
             )}
-            {sending && !streamingText && (
+            {sending && !streamingText && agentToolEvents.length === 0 && (
               <div className="flex justify-start">
                 <div className="rounded-full border border-[color:var(--border)] bg-[color:var(--panel)] px-4 py-2 text-sm text-[color:var(--muted)]">
                   Thinking
@@ -777,6 +819,42 @@ function RegenerateIcon() {
   );
 }
 
+function ThumbUpIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+    >
+      <path d="M7 10v11H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z" />
+      <path d="M7 10 12 2a2.5 2.5 0 0 1 2.4 3.2L13 10h5.5a2.5 2.5 0 0 1 2.4 3.1l-1.4 5.5A3 3 0 0 1 16.6 21H7" />
+    </svg>
+  );
+}
+
+function ThumbDownIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+    >
+      <path d="M17 14V3h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2z" />
+      <path d="m17 14-5 8a2.5 2.5 0 0 1-2.4-3.2L11 14H5.5a2.5 2.5 0 0 1-2.4-3.1l1.4-5.5A3 3 0 0 1 7.4 3H17" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg
@@ -864,10 +942,12 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
 function MessageContent({
   message,
   quizAttempts,
+  onOpenTarget,
   onSaveQuizAttempt,
 }: {
   message: Message;
   quizAttempts: QuizAttempt[];
+  onOpenTarget: (target: string) => Promise<void>;
   onSaveQuizAttempt: (
     quizId: string,
     quizType: string,
@@ -880,6 +960,7 @@ function MessageContent({
 }) {
   const content = message.content;
   const { visibleText, attachments } = splitAttachmentPayload(stripBranchPlanAction(content));
+  const agentTrace = message.role === "assistant" ? parseAgentTrace(message.visualization_html) : null;
   const renderQuiz =
     message.role === "assistant"
       ? (source: string) => (
@@ -912,7 +993,102 @@ function MessageContent({
           renderQuiz={renderQuiz}
         />
       )}
+      {agentTrace && agentTrace.toolResults.length > 0 && (
+        <AgentToolTraceView
+          results={agentTrace.toolResults}
+          onOpenTarget={onOpenTarget}
+        />
+      )}
     </>
+  );
+}
+
+function AgentToolTraceView({
+  results,
+  onOpenTarget,
+  live = false,
+}: {
+  results: Array<AgentToolResult | AgentToolEvent>;
+  onOpenTarget: (target: string) => Promise<void>;
+  live?: boolean;
+}) {
+  return (
+    <div className={live ? "mb-4" : "mt-4"}>
+      <details
+        open={live}
+        className="overflow-hidden rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] text-[13px] leading-5"
+      >
+        <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-[color:var(--muted)]">
+          Agent tools {results.length > 0 ? `(${results.length})` : ""}
+        </summary>
+        <div className="space-y-2 border-t border-[color:var(--border)] p-2">
+          {results.map((result, index) => (
+            <AgentToolTraceRow
+              key={`${result.tool}-${index}`}
+              result={result}
+              onOpenTarget={onOpenTarget}
+            />
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function AgentToolTraceRow({
+  result,
+  onOpenTarget,
+}: {
+  result: AgentToolResult | AgentToolEvent;
+  onOpenTarget: (target: string) => Promise<void>;
+}) {
+  const summary = summarizeToolContent(result.content);
+  const targets = extractOpenTargets(result.content);
+  return (
+    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] p-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 truncate font-mono text-xs text-[color:var(--text)]">
+          {result.tool}
+        </div>
+        <span
+          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
+            result.ok
+              ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+              : "bg-red-500/10 text-red-600"
+          }`}
+        >
+          {result.ok ? "ok" : "error"}
+        </span>
+      </div>
+      {summary && (
+        <div className="mt-1 whitespace-pre-wrap break-words text-xs text-[color:var(--muted)]">
+          {summary}
+        </div>
+      )}
+      {targets.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {targets.slice(0, 5).map((target, index) => (
+            <button
+              key={`${target}-${index}`}
+              type="button"
+              onClick={() => void onOpenTarget(target)}
+              className="inline-flex h-7 max-w-full items-center rounded-full border border-[color:var(--border)] px-2.5 text-[11px] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+              title={target}
+            >
+              <span className="truncate">{targets.length === 1 ? "Open" : `Open ${index + 1}`}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <details className="mt-1">
+        <summary className="cursor-pointer text-[11px] text-[color:var(--muted)]">
+          raw
+        </summary>
+        <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-[color:var(--panel)] p-2 text-[11px] leading-4 text-[color:var(--text)]">
+          {safeJson(result.content)}
+        </pre>
+      </details>
+    </div>
   );
 }
 
@@ -924,6 +1100,7 @@ function MessageActions({
   onCopy,
   onEdit,
   onRegenerate,
+  onFeedback,
 }: {
   message: Message;
   canMutate: boolean;
@@ -932,6 +1109,7 @@ function MessageActions({
   onCopy: () => void;
   onEdit: () => void;
   onRegenerate: () => void;
+  onFeedback: (rating: "useful" | "not_useful") => void;
 }) {
   const align = message.role === "user" ? "justify-end" : "justify-start";
   const canEdit = message.role === "user" && canMutate;
@@ -963,6 +1141,24 @@ function MessageActions({
         >
           <RegenerateIcon />
         </ActionIconButton>
+      )}
+      {message.role === "assistant" && (
+        <>
+          <ActionIconButton
+            label="Useful"
+            disabled={false}
+            onClick={() => onFeedback("useful")}
+          >
+            <ThumbUpIcon />
+          </ActionIconButton>
+          <ActionIconButton
+            label="Not useful"
+            disabled={false}
+            onClick={() => onFeedback("not_useful")}
+          >
+            <ThumbDownIcon />
+          </ActionIconButton>
+        </>
       )}
     </div>
   );
@@ -1103,6 +1299,154 @@ function splitAttachmentPayload(content: string) {
     )
     .trim();
   return { visibleText, attachments };
+}
+
+function parseAgentTrace(raw: string | null): AgentTrace | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<AgentTrace>;
+    if (!Array.isArray(parsed.toolResults)) return null;
+    return {
+      toolResults: parsed.toolResults.filter(
+        (item): item is AgentToolResult =>
+          Boolean(item) &&
+          typeof item === "object" &&
+          typeof (item as AgentToolResult).tool === "string" &&
+          typeof (item as AgentToolResult).ok === "boolean",
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function summarizeToolContent(content: unknown) {
+  if (!content || typeof content !== "object") {
+    return typeof content === "string" ? content : "";
+  }
+  const value = content as Record<string, unknown>;
+  if (typeof value.error === "string") {
+    return value.error;
+  }
+  if (Array.isArray(value.entries)) {
+    return `${value.entries.length} entries`;
+  }
+  if (typeof value.indexedChunks === "number") {
+    return [
+      typeof value.path === "string" ? value.path : "",
+      `${String(value.indexedFiles ?? 0)} files`,
+      `${value.indexedChunks} chunks`,
+      typeof value.unchangedFiles === "number" && value.unchangedFiles > 0
+        ? `${value.unchangedFiles} unchanged`
+        : "",
+      Array.isArray(value.skipped) && value.skipped.length > 0
+        ? `${value.skipped.length} skipped`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (typeof value.kind === "string" && typeof value.target === "string") {
+    return [
+      `kind: ${value.kind}`,
+      value.target,
+      typeof value.path === "string" ? value.path : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (typeof value.command === "string") {
+    const stdout = typeof value.stdout === "string" ? value.stdout.trim() : "";
+    const stderr = typeof value.stderr === "string" ? value.stderr.trim() : "";
+    return [
+      `$ ${value.command}`,
+      `exit: ${String(value.exitCode ?? "null")}`,
+      stdout ? `stdout:\n${clipText(stdout, 900)}` : "",
+      stderr ? `stderr:\n${clipText(stderr, 900)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (typeof value.path === "string") {
+    return [
+      value.path,
+      typeof value.bytes === "number" ? `${value.bytes} bytes` : "",
+      value.truncated ? "truncated" : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if ("id" in value && typeof value.title === "string") {
+    return `${value.title}${typeof value.target === "string" ? `\n${value.target}` : ""}`;
+  }
+  return "";
+}
+
+function extractOpenTargets(content: unknown) {
+  const targets: string[] = [];
+  const pushTarget = (value: unknown) => {
+    if (typeof value === "string" && value.trim()) {
+      targets.push(value.trim());
+    }
+  };
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    pushTarget(record.target);
+    pushTarget(record.absolutePath);
+    pushTarget(record.path);
+    if (Array.isArray(record.items)) {
+      for (const item of record.items) {
+        if (item && typeof item === "object") {
+          pushTarget((item as Record<string, unknown>).target);
+        }
+      }
+    }
+    if (Array.isArray(record.chunks)) {
+      for (const item of record.chunks) {
+        if (item && typeof item === "object") {
+          pushTarget((item as Record<string, unknown>).target);
+        }
+      }
+    }
+    if (Array.isArray(record.memoryResults)) {
+      for (const item of record.memoryResults) {
+        if (!item || typeof item !== "object") continue;
+        const memory = (item as Record<string, unknown>).item;
+        if (memory && typeof memory === "object") {
+          pushTarget((memory as Record<string, unknown>).target);
+        }
+      }
+    }
+    if (Array.isArray(record.knowledgeResults)) {
+      for (const item of record.knowledgeResults) {
+        if (!item || typeof item !== "object") continue;
+        const chunk = (item as Record<string, unknown>).chunk;
+        if (chunk && typeof chunk === "object") {
+          pushTarget((chunk as Record<string, unknown>).target);
+        }
+      }
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item);
+      }
+    }
+  };
+  visit(content);
+  return Array.from(new Set(targets)).slice(0, 8);
+}
+
+function safeJson(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function clipText(value: string, limit: number) {
+  return value.length > limit ? `${value.slice(0, limit).trimEnd()}\n...` : value;
 }
 
 function groupQuizAttemptsByMessage(attempts: QuizAttempt[]) {

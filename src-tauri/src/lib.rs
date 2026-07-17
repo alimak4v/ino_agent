@@ -1,11 +1,14 @@
+mod agent_tools;
 mod api;
 mod code_runner;
 mod connectors;
+mod context_builder;
 mod store;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{hash_map::DefaultHasher, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -24,6 +27,23 @@ struct StreamDelta {
     tree_id: String,
     node_id: String,
     delta: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentToolEvent {
+    request_id: String,
+    tree_id: String,
+    node_id: String,
+    tool: String,
+    ok: bool,
+    content: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentTrace {
+    tool_results: Vec<agent_tools::AgentToolResult>,
 }
 
 const BRANCH_PLAN_ACTION_MARKER: &str = "<!-- treeai:branch-plan -->";
@@ -384,6 +404,87 @@ async fn revise_assistant_message(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+fn add_memory(
+    state: State<AppState>,
+    input: store::MemoryInput,
+) -> Result<store::MemoryItem, String> {
+    let store = &mut *lock_store(&state.store)?;
+    store.add_memory(input)
+}
+
+#[tauri::command]
+fn update_memory(
+    state: State<AppState>,
+    id: String,
+    input: store::MemoryInput,
+) -> Result<store::MemoryItem, String> {
+    let store = &mut *lock_store(&state.store)?;
+    store.update_memory(&id, input)
+}
+
+#[tauri::command]
+fn merge_memory(
+    state: State<AppState>,
+    keep_id: String,
+    remove_id: String,
+) -> Result<store::MemoryItem, String> {
+    let store = &mut *lock_store(&state.store)?;
+    store.merge_memory(&keep_id, &remove_id)
+}
+
+#[tauri::command]
+fn search_memory(
+    state: State<AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<store::MemorySearchResult>, String> {
+    lock_store(&state.store)?.search_memory(&query, limit.unwrap_or(12))
+}
+
+#[tauri::command]
+fn search_knowledge(
+    state: State<AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<store::KnowledgeSearchResult>, String> {
+    lock_store(&state.store)?.search_knowledge(&query, limit.unwrap_or(12))
+}
+
+#[tauri::command]
+fn list_memory_recent(
+    state: State<AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<store::MemoryItem>, String> {
+    lock_store(&state.store)?.list_memory_recent(limit.unwrap_or(24))
+}
+
+#[tauri::command]
+fn delete_memory(state: State<AppState>, id: String) -> Result<(), String> {
+    let store = &mut *lock_store(&state.store)?;
+    store.delete_memory(&id)
+}
+
+#[tauri::command]
+fn record_feedback(state: State<AppState>, input: store::FeedbackInput) -> Result<(), String> {
+    let store = &mut *lock_store(&state.store)?;
+    store.record_feedback(input)
+}
+
+#[tauri::command]
+fn get_memory_graph(
+    state: State<AppState>,
+    limit: Option<usize>,
+) -> Result<store::MemoryGraph, String> {
+    lock_store(&state.store)?.memory_graph(limit.unwrap_or(36))
+}
+
+#[tauri::command]
+fn resolve_target(target: String) -> Result<Value, String> {
+    let workspace_root = agent_tools::workspace_root()?;
+    agent_tools::resolve_target(&workspace_root, &target)
+}
+
 fn force_branch_split_blocking(
     store: Arc<Mutex<store::Store>>,
     tree_id: String,
@@ -473,10 +574,12 @@ fn generate_assistant_reply_blocking(
         let store = lock_store(&store)?;
         let rows = store.get_messages_for_node(&tree_id, &node_id)?;
         let mut latest_user = String::new();
+        let mut latest_user_id = String::new();
         let mut latest_assistant = String::new();
         for row in rows.iter().rev() {
             if latest_user.is_empty() && row.role == "user" {
                 latest_user = row.content.clone();
+                latest_user_id = row.id.clone();
             }
             if latest_assistant.is_empty() && row.role == "assistant" {
                 latest_assistant = row.content.clone();
@@ -491,6 +594,7 @@ fn generate_assistant_reply_blocking(
         let pending_plan = store.get_pending_branch_plan(&tree_id, &node_id)?;
         (
             latest_user,
+            latest_user_id,
             latest_assistant,
             parent.title,
             settings,
@@ -499,7 +603,15 @@ fn generate_assistant_reply_blocking(
         )
     };
 
-    let (latest_user, latest_assistant, parent_title, settings, messages, pending_plan) = snapshot;
+    let (
+        latest_user,
+        latest_user_id,
+        latest_assistant,
+        parent_title,
+        settings,
+        messages,
+        pending_plan,
+    ) = snapshot;
 
     if let Some(plan) = pending_plan {
         if is_affirmative(&latest_user) {
@@ -534,6 +646,70 @@ fn generate_assistant_reply_blocking(
         if let Some(plan) = fallback_branch_plan_from_text(&latest_user) {
             let store = &mut *lock_store(&store)?;
             return save_branch_plan_question(store, &tree_id, &node_id, &plan);
+        }
+    }
+
+    if let Some(memory_input) =
+        remember_request_to_memory_input(&latest_user, &tree_id, &node_id, &latest_user_id)
+    {
+        let memory = {
+            let store = &mut *lock_store(&store)?;
+            store.add_memory(memory_input)?
+        };
+        let message = {
+            let store = &mut *lock_store(&store)?;
+            store.add_message(
+                &tree_id,
+                &node_id,
+                "assistant",
+                &format!(
+                    "Запомнил: **{}**\n\nИсточник: `{}`",
+                    memory.title, memory.target
+                ),
+            )?
+        };
+        return Ok(store::AssistantReplyResult {
+            message,
+            selected_node_id: node_id,
+            created_branches: Vec::new(),
+        });
+    }
+
+    if wants_agent_tools(&latest_user) {
+        if let Some(output) = run_agent_tool_turn(
+            window.clone(),
+            store.clone(),
+            &settings,
+            &messages,
+            &latest_user,
+            &tree_id,
+            &node_id,
+            &request_id,
+        )? {
+            let message = {
+                let store = &mut *lock_store(&store)?;
+                store.add_message_with_visualization(
+                    &tree_id,
+                    &node_id,
+                    "assistant",
+                    &output.answer,
+                    Some(output.trace_json),
+                )?
+            };
+            let _ = maybe_auto_capture_memory(
+                store.clone(),
+                &settings,
+                &tree_id,
+                &node_id,
+                &latest_user_id,
+                &latest_user,
+                &output.answer,
+            );
+            return Ok(store::AssistantReplyResult {
+                message,
+                selected_node_id: node_id,
+                created_branches: Vec::new(),
+            });
         }
     }
 
@@ -588,6 +764,15 @@ fn generate_assistant_reply_blocking(
         let store = &mut *lock_store(&store)?;
         store.add_message(&tree_id, &node_id, "assistant", &answer)?
     };
+    let _ = maybe_auto_capture_memory(
+        store.clone(),
+        &settings,
+        &tree_id,
+        &node_id,
+        &latest_user_id,
+        &latest_user,
+        &answer,
+    );
     Ok(store::AssistantReplyResult {
         message,
         selected_node_id: node_id,
@@ -619,6 +804,544 @@ fn create_branches_from_plan(
     plan: &store::BranchPlan,
 ) -> Result<store::AssistantReplyResult, String> {
     store.create_branches_from_plan(tree_id, node_id, parent_title, plan)
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentDecision {
+    #[serde(default)]
+    final_answer: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<agent_tools::AgentToolCall>,
+    #[serde(default)]
+    tool_call: Option<agent_tools::AgentToolCall>,
+}
+
+struct AgentTurnOutput {
+    answer: String,
+    trace_json: String,
+}
+
+const AGENT_MAX_TOOL_ROUNDS: usize = 2;
+const AGENT_MAX_TOOL_CALLS_PER_ROUND: usize = 4;
+const AGENT_MAX_TOTAL_TOOL_CALLS: usize = 6;
+
+#[derive(Debug, Deserialize)]
+struct AutoMemoryPlan {
+    #[serde(default)]
+    items: Vec<AutoMemoryItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AutoMemoryItem {
+    #[serde(default)]
+    title: Option<String>,
+    description: String,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    source_type: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    importance: Option<f64>,
+    #[serde(default)]
+    memory_kind: Option<String>,
+    #[serde(default)]
+    confidence: Option<f64>,
+    #[serde(default)]
+    stability: Option<String>,
+}
+
+fn run_agent_tool_turn(
+    window: Window,
+    store: Arc<Mutex<store::Store>>,
+    settings: &store::ChatSettings,
+    messages: &[store::ChatContextMessage],
+    latest_user: &str,
+    tree_id: &str,
+    node_id: &str,
+    request_id: &str,
+) -> Result<Option<AgentTurnOutput>, String> {
+    let workspace_root = agent_tools::workspace_root()?;
+    let mut planner_messages = vec![store::ChatContextMessage {
+        role: "system".to_string(),
+        content: agent_tool_planner_prompt(tree_id, node_id, &workspace_root.display().to_string()),
+    }];
+    planner_messages.extend(messages.iter().cloned());
+
+    let decision_text = api::chat_completion(settings, &planner_messages)?;
+    let Some(mut decision) = parse_agent_decision(&decision_text) else {
+        return Ok(None);
+    };
+    if let Some(call) = decision.tool_call.take() {
+        decision.tool_calls.push(call);
+    }
+    if decision.tool_calls.is_empty() {
+        return Ok(decision
+            .final_answer
+            .map(|answer| answer.trim().to_string())
+            .filter(|answer| !answer.is_empty())
+            .map(|answer| AgentTurnOutput {
+                answer,
+                trace_json: empty_agent_trace_json(),
+            }));
+    }
+
+    let mut tool_results = execute_agent_tool_calls(
+        &window,
+        store.clone(),
+        &workspace_root,
+        decision.tool_calls,
+        request_id,
+        tree_id,
+        node_id,
+        AGENT_MAX_TOOL_CALLS_PER_ROUND.min(AGENT_MAX_TOTAL_TOOL_CALLS),
+    )?;
+    for _round in 1..AGENT_MAX_TOOL_ROUNDS {
+        if tool_results.len() >= AGENT_MAX_TOTAL_TOOL_CALLS {
+            break;
+        }
+        let observed_results_json =
+            serde_json::to_string_pretty(&tool_results).map_err(|e| e.to_string())?;
+        let mut observer_messages = messages.to_vec();
+        observer_messages.push(store::ChatContextMessage {
+            role: "system".to_string(),
+            content: agent_tool_observer_prompt(
+                latest_user,
+                &observed_results_json,
+                AGENT_MAX_TOTAL_TOOL_CALLS - tool_results.len(),
+            ),
+        });
+        let observer_text = api::chat_completion(settings, &observer_messages)?;
+        let Some(mut followup) = parse_agent_decision(&observer_text) else {
+            break;
+        };
+        if let Some(call) = followup.tool_call.take() {
+            followup.tool_calls.push(call);
+        }
+        if followup.tool_calls.is_empty() {
+            break;
+        }
+        let remaining = AGENT_MAX_TOTAL_TOOL_CALLS - tool_results.len();
+        let mut next_results = execute_agent_tool_calls(
+            &window,
+            store.clone(),
+            &workspace_root,
+            followup.tool_calls,
+            request_id,
+            tree_id,
+            node_id,
+            remaining.min(AGENT_MAX_TOOL_CALLS_PER_ROUND),
+        )?;
+        tool_results.append(&mut next_results);
+    }
+    let tool_results_json =
+        serde_json::to_string_pretty(&tool_results).map_err(|e| e.to_string())?;
+    let trace_json = serde_json::to_string(&AgentTrace {
+        tool_results: tool_results.clone(),
+    })
+    .map_err(|e| e.to_string())?;
+
+    let mut final_messages = messages.to_vec();
+    final_messages.push(store::ChatContextMessage {
+        role: "system".to_string(),
+        content: format!(
+            "Agent tool results for the latest user request:\n```json\n{tool_results_json}\n```\nUse these results to answer the user directly. Do not invent tool output. If a tool failed, explain the failure plainly. If a memory or file target is relevant, mention it."
+        ),
+    });
+    final_messages.push(store::ChatContextMessage {
+        role: "system".to_string(),
+        content: format!(
+            "Latest user request was:\n{latest_user}\n\nNow produce the final assistant answer. Do not return JSON and do not request another tool call."
+        ),
+    });
+    let answer = api::chat_completion_stream(settings, &final_messages, |delta| {
+        let _ = window.emit(
+            "assistant-delta",
+            StreamDelta {
+                request_id: request_id.to_string(),
+                tree_id: tree_id.to_string(),
+                node_id: node_id.to_string(),
+                delta,
+            },
+        );
+    })?
+    .trim()
+    .to_string();
+    if answer.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(AgentTurnOutput { answer, trace_json }))
+}
+
+fn execute_agent_tool_calls(
+    window: &Window,
+    store: Arc<Mutex<store::Store>>,
+    workspace_root: &std::path::Path,
+    calls: Vec<agent_tools::AgentToolCall>,
+    request_id: &str,
+    tree_id: &str,
+    node_id: &str,
+    limit: usize,
+) -> Result<Vec<agent_tools::AgentToolResult>, String> {
+    calls
+        .into_iter()
+        .take(limit)
+        .map(|call| {
+            if agent_tools::tool_needs_store(&call.tool) {
+                let store = &mut *lock_store(&store)?;
+                let result = agent_tools::execute_tool(Some(store), workspace_root, call);
+                emit_agent_tool_event(window, request_id, tree_id, node_id, &result);
+                Ok(result)
+            } else {
+                let result = agent_tools::execute_tool(None, workspace_root, call);
+                emit_agent_tool_event(window, request_id, tree_id, node_id, &result);
+                Ok(result)
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()
+}
+
+fn emit_agent_tool_event(
+    window: &Window,
+    request_id: &str,
+    tree_id: &str,
+    node_id: &str,
+    result: &agent_tools::AgentToolResult,
+) {
+    let _ = window.emit(
+        "agent-tool-result",
+        AgentToolEvent {
+            request_id: request_id.to_string(),
+            tree_id: tree_id.to_string(),
+            node_id: node_id.to_string(),
+            tool: result.tool.clone(),
+            ok: result.ok,
+            content: result.content.clone(),
+        },
+    );
+}
+
+fn empty_agent_trace_json() -> String {
+    serde_json::to_string(&AgentTrace {
+        tool_results: Vec::new(),
+    })
+    .unwrap_or_else(|_| "{\"toolResults\":[]}".to_string())
+}
+
+fn parse_agent_decision(raw: &str) -> Option<AgentDecision> {
+    serde_json::from_str::<AgentDecision>(raw.trim())
+        .ok()
+        .or_else(|| {
+            let text = raw.trim();
+            if text.starts_with("```") {
+                let inner = text
+                    .lines()
+                    .skip(1)
+                    .take_while(|line| !line.trim_start().starts_with("```"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::from_str::<AgentDecision>(inner.trim()).ok()
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            let start = raw.find('{')?;
+            let end = raw.rfind('}')?;
+            if end <= start {
+                return None;
+            }
+            serde_json::from_str::<AgentDecision>(&raw[start..=end]).ok()
+        })
+}
+
+fn maybe_auto_capture_memory(
+    store: Arc<Mutex<store::Store>>,
+    settings: &store::ChatSettings,
+    tree_id: &str,
+    node_id: &str,
+    latest_user_id: &str,
+    latest_user: &str,
+    assistant_answer: &str,
+) -> Result<usize, String> {
+    if !looks_auto_memory_worthy(latest_user, assistant_answer) {
+        return Ok(0);
+    }
+
+    let current_target = chat_target(tree_id, node_id, latest_user_id);
+    let fingerprint = auto_memory_fingerprint(&current_target, latest_user, assistant_answer);
+    if lock_store(&store)?.has_memory_ingest_run(&fingerprint)? {
+        return Ok(0);
+    }
+
+    let extractor_messages = vec![
+        store::ChatContextMessage {
+            role: "system".to_string(),
+            content: auto_memory_extractor_prompt(),
+        },
+        store::ChatContextMessage {
+            role: "user".to_string(),
+            content: format!(
+                "Current chat target: {current_target}\n\nLatest user message:\n{}\n\nAssistant answer:\n{}",
+                clip_for_memory_extractor(latest_user, 8_000),
+                clip_for_memory_extractor(assistant_answer, 8_000)
+            ),
+        },
+    ];
+    let raw_plan = api::chat_completion(settings, &extractor_messages)?;
+    let Some(plan) = parse_auto_memory_plan(&raw_plan) else {
+        let store = &mut *lock_store(&store)?;
+        store.mark_memory_ingest_run(&fingerprint, "chat-turn", &current_target)?;
+        return Ok(0);
+    };
+
+    let mut saved = 0usize;
+    for item in plan.items.into_iter().take(3) {
+        let description = item.description.trim();
+        if description.chars().count() < 16 {
+            continue;
+        }
+        let importance = item.importance.unwrap_or(6.0).clamp(0.0, 10.0);
+        if importance < 6.0 {
+            continue;
+        }
+        let is_duplicate = {
+            let store = lock_store(&store)?;
+            store
+                .search_memory_readonly(description, 1)?
+                .first()
+                .is_some_and(|result| result.score >= 0.92)
+        };
+        if is_duplicate {
+            continue;
+        }
+
+        let mut tags = item.tags.unwrap_or_default();
+        tags.push("auto".to_string());
+        tags.push("chat".to_string());
+        let target = item
+            .target
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&current_target)
+            .to_string();
+        let source_type = item.source_type.or_else(|| {
+            if target == current_target {
+                Some("chat".to_string())
+            } else {
+                None
+            }
+        });
+        let input = store::MemoryInput {
+            title: item.title,
+            description: description.to_string(),
+            target,
+            source_type,
+            tags: Some(tags),
+            importance: Some(importance),
+            memory_kind: item.memory_kind,
+            confidence: item.confidence,
+            stability: item.stability,
+        };
+        let store = &mut *lock_store(&store)?;
+        store.add_memory(input)?;
+        saved += 1;
+    }
+    let store = &mut *lock_store(&store)?;
+    store.mark_memory_ingest_run(&fingerprint, "chat-turn", &current_target)?;
+    Ok(saved)
+}
+
+fn auto_memory_extractor_prompt() -> String {
+    r#"You are a strict long-term memory extractor for a local personal agent.
+
+Return ONLY compact JSON with this exact shape:
+{"items":[{"title":"...","description":"...","target":"...","source_type":"chat|file|url|text","tags":["..."],"importance":7.0,"memory_kind":"fact|preference|project_decision|source|todo|note","confidence":0.8,"stability":"temporary|durable|permanent"}]}
+
+Extract at most 3 items. Return {"items":[]} when there is nothing worth remembering.
+
+Save ONLY durable facts that will be useful in future unrelated chats:
+- user identity, stable preferences, interests, names, plans, events, commitments;
+- important project ideas, architecture decisions, constraints, and TODOs that should persist;
+- file paths, URLs, source locations, or text locations the user may need later;
+- explicit statements that something is important.
+
+Do NOT save:
+- ordinary one-off questions or answers;
+- temporary reasoning, implementation chatter, or generic explanations;
+- facts invented or inferred by the assistant;
+- duplicate memories;
+- anything with unclear future value.
+
+Rules:
+- Use only facts explicitly present in the latest user message or assistant answer.
+- Prefer Russian descriptions when the conversation is Russian.
+- If a specific file path, URL, or source target is explicitly present, use it as target and choose source_type accordingly.
+- Otherwise use the provided Current chat target and source_type "chat".
+- Importance must be 6-10; use 8-10 only for highly reusable facts.
+- memory_kind must classify what is being saved.
+- confidence is how certain the item is explicitly supported by the conversation.
+- stability is "temporary" for short-lived context, "durable" for reusable facts, and "permanent" for identity/preferences that should almost never expire.
+"#
+    .to_string()
+}
+
+fn parse_auto_memory_plan(raw: &str) -> Option<AutoMemoryPlan> {
+    serde_json::from_str::<AutoMemoryPlan>(raw.trim())
+        .ok()
+        .or_else(|| {
+            let text = raw.trim();
+            if text.starts_with("```") {
+                let inner = text
+                    .lines()
+                    .skip(1)
+                    .take_while(|line| !line.trim_start().starts_with("```"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::from_str::<AutoMemoryPlan>(inner.trim()).ok()
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            let start = raw.find('{')?;
+            let end = raw.rfind('}')?;
+            if end <= start {
+                return None;
+            }
+            serde_json::from_str::<AutoMemoryPlan>(&raw[start..=end]).ok()
+        })
+}
+
+fn looks_auto_memory_worthy(user: &str, answer: &str) -> bool {
+    let combined = format!("{user}\n{answer}");
+    let lower = combined.to_lowercase();
+    let durable_markers = [
+        "важно",
+        "запомни",
+        "память",
+        "проект",
+        "идея",
+        "архитектур",
+        "решили",
+        "решение",
+        "будем",
+        "я хочу",
+        "мне нужно",
+        "предпочитаю",
+        "интерес",
+        "зовут",
+        "файл",
+        "папк",
+        "путь",
+        ".rs",
+        ".ts",
+        ".tsx",
+        ".md",
+        ".pdf",
+        "remember",
+        "important",
+        "project",
+        "preference",
+        "decision",
+        "file",
+        "path",
+    ];
+    durable_markers
+        .iter()
+        .any(|marker| contains(&lower, marker))
+        || (user.chars().count() >= 220 && answer.chars().count() >= 120)
+}
+
+fn clip_for_memory_extractor(raw: &str, max_chars: usize) -> String {
+    if raw.chars().count() <= max_chars {
+        return raw.to_string();
+    }
+    let mut clipped = raw.chars().take(max_chars).collect::<String>();
+    clipped.push_str("\n[truncated]");
+    clipped
+}
+
+fn chat_target(tree_id: &str, node_id: &str, message_id: &str) -> String {
+    if message_id.trim().is_empty() {
+        format!("chat://tree/{tree_id}/node/{node_id}")
+    } else {
+        format!("chat://tree/{tree_id}/node/{node_id}/message/{message_id}")
+    }
+}
+
+fn auto_memory_fingerprint(target: &str, latest_user: &str, assistant_answer: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    "auto-memory-v1".hash(&mut hasher);
+    target.hash(&mut hasher);
+    latest_user.trim().hash(&mut hasher);
+    assistant_answer.trim().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn agent_tool_planner_prompt(tree_id: &str, node_id: &str, workspace_root: &str) -> String {
+    format!(
+        r#"You are the tool planner for ino-agent. Decide whether the latest user request needs local tools.
+
+Return ONLY compact JSON in one of these shapes:
+{{"final_answer":"..."}}
+{{"tool_calls":[{{"tool":"search_memory","args":{{"query":"...","limit":8}}}}]}}
+
+Available tools:
+- search_memory: semantic recall over long-term memory. Args: query string, optional limit number.
+- add_memory: save important long-term memory. Args: description string, target string, optional title, source_type, tags array, importance 0-10, memory_kind, confidence 0-1, stability.
+- list_files: list files inside workspace. Args: path string, optional limit number.
+- read_file: read one text file inside workspace. Args: path string, optional maxBytes number.
+- run_command: run a safe command inside workspace without shell. Args: command string, optional cwd string, timeoutMs number.
+- open_target: resolve a saved memory target into an openable chat/url/file descriptor. Args: target string.
+- index_path: index one supported file or a workspace directory into memory chunks. Args: path string, optional limitFiles and limitChunks numbers.
+
+Rules:
+- Use tools only when the user explicitly asks to search memory, inspect files, run/check/build code, or save memory.
+- Prefer search_memory for "remember/найди в памяти/что мы сохраняли" style requests.
+- Prefer add_memory only when the user explicitly asks to remember/save a fact.
+- Prefer index_path when the user asks to index, remember a file/folder, or add local files to knowledge.
+- Prefer open_target when the user asks where a memory points or how to open a saved source.
+- Prefer list_files/read_file for file inspection.
+- Use run_command only for explicit command execution, tests, builds, or local inspection.
+- Never request destructive actions. Commands run without shell operators and inside workspace only.
+- For chat memories, use target "chat://tree/{tree_id}/node/{node_id}".
+- Current workspace root: {workspace_root}
+"#
+    )
+}
+
+fn agent_tool_observer_prompt(
+    latest_user: &str,
+    tool_results_json: &str,
+    remaining: usize,
+) -> String {
+    format!(
+        r#"You are the observer/verifier for an ino-agent tool loop.
+
+The agent already ran tools for the latest request. Decide whether the observations are sufficient.
+
+Return ONLY compact JSON:
+{{"tool_calls":[]}}
+or
+{{"tool_calls":[{{"tool":"read_file","args":{{"path":"..."}}}}]}}
+
+Rules:
+- Request more tools only if the current observations are insufficient to answer correctly.
+- Do not repeat a tool call that already failed or already returned the needed information.
+- Prefer no more tools when the answer can be produced from existing observations.
+- At most {remaining} more tool call(s) are allowed.
+- Never request destructive actions.
+- Latest user request: {latest_user}
+
+Current observations:
+```json
+{tool_results_json}
+```
+"#
+    )
 }
 
 fn branch_planner_prompt(count: usize) -> String {
@@ -725,6 +1448,59 @@ fn wants_branch_creation(raw: &str) -> bool {
     action && target
 }
 
+fn wants_agent_tools(raw: &str) -> bool {
+    let text = raw.to_lowercase();
+    let memory = [
+        "найди в памяти",
+        "поиск в памяти",
+        "вспомни",
+        "что ты помнишь",
+        "что сохранено",
+        "search memory",
+        "recall",
+        "индексируй",
+        "проиндексируй",
+        "добавь файл в память",
+        "добавь папку в память",
+        "index file",
+        "index folder",
+        "index path",
+    ]
+    .iter()
+    .any(|needle| contains(&text, needle));
+    let files = [
+        "прочитай файл",
+        "открой файл",
+        "посмотри файл",
+        "покажи файл",
+        "list files",
+        "read file",
+        "open target",
+        "открой источник",
+        "куда ссылается",
+        "ls ",
+        "rg ",
+    ]
+    .iter()
+    .any(|needle| contains(&text, needle));
+    let command = [
+        "запусти",
+        "выполни команду",
+        "запусти команду",
+        "прогони",
+        "собери проект",
+        "проверь сборку",
+        "run command",
+        "run tests",
+        "cargo check",
+        "npm run",
+        "git status",
+    ]
+    .iter()
+    .any(|needle| contains(&text, needle));
+    memory || files || command
+}
+
 fn looks_branchable(raw: &str) -> bool {
     let text = raw.to_lowercase();
     let char_count = text.chars().count();
@@ -810,6 +1586,53 @@ fn looks_branchable(raw: &str) -> bool {
 
 fn has_attachment_payload(raw: &str) -> bool {
     contains(&raw.to_lowercase(), "[attached file:")
+}
+
+fn remember_request_to_memory_input(
+    raw: &str,
+    tree_id: &str,
+    node_id: &str,
+    message_id: &str,
+) -> Option<store::MemoryInput> {
+    let text = raw.trim();
+    if text.chars().count() < 12 {
+        return None;
+    }
+    let lower = text.to_lowercase();
+    let markers = [
+        "запомни",
+        "запомнить:",
+        "сохрани в память",
+        "добавь в память",
+        "remember",
+        "save to memory",
+    ];
+    let marker = markers.iter().find(|marker| lower.contains(**marker))?;
+    let start = lower.find(marker)? + marker.len();
+    let mut description = text
+        .chars()
+        .skip(start)
+        .collect::<String>()
+        .trim_matches([':', '-', '—', ' ', '\n', '\t'])
+        .trim()
+        .to_string();
+    if description.is_empty() && lower.starts_with(marker) {
+        description = text.to_string();
+    }
+    if description.chars().count() < 4 {
+        return None;
+    }
+    Some(store::MemoryInput {
+        title: None,
+        description,
+        target: chat_target(tree_id, node_id, message_id),
+        source_type: Some("chat".to_string()),
+        tags: Some(vec!["chat".to_string()]),
+        importance: Some(7.0),
+        memory_kind: Some("note".to_string()),
+        confidence: Some(1.0),
+        stability: Some("durable".to_string()),
+    })
 }
 
 fn looks_like_created_branch_list(raw: &str) -> bool {
@@ -1260,6 +2083,16 @@ pub fn run() {
             propose_connector,
             set_connector_enabled,
             revise_assistant_message,
+            add_memory,
+            update_memory,
+            merge_memory,
+            search_memory,
+            search_knowledge,
+            list_memory_recent,
+            delete_memory,
+            record_feedback,
+            get_memory_graph,
+            resolve_target,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

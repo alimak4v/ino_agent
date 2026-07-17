@@ -88,6 +88,22 @@ export interface AssistantDelta {
   delta: string;
 }
 
+export interface AgentToolResult {
+  tool: string;
+  ok: boolean;
+  content: unknown;
+}
+
+export interface AgentToolEvent extends AgentToolResult {
+  requestId: string;
+  treeId: string;
+  nodeId: string;
+}
+
+export interface AgentTrace {
+  toolResults: AgentToolResult[];
+}
+
 export interface ConnectorManifest {
   id: string;
   name: string;
@@ -165,6 +181,109 @@ export interface CheckCodeResponse {
   passedCount: number;
   totalCount: number;
   results: CodeTestResult[];
+}
+
+export interface MemoryInput {
+  title?: string | null;
+  description: string;
+  target: string;
+  sourceType?: string | null;
+  tags?: string[] | null;
+  importance?: number | null;
+  memoryKind?: string | null;
+  confidence?: number | null;
+  stability?: string | null;
+}
+
+export interface MemoryItem {
+  id: string;
+  title: string;
+  description: string;
+  target: string;
+  sourceType: string;
+  tags: string[];
+  importance: number;
+  memoryKind: string;
+  confidence: number;
+  stability: string;
+  createdAt: number;
+  updatedAt: number;
+  lastAccessedAt: number;
+  accessCount: number;
+}
+
+export interface MemorySearchResult {
+  item: MemoryItem;
+  score: number;
+  vectorScore: number;
+  keywordScore: number;
+}
+
+export interface MemoryLink {
+  sourceId: string;
+  targetId: string;
+  label: string;
+  weight: number;
+}
+
+export interface MemoryGraph {
+  nodes: MemoryItem[];
+  links: MemoryLink[];
+}
+
+export interface KnowledgeSource {
+  id: string;
+  path: string;
+  title: string;
+  sourceType: string;
+  fingerprint: string;
+  bytes: number;
+  modifiedAt: number;
+  createdAt: number;
+  updatedAt: number;
+  lastIndexedAt: number;
+}
+
+export interface KnowledgeChunk {
+  id: string;
+  sourceId: string;
+  chunkIndex: number;
+  text: string;
+  target: string;
+  page: number | null;
+  startOffset: number;
+  endOffset: number;
+  fingerprint: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface KnowledgeSearchResult {
+  chunk: KnowledgeChunk;
+  source: KnowledgeSource;
+  score: number;
+  vectorScore: number;
+  keywordScore: number;
+}
+
+export interface FeedbackInput {
+  targetType: "message" | "memory" | "knowledge_chunk" | "knowledge_source" | string;
+  targetId: string;
+  target?: string | null;
+  rating: "useful" | "not_useful" | string;
+  note?: string | null;
+}
+
+export interface ResolvedTarget {
+  kind: "chat" | "url" | "file" | "directory" | string;
+  target: string;
+  treeId?: string;
+  nodeId?: string;
+  messageId?: string;
+  path?: string;
+  absolutePath?: string;
+  exists?: boolean;
+  openable?: boolean;
 }
 
 export type SettingsInput = ChatSettings;
@@ -275,4 +394,25 @@ export const api = {
   runCode: (request: RunCodeRequest) => invokeDesktop<RunCodeResponse>("run_code", { request }),
   checkCode: (request: CheckCodeRequest) =>
     invokeDesktop<CheckCodeResponse>("check_code", { request }),
+  addMemory: (input: MemoryInput) => invokeDesktop<MemoryItem>("add_memory", { input }),
+  updateMemory: (id: string, input: MemoryInput) =>
+    invokeDesktop<MemoryItem>("update_memory", { id, input }),
+  mergeMemory: (keepId: string, removeId: string) =>
+    invokeDesktop<MemoryItem>("merge_memory", { keepId, removeId }),
+  searchMemory: (query: string, limit = 12) =>
+    invokeDesktop<MemorySearchResult[]>("search_memory", { query, limit }),
+  searchKnowledge: (query: string, limit = 12) =>
+    invokeDesktop<KnowledgeSearchResult[]>("search_knowledge", { query, limit }),
+  listMemoryRecent: (limit = 24) =>
+    isTauriRuntime()
+      ? invoke<MemoryItem[]>("list_memory_recent", { limit })
+      : Promise.resolve([]),
+  deleteMemory: (id: string) => invokeDesktop<void>("delete_memory", { id }),
+  recordFeedback: (input: FeedbackInput) => invokeDesktop<void>("record_feedback", { input }),
+  getMemoryGraph: (limit = 36) =>
+    isTauriRuntime()
+      ? invoke<MemoryGraph>("get_memory_graph", { limit })
+      : Promise.resolve({ nodes: [], links: [] }),
+  resolveTarget: (target: string) =>
+    invokeDesktop<ResolvedTarget>("resolve_target", { target }),
 };
