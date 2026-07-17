@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-type RichBlockKind = "matrix" | "vector" | "table" | "proof" | "source_list" | "step_example";
+type RichBlockKind = "matrix" | "vector" | "chart" | "table" | "proof" | "source_list" | "step_example";
 
 interface MatrixBlock {
   title?: string;
@@ -18,6 +18,26 @@ interface VectorBlock {
   labels?: string[];
   orientation?: "row" | "column";
   activeIndex?: number;
+}
+
+interface ChartPoint {
+  x: string | number;
+  y: number;
+  label?: string;
+}
+
+interface ChartSeries {
+  label?: string;
+  points: ChartPoint[];
+}
+
+interface ChartBlock {
+  title?: string;
+  type?: "line" | "bar";
+  xLabel?: string;
+  yLabel?: string;
+  activeIndex?: number;
+  series: ChartSeries[];
 }
 
 interface TableBlock {
@@ -67,6 +87,8 @@ export function richBlockKindFromClass(className?: string): RichBlockKind | null
   if (
     language === "matrix" ||
     language === "vector" ||
+    language === "chart" ||
+    language === "plot" ||
     language === "table" ||
     language === "proof" ||
     language === "step_example" ||
@@ -75,6 +97,7 @@ export function richBlockKindFromClass(className?: string): RichBlockKind | null
     language === "sources"
   ) {
     if (language === "stepexample") return "step_example";
+    if (language === "plot") return "chart";
     return language === "sources" ? "source_list" : language;
   }
   return null;
@@ -97,6 +120,7 @@ export function RichBlock({
   }
   if (kind === "matrix") return <MatrixRenderer block={parsed as MatrixBlock} />;
   if (kind === "vector") return <VectorRenderer block={parsed as VectorBlock} />;
+  if (kind === "chart") return <ChartRenderer block={parsed as ChartBlock} />;
   if (kind === "table") return <TableRenderer block={parsed as TableBlock} />;
   if (kind === "proof") return <ProofRenderer block={parsed as ProofBlock} />;
   if (kind === "step_example") return <StepExampleRenderer block={parsed as StepExampleBlock} />;
@@ -184,6 +208,123 @@ function VectorRenderer({ block }: { block: VectorBlock }) {
       <div className={`inline-flex ${column ? "flex-col" : "items-end"} gap-1`}>
         {cells}
       </div>
+    </section>
+  );
+}
+
+function ChartRenderer({ block }: { block: ChartBlock }) {
+  const width = 340;
+  const height = 190;
+  const left = 42;
+  const top = 18;
+  const plotWidth = 270;
+  const plotHeight = 122;
+  const palette = ["var(--accent)", "#0f9f6e", "#d97706", "#7c3aed"];
+  const allY = block.series.flatMap((series) => series.points.map((point) => point.y));
+  const rawMinY = Math.min(...allY, 0);
+  const rawMaxY = Math.max(...allY, 1);
+  const range = rawMaxY === rawMinY ? 1 : rawMaxY - rawMinY;
+  const minY = rawMinY - range * 0.08;
+  const maxY = rawMaxY + range * 0.08;
+  const maxPoints = Math.max(...block.series.map((series) => series.points.length), 1);
+  const xFor = (index: number) =>
+    maxPoints <= 1 ? left + plotWidth / 2 : left + (index / (maxPoints - 1)) * plotWidth;
+  const yFor = (value: number) => top + plotHeight - ((value - minY) / (maxY - minY)) * plotHeight;
+  const zeroY = yFor(0);
+  const barWidth = Math.max(8, (plotWidth / maxPoints) * 0.52);
+
+  return (
+    <section className="my-4 max-w-full overflow-x-auto rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3">
+      {block.title && <div className="mb-2 text-sm font-semibold text-[color:var(--text)]">{block.title}</div>}
+      <svg
+        className="block h-auto max-w-full overflow-visible"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={block.title || "Chart"}
+      >
+        <line x1={left} y1={top} x2={left} y2={top + plotHeight} stroke="var(--border)" />
+        <line x1={left} y1={top + plotHeight} x2={left + plotWidth} y2={top + plotHeight} stroke="var(--border)" />
+        <line x1={left} y1={zeroY} x2={left + plotWidth} y2={zeroY} stroke="var(--border)" strokeDasharray="4 4" opacity={0.7} />
+        {[minY, (minY + maxY) / 2, maxY].map((tick) => (
+          <g key={tick}>
+            <line x1={left - 4} y1={yFor(tick)} x2={left} y2={yFor(tick)} stroke="var(--border)" />
+            <text x={left - 8} y={yFor(tick) + 3} textAnchor="end" className="fill-[color:var(--muted)] text-[9px]">
+              {formatTick(tick)}
+            </text>
+          </g>
+        ))}
+        {block.activeIndex !== undefined && block.activeIndex < maxPoints && (
+          <rect
+            x={xFor(block.activeIndex) - Math.max(barWidth / 2, 8)}
+            y={top}
+            width={Math.max(barWidth, 16)}
+            height={plotHeight}
+            rx={4}
+            fill="rgba(245, 158, 11, 0.12)"
+          />
+        )}
+        {block.series.map((series, seriesIndex) => {
+          const color = palette[seriesIndex % palette.length];
+          if (block.type === "bar") {
+            return (
+              <g key={seriesIndex}>
+                {series.points.map((point, index) => {
+                  const x = xFor(index) - barWidth / 2 + seriesIndex * Math.min(6, barWidth / 4);
+                  const y = yFor(Math.max(point.y, 0));
+                  const barHeight = Math.abs(yFor(point.y) - zeroY);
+                  return (
+                    <rect
+                      key={index}
+                      x={x}
+                      y={point.y >= 0 ? y : zeroY}
+                      width={barWidth}
+                      height={Math.max(barHeight, 1)}
+                      rx={3}
+                      fill={color}
+                      opacity={block.activeIndex === undefined || block.activeIndex === index ? 0.85 : 0.35}
+                    />
+                  );
+                })}
+              </g>
+            );
+          }
+          const path = series.points
+            .map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(index).toFixed(2)} ${yFor(point.y).toFixed(2)}`)
+            .join(" ");
+          return (
+            <g key={seriesIndex}>
+              <path d={path} fill="none" stroke={color} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+              {series.points.map((point, index) => (
+                <circle
+                  key={index}
+                  cx={xFor(index)}
+                  cy={yFor(point.y)}
+                  r={block.activeIndex === index ? 4.5 : 3}
+                  fill={color}
+                  opacity={block.activeIndex === undefined || block.activeIndex === index ? 0.95 : 0.42}
+                />
+              ))}
+            </g>
+          );
+        })}
+        {block.series[0]?.points.map((point, index) => (
+          <text key={index} x={xFor(index)} y={top + plotHeight + 17} textAnchor="middle" className="fill-[color:var(--muted)] text-[9px]">
+            {String(point.label ?? point.x)}
+          </text>
+        ))}
+        {block.yLabel && <text x={0} y={12} className="fill-[color:var(--muted)] text-[10px]">{block.yLabel}</text>}
+        {block.xLabel && <text x={left + plotWidth} y={height - 4} textAnchor="end" className="fill-[color:var(--muted)] text-[10px]">{block.xLabel}</text>}
+      </svg>
+      {block.series.some((series) => series.label) && (
+        <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[color:var(--muted)]">
+          {block.series.map((series, index) => (
+            <span key={index} className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: palette[index % palette.length] }} />
+              {series.label || `series ${index + 1}`}
+            </span>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -306,6 +447,7 @@ function parseRichBlock(kind: RichBlockKind, source: string) {
   const json = parseJson(source);
   if (kind === "matrix") return normalizeMatrix(json ?? parseMatrixText(source));
   if (kind === "vector") return normalizeVector(json ?? parseVectorText(source));
+  if (kind === "chart") return normalizeChart(json);
   if (kind === "table") return normalizeTable(json ?? parseDelimitedTable(source));
   if (kind === "proof") return normalizeProof(json);
   if (kind === "step_example") return normalizeStepExample(json);
@@ -354,6 +496,64 @@ function normalizeVector(value: unknown): VectorBlock | null {
     labels: stringArray(object.labels),
     orientation: orientation === "column" ? "column" : "row",
     activeIndex: numberOrUndefined(object.activeIndex ?? object.active_index),
+  };
+}
+
+function normalizeChart(value: unknown): ChartBlock | null {
+  if (!value || typeof value !== "object") return null;
+  const object = value as Record<string, unknown>;
+  const rawSeries = Array.isArray(object.series) ? object.series : null;
+  const series = rawSeries
+    ? rawSeries.map(normalizeChartSeries).filter((item): item is ChartSeries => Boolean(item))
+    : [normalizeChartSeries({ label: object.label, points: object.points ?? object.data })].filter(
+        (item): item is ChartSeries => Boolean(item),
+      );
+  if (!series.length) return null;
+  const type = stringOrUndefined(object.type);
+  return {
+    title: stringOrUndefined(object.title),
+    type: type === "bar" ? "bar" : "line",
+    xLabel: stringOrUndefined(object.xLabel ?? object.x_label),
+    yLabel: stringOrUndefined(object.yLabel ?? object.y_label),
+    activeIndex: numberOrUndefined(object.activeIndex ?? object.active_index),
+    series,
+  };
+}
+
+function normalizeChartSeries(value: unknown): ChartSeries | null {
+  if (!value || typeof value !== "object") return null;
+  const object = value as Record<string, unknown>;
+  const rawPoints = Array.isArray(object.points)
+    ? object.points
+    : Array.isArray(object.data)
+      ? object.data
+      : null;
+  if (!rawPoints) return null;
+  const points = rawPoints
+    .map((point, index): ChartPoint | null => normalizeChartPoint(point, index))
+    .filter((point): point is ChartPoint => Boolean(point));
+  return points.length ? { label: stringOrUndefined(object.label ?? object.title), points } : null;
+}
+
+function normalizeChartPoint(value: unknown, index: number): ChartPoint | null {
+  if (typeof value === "number") return { x: index + 1, y: value };
+  if (Array.isArray(value) && value.length >= 2) {
+    const y = finiteNumber(value[1]);
+    if (y === undefined) return null;
+    return {
+      x: stringOrNumber(value[0]) ?? index + 1,
+      y,
+      label: stringOrUndefined(value[2]),
+    };
+  }
+  if (!value || typeof value !== "object") return null;
+  const object = value as Record<string, unknown>;
+  const y = finiteNumber(object.y ?? object.value);
+  if (y === undefined) return null;
+  return {
+    x: stringOrNumber(object.x ?? object.step ?? object.iteration) ?? index + 1,
+    y,
+    label: stringOrUndefined(object.label),
   };
 }
 
@@ -491,6 +691,10 @@ function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function cellPairs(value: unknown): Array<[number, number]> | undefined {
   if (!Array.isArray(value)) return undefined;
   const pairs = value
@@ -510,4 +714,10 @@ function formatCell(value: unknown) {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function formatTick(value: number) {
+  if (Math.abs(value) >= 100) return value.toFixed(0);
+  if (Math.abs(value) >= 10) return value.toFixed(1);
+  return value.toFixed(2).replace(/\.?0+$/, "");
 }

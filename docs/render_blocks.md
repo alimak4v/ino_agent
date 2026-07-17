@@ -12,6 +12,10 @@ Supported MVP block types:
 {"title":"b","values":[2,4,7],"labels":["k=1","k=2","k=3"],"orientation":"column","activeIndex":2}
 ```
 
+```chart
+{"title":"Loss by iteration","type":"line","xLabel":"iteration","yLabel":"loss","activeIndex":2,"series":[{"label":"train","points":[[1,1.0],[2,0.42],[3,0.28],[4,0.21]]}]}
+```
+
 ```table
 {"columns":["Term","Meaning"],"rows":[["RAG","Retrieval-augmented generation"]]}
 ```
@@ -34,3 +38,4 @@ Rules:
 - Keep block JSON small and factual.
 - Do not duplicate the same content in prose and in the block.
 - Prefer `matrix`, `vector`, and `step_example` for worked examples with highlighted rows, columns, cells, or current calculation steps.
+- Prefer `chart` for compact numeric trends such as loss curves, convergence, scores by step, or comparison bars.
