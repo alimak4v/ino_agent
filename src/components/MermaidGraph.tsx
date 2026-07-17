@@ -10,6 +10,9 @@ interface GraphStep {
   graph: string;
 }
 
+const MERMAID_START_RE =
+  /^(flowchart|graph|sequenceDiagram|stateDiagram(?:-v2)?|classDiagram|erDiagram|gitGraph|pie|xychart|timeline|gantt|mindmap|journey|quadrantChart|sankey)\b/;
+
 async function getMermaid() {
   if (!mermaidModule) {
     mermaidModule = (await import("mermaid")).default;
@@ -65,21 +68,29 @@ export function MermaidDiagram({ graph }: { graph: string }) {
 
   if (error) {
     return (
-      <div className="my-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">
-        Mermaid graph error: {error}
+      <div className="my-4 overflow-hidden rounded-xl border border-red-200 bg-red-50 text-xs leading-5 text-red-700">
+        <div className="px-4 py-3">Mermaid graph error: {error}</div>
+        <details className="border-t border-red-200">
+          <summary className="cursor-pointer px-4 py-2 font-medium">Normalized source</summary>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words px-4 pb-3 font-mono text-[11px]">
+            {normalizedGraph}
+          </pre>
+        </details>
       </div>
     );
   }
 
   return (
-    <div className="my-4 w-full min-w-0 overflow-x-auto rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-4">
+    <div className="my-4 w-full min-w-0 overflow-x-auto rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] p-4">
       {svg ? (
         <div
-          className="mermaid-svg mx-auto flex min-h-[180px] w-full min-w-0 items-center justify-center [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full"
+          className="mermaid-svg mx-auto flex min-h-[220px] w-full min-w-[320px] items-center justify-center [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-h-[720px] [&_svg]:max-w-full"
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       ) : (
-        <div className="text-sm text-[color:var(--muted)]">Rendering graph</div>
+        <div className="flex min-h-[220px] items-center justify-center text-sm text-[color:var(--muted)]">
+          Rendering graph
+        </div>
       )}
     </div>
   );
@@ -168,7 +179,15 @@ export function looksLikeGraphStepsSource(source: string) {
 function normalizeStep(item: unknown, index: number): GraphStep | null {
   if (!item || typeof item !== "object") return null;
   const value = item as Record<string, unknown>;
-  const graph = typeof value.graph === "string" ? value.graph.trim() : "";
+  const rawGraph =
+    typeof value.graph === "string"
+      ? value.graph
+      : typeof value.mermaid === "string"
+        ? value.mermaid
+        : typeof value.diagram === "string"
+          ? value.diagram
+          : "";
+  const graph = normalizeMermaidGraph(rawGraph);
   if (!looksLikeMermaidGraph(graph)) return null;
   const description =
     typeof value.description === "string" && value.description.trim()
@@ -183,27 +202,51 @@ function normalizeStep(item: unknown, index: number): GraphStep | null {
 
 function looksLikeMermaidGraph(graph: string) {
   const firstLine = graph.trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
-  return /^(flowchart|graph|sequenceDiagram|stateDiagram(?:-v2)?|classDiagram|erDiagram|gitGraph|pie|xychart|timeline|gantt|mindmap|journey|quadrantChart|sankey)\b/.test(
-    firstLine,
-  );
+  return MERMAID_START_RE.test(firstLine);
 }
 
 function normalizeMermaidGraph(graph: string) {
-  return graph
-    .trim()
+  return stripCodeFence(graph)
+    .replace(/\r\n?/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
     .replace(/--\|([^|\n]+)\|>/g, "-->|$1|")
     .replace(/--\|([^|\n]+)\|-/g, "-->|$1|")
     .replace(/==\|([^|\n]+)\|>/g, "==>|$1|")
     .replace(/-\.\|([^|\n]+)\|>/g, "-.->|$1|")
     .split("\n")
     .map(normalizeMermaidLine)
-    .join("\n");
+    .join("\n")
+    .trim();
 }
 
 function normalizeMermaidLine(line: string) {
-  const edge = line.match(/^(\s*)([A-Za-z0-9_]+(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\})?)\s+<--+\s+([A-Za-z0-9_]+(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\})?)(\s*)$/);
-  if (!edge) return line;
-  return `${edge[1]}${edge[3]} --> ${edge[2]}${edge[4]}`;
+  const labelledReverse = line.match(
+    /^(\s*)([A-Za-z0-9_-]+(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\})?)\s+<--+\|([^|\n]+)\|\s+([A-Za-z0-9_-]+(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\})?)(\s*)$/,
+  );
+  if (labelledReverse) {
+    return `${labelledReverse[1]}${labelledReverse[4]} -->|${labelledReverse[3]}| ${labelledReverse[2]}${labelledReverse[5]}`;
+  }
+  const reverse = line.match(
+    /^(\s*)([A-Za-z0-9_-]+(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\})?)\s+<--+\s+([A-Za-z0-9_-]+(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\})?)(\s*)$/,
+  );
+  if (reverse) return `${reverse[1]}${reverse[3]} --> ${reverse[2]}${reverse[4]}`;
+  const unicodeArrow = line.match(
+    /^(\s*)([A-Za-z0-9_-]+(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\})?)\s*(?:→|➡)\s*([A-Za-z0-9_-]+(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\})?)(\s*)$/,
+  );
+  if (unicodeArrow) return `${unicodeArrow[1]}${unicodeArrow[2]} --> ${unicodeArrow[3]}${unicodeArrow[4]}`;
+  return line;
+}
+
+function stripCodeFence(source: string) {
+  const trimmed = source.trim();
+  if (!trimmed.startsWith("```")) return trimmed;
+  const lines = trimmed.split(/\r?\n/);
+  if (lines.length < 2) return trimmed;
+  const closingIndex = lines.findIndex((line, index) => index > 0 && line.trim().startsWith("```"));
+  if (closingIndex === -1) return lines.slice(1).join("\n").trim();
+  return lines.slice(1, closingIndex).join("\n").trim();
 }
 
 function formatError(error: unknown) {
