@@ -998,6 +998,7 @@ function MessageContent({
         <AgentToolTraceView
           results={agentTrace.toolResults}
           permissionProfile={agentTrace.permissionProfile}
+          verifier={agentTrace.verifier}
           onOpenTarget={onOpenTarget}
         />
       )}
@@ -1008,11 +1009,13 @@ function MessageContent({
 function AgentToolTraceView({
   results,
   permissionProfile,
+  verifier,
   onOpenTarget,
   live = false,
 }: {
   results: Array<AgentToolResult | AgentToolEvent>;
   permissionProfile?: string;
+  verifier?: AgentTrace["verifier"];
   onOpenTarget: (target: string) => Promise<void>;
   live?: boolean;
 }) {
@@ -1035,6 +1038,27 @@ function AgentToolTraceView({
           )}
         </summary>
         <div className="space-y-2 border-t border-[color:var(--border)] p-2">
+          {verifier && (
+            <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] p-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-mono text-xs text-[color:var(--text)]">verifier</div>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] ${
+                    verifier.revised
+                      ? "bg-amber-500/10 text-amber-700"
+                      : "bg-[color:var(--selected)] text-[color:var(--text)]"
+                  }`}
+                >
+                  {verifier.revised ? "revised" : "ok"}
+                </span>
+              </div>
+              {verifier.issues.length > 0 && (
+                <div className="mt-1 whitespace-pre-wrap break-words text-xs text-[color:var(--muted)]">
+                  {verifier.issues.slice(0, 4).join("\n")}
+                </div>
+              )}
+            </div>
+          )}
           {results.map((result, index) => (
             <AgentToolTraceRow
               key={`${result.tool}-${index}`}
@@ -1322,6 +1346,7 @@ function parseAgentTrace(raw: string | null): AgentTrace | null {
     return {
       permissionProfile:
         typeof parsed.permissionProfile === "string" ? parsed.permissionProfile : undefined,
+      verifier: normalizeAgentVerifierTrace(parsed.verifier),
       toolResults: parsed.toolResults.filter(
         (item): item is AgentToolResult =>
           Boolean(item) &&
@@ -1333,6 +1358,17 @@ function parseAgentTrace(raw: string | null): AgentTrace | null {
   } catch {
     return null;
   }
+}
+
+function normalizeAgentVerifierTrace(value: unknown): AgentTrace["verifier"] {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    revised: record.revised === true,
+    issues: Array.isArray(record.issues)
+      ? record.issues.filter((item): item is string => typeof item === "string")
+      : [],
+  };
 }
 
 function summarizeToolContent(content: unknown) {

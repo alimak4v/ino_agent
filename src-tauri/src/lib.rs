@@ -46,6 +46,21 @@ struct AgentToolEvent {
 struct AgentTrace {
     permission_profile: String,
     tool_results: Vec<agent_tools::AgentToolResult>,
+    verifier: Option<AgentVerifierTrace>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentVerifierTrace {
+    revised: bool,
+    issues: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerifiedAgentAnswer {
+    answer: String,
+    #[serde(default)]
+    issues: Vec<String>,
 }
 
 const BRANCH_PLAN_ACTION_MARKER: &str = "<!-- treeai:branch-plan -->";
@@ -947,12 +962,6 @@ fn run_agent_tool_turn(
     }
     let tool_results_json =
         serde_json::to_string_pretty(&tool_results).map_err(|e| e.to_string())?;
-    let trace_json = serde_json::to_string(&AgentTrace {
-        permission_profile: permission_profile.name().to_string(),
-        tool_results: tool_results.clone(),
-    })
-    .map_err(|e| e.to_string())?;
-
     let mut final_messages = messages.to_vec();
     final_messages.push(store::ChatContextMessage {
         role: "system".to_string(),
@@ -982,7 +991,32 @@ fn run_agent_tool_turn(
     if answer.is_empty() {
         return Ok(None);
     }
-    Ok(Some(AgentTurnOutput { answer, trace_json }))
+    let verification =
+        verify_agent_answer(settings, messages, latest_user, &tool_results_json, &answer)
+            .unwrap_or_else(|_| VerifiedAgentAnswer {
+                answer: answer.clone(),
+                issues: Vec::new(),
+            });
+    let verified_answer = verification.answer.trim();
+    let final_answer = if verified_answer.is_empty() {
+        answer.clone()
+    } else {
+        verified_answer.to_string()
+    };
+    let revised = final_answer.trim() != answer.trim();
+    let trace_json = serde_json::to_string(&AgentTrace {
+        permission_profile: permission_profile.name().to_string(),
+        tool_results: tool_results.clone(),
+        verifier: Some(AgentVerifierTrace {
+            revised,
+            issues: verification.issues,
+        }),
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(Some(AgentTurnOutput {
+        answer: final_answer,
+        trace_json,
+    }))
 }
 
 fn execute_agent_tool_calls(
@@ -1060,6 +1094,7 @@ fn empty_agent_trace_json(permission_profile: agent_tools::AgentToolPermissionPr
     serde_json::to_string(&AgentTrace {
         permission_profile: permission_profile.name().to_string(),
         tool_results: Vec::new(),
+        verifier: None,
     })
     .unwrap_or_else(|_| {
         format!(
@@ -1067,6 +1102,49 @@ fn empty_agent_trace_json(permission_profile: agent_tools::AgentToolPermissionPr
             permission_profile.name()
         )
     })
+}
+
+fn verify_agent_answer(
+    settings: &store::ChatSettings,
+    messages: &[store::ChatContextMessage],
+    latest_user: &str,
+    tool_results_json: &str,
+    draft_answer: &str,
+) -> Result<VerifiedAgentAnswer, String> {
+    let mut verifier_messages = messages.to_vec();
+    verifier_messages.push(store::ChatContextMessage {
+        role: "system".to_string(),
+        content: agent_answer_verifier_prompt(latest_user, tool_results_json, draft_answer),
+    });
+    let raw = api::chat_completion(settings, &verifier_messages)?;
+    parse_verified_agent_answer(&raw).ok_or_else(|| "Could not parse verifier answer.".to_string())
+}
+
+fn parse_verified_agent_answer(raw: &str) -> Option<VerifiedAgentAnswer> {
+    serde_json::from_str::<VerifiedAgentAnswer>(raw.trim())
+        .ok()
+        .or_else(|| {
+            let text = raw.trim();
+            if text.starts_with("```") {
+                let inner = text
+                    .lines()
+                    .skip(1)
+                    .take_while(|line| !line.trim_start().starts_with("```"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::from_str::<VerifiedAgentAnswer>(inner.trim()).ok()
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            let start = raw.find('{')?;
+            let end = raw.rfind('}')?;
+            if end <= start {
+                return None;
+            }
+            serde_json::from_str::<VerifiedAgentAnswer>(&raw[start..=end]).ok()
+        })
 }
 
 fn parse_agent_decision(raw: &str) -> Option<AgentDecision> {
@@ -1379,6 +1457,41 @@ Rules:
 Current observations:
 ```json
 {tool_results_json}
+```
+"#
+    )
+}
+
+fn agent_answer_verifier_prompt(
+    latest_user: &str,
+    tool_results_json: &str,
+    draft_answer: &str,
+) -> String {
+    format!(
+        r#"You are the verifier for an ino-agent tool-assisted answer.
+
+Return ONLY compact JSON:
+{{"answer":"...","issues":[]}}
+
+Verification rules:
+- Check the draft answer against the tool results only.
+- Keep the answer unchanged when it is supported and directly answers the user.
+- Revise the answer only to remove unsupported claims, fix contradictions, mention failed tools plainly, or add missing source/target details that appear in tool results.
+- Do not add facts that are absent from the tool results or recent context.
+- Preserve the user's language and the answer's useful formatting.
+- Do not return Markdown outside the JSON string.
+
+Latest user request:
+{latest_user}
+
+Tool results:
+```json
+{tool_results_json}
+```
+
+Draft answer:
+```text
+{draft_answer}
 ```
 "#
     )

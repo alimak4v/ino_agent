@@ -105,6 +105,10 @@ export interface AgentToolEvent extends AgentToolResult {
 export interface AgentTrace {
   permissionProfile?: string;
   toolResults: AgentToolResult[];
+  verifier?: {
+    revised: boolean;
+    issues: string[];
+  } | null;
 }
 
 export interface ConnectorManifest {
