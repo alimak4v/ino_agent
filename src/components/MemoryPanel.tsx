@@ -384,44 +384,48 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
                     (link.sourceId === selectedMemoryId && link.targetId === node.item.id) ||
                     (link.targetId === selectedMemoryId && link.sourceId === node.item.id),
                 );
+              const showLabel = selected || adjacent || graphLayout.nodes.length <= 14;
               return (
-              <g
-                key={node.item.id}
-                className="cursor-pointer outline-none"
-                role="button"
-                tabIndex={0}
-                onClick={() =>
-                  setSelectedMemoryId((current) =>
-                    current === node.item.id ? "" : node.item.id,
-                  )
-                }
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
+                <g
+                  key={node.item.id}
+                  className="cursor-pointer outline-none"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() =>
                     setSelectedMemoryId((current) =>
                       current === node.item.id ? "" : node.item.id,
-                    );
+                    )
                   }
-                }}
-              >
-                <circle
-                  cx={node.x}
-                  cy={node.y}
-                  r={8 + node.item.importance * 0.55}
-                  fill="var(--accent)"
-                  opacity={!selectedMemoryId || selected || adjacent ? 0.9 : 0.34}
-                  stroke={selected ? "var(--text)" : "transparent"}
-                  strokeWidth={selected ? 2.5 : 0}
-                />
-                <text
-                  x={node.x}
-                  y={node.y + 22}
-                  textAnchor="middle"
-                  className="fill-[color:var(--muted)] text-[9px]"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedMemoryId((current) =>
+                        current === node.item.id ? "" : node.item.id,
+                      );
+                    }
+                  }}
                 >
-                  {shortLabel(node.item.title)}
-                </text>
-              </g>
+                  <title>{node.item.title}</title>
+                  <circle
+                    cx={node.x}
+                    cy={node.y}
+                    r={node.radius}
+                    fill="var(--accent)"
+                    opacity={!selectedMemoryId || selected || adjacent ? 0.9 : 0.34}
+                    stroke={selected ? "var(--text)" : "transparent"}
+                    strokeWidth={selected ? 2.5 : 0}
+                  />
+                  {showLabel && (
+                    <text
+                      x={node.x}
+                      y={node.y + node.radius + 10}
+                      textAnchor="middle"
+                      className="pointer-events-none fill-[color:var(--muted)] text-[9px]"
+                    >
+                      {shortLabel(node.item.title)}
+                    </text>
+                  )}
+                </g>
               );
             })}
           </svg>
@@ -806,17 +810,71 @@ function parseTags(value: string) {
 }
 
 function layoutGraph(graph: MemoryGraph) {
-  const center = 160;
-  const radius = 116;
+  const width = 320;
+  const height = 320;
+  const padding = 26;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const degrees = new Map<string, number>();
+  for (const item of graph.nodes) degrees.set(item.id, 0);
+  for (const link of graph.links) {
+    degrees.set(link.sourceId, (degrees.get(link.sourceId) ?? 0) + 1);
+    degrees.set(link.targetId, (degrees.get(link.targetId) ?? 0) + 1);
+  }
   const nodes = graph.nodes.map((item, index) => {
-    const angle = graph.nodes.length <= 1 ? 0 : (Math.PI * 2 * index) / graph.nodes.length;
+    const count = Math.max(graph.nodes.length, 1);
+    const angle = (Math.PI * 2 * index) / count + seededAngle(item.id);
+    const ring = Math.min(width, height) * (0.22 + 0.28 * ((index % 5) / 4));
     return {
       item,
-      x: center + Math.cos(angle) * radius,
-      y: center + Math.sin(angle) * radius,
+      radius: 8 + item.importance * 0.55 + Math.min(degrees.get(item.id) ?? 0, 5) * 0.6,
+      x: centerX + Math.cos(angle) * ring,
+      y: centerY + Math.sin(angle) * ring,
     };
   });
   const byId = new Map(nodes.map((node) => [node.item.id, node]));
+  if (nodes.length > 1) {
+    for (let iteration = 0; iteration < 90; iteration += 1) {
+      for (let i = 0; i < nodes.length; i += 1) {
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const a = nodes[i];
+          const b = nodes[j];
+          const dx = a.x - b.x || 0.01;
+          const dy = a.y - b.y || 0.01;
+          const distanceSq = Math.max(dx * dx + dy * dy, 36);
+          const force = 620 / distanceSq;
+          const fx = dx * force;
+          const fy = dy * force;
+          a.x += fx;
+          a.y += fy;
+          b.x -= fx;
+          b.y -= fy;
+        }
+      }
+      for (const link of graph.links) {
+        const source = byId.get(link.sourceId);
+        const target = byId.get(link.targetId);
+        if (!source || !target) continue;
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
+        const preferred = 72 + (1 - Math.min(link.weight, 1)) * 46;
+        const force = (distance - preferred) * 0.016 * Math.max(link.weight, 0.2);
+        const fx = (dx / distance) * force;
+        const fy = (dy / distance) * force;
+        source.x += fx;
+        source.y += fy;
+        target.x -= fx;
+        target.y -= fy;
+      }
+      for (const node of nodes) {
+        node.x += (centerX - node.x) * 0.012;
+        node.y += (centerY - node.y) * 0.012;
+        node.x = clamp(node.x, padding + node.radius, width - padding - node.radius);
+        node.y = clamp(node.y, padding + node.radius, height - padding - node.radius - 12);
+      }
+    }
+  }
   const links = graph.links
     .map((link) => {
       const source = byId.get(link.sourceId);
@@ -831,6 +889,18 @@ function layoutGraph(graph: MemoryGraph) {
     }
   >;
   return { nodes, links };
+}
+
+function seededAngle(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return (hash / 0xffffffff) * 0.42;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function shortLabel(value: string) {
