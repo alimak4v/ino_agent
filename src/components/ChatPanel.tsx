@@ -54,10 +54,19 @@ interface AttachmentDraft {
   warning?: string;
 }
 
+type AgentMode = "auto" | "read" | "memory" | "command" | "workspace";
+
 const MAX_ATTACHMENTS = 8;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_CHARS = 180_000;
 const BRANCH_PLAN_ACTION_MARKER = "<!-- treeai:branch-plan -->";
+const AGENT_MODE_LABELS: Array<{ mode: AgentMode; label: string; title: string }> = [
+  { mode: "auto", label: "Auto", title: "Infer tool permissions from the request" },
+  { mode: "read", label: "Read", title: "Search memory and inspect files only" },
+  { mode: "memory", label: "Memory", title: "Allow memory and knowledge indexing" },
+  { mode: "command", label: "Cmd", title: "Allow safe local commands" },
+  { mode: "workspace", label: "Work", title: "Allow memory/indexing and safe commands" },
+];
 const HOME_INSTITUTIONS = ["MIPT", "MSU", "HSE", "MEPhI", "ITMO", "NSU"] as const;
 const TYPE_SPEED_MS = 72;
 const DELETE_SPEED_MS = 42;
@@ -90,6 +99,7 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
+  const [agentMode, setAgentMode] = useState<AgentMode>("auto");
   const [branchMode, setBranchMode] = useState(false);
   const [connectorMode, setConnectorMode] = useState(false);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
@@ -227,7 +237,7 @@ export function ChatPanel({
     setBranchMode(false);
     setConnectorMode(false);
     setAttachments([]);
-    setDraft(stripBranchPlanAction(message.content));
+    setDraft(stripMessageControlMarkers(message.content));
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
@@ -239,7 +249,7 @@ export function ChatPanel({
   };
 
   const copyMessage = async (message: Message) => {
-    const content = stripBranchPlanAction(message.content);
+    const content = stripMessageControlMarkers(message.content);
     try {
       await navigator.clipboard.writeText(content);
       setCopiedMessageId(message.id);
@@ -255,7 +265,7 @@ export function ChatPanel({
     event?.preventDefault();
     if (!composerWritable || sending) return;
 
-    const content = buildMessageContent(draft, attachments);
+    const content = buildMessageContent(draft, attachments, agentMode);
     if (!content) return;
 
     setDraft("");
@@ -462,6 +472,28 @@ export function ChatPanel({
               >
                 <ConnectorIcon />
               </button>
+              <div
+                className="hidden h-8 items-center rounded-full border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-0.5 sm:inline-flex"
+                aria-label="Agent mode"
+              >
+                {AGENT_MODE_LABELS.map((item) => (
+                  <button
+                    key={item.mode}
+                    type="button"
+                    disabled={!composerWritable || sending || Boolean(editingMessage)}
+                    onClick={() => setAgentMode(item.mode)}
+                    title={item.title}
+                    className={`h-7 rounded-full px-2 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                      agentMode === item.mode
+                        ? "bg-[color:var(--button)] text-[color:var(--button-text)]"
+                        : "text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
+                    }`}
+                    aria-pressed={agentMode === item.mode}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <button
               type="submit"
@@ -960,7 +992,7 @@ function MessageContent({
   ) => Promise<QuizAttempt>;
 }) {
   const content = message.content;
-  const { visibleText, attachments } = splitAttachmentPayload(stripBranchPlanAction(content));
+  const { visibleText, attachments } = splitAttachmentPayload(stripMessageControlMarkers(content));
   const agentTrace = message.role === "assistant" ? parseAgentTrace(message.visualization_html) : null;
   const hasTrace = agentTrace
     ? agentTrace.toolResults.length > 0 ||
@@ -1340,6 +1372,14 @@ function hasBranchPlanAction(content: string) {
 
 function stripBranchPlanAction(content: string) {
   return content.replace(BRANCH_PLAN_ACTION_MARKER, "").trim();
+}
+
+function stripAgentModeMarker(content: string) {
+  return content.replace(/<!--\s*ino-agent:mode=(read|memory|command|workspace)\s*-->\s*/g, "").trim();
+}
+
+function stripMessageControlMarkers(content: string) {
+  return stripAgentModeMarker(stripBranchPlanAction(content));
 }
 
 function StreamingMessage({ content }: { content: string }) {
@@ -1752,8 +1792,9 @@ function looksReadable(value: string) {
   return letters / value.length > 0.25;
 }
 
-function buildMessageContent(draft: string, attachments: AttachmentDraft[]) {
+function buildMessageContent(draft: string, attachments: AttachmentDraft[], agentMode: AgentMode) {
   const text = draft.trim();
+  const modeMarker = agentMode === "auto" ? "" : `<!-- ino-agent:mode=${agentMode} -->`;
   const files = attachments.map((file) => {
     const warning = file.warning ? `\nNote: ${file.warning}` : "";
     const fence = file.content.includes("```") ? "~~~~" : "```";
@@ -1761,7 +1802,7 @@ function buildMessageContent(draft: string, attachments: AttachmentDraft[]) {
       file.size,
     )})${warning}]\n\n${fence}text\n${file.content}\n${fence}`;
   });
-  return [text, ...files].filter(Boolean).join("\n\n").trim();
+  return [modeMarker, text, ...files].filter(Boolean).join("\n\n").trim();
 }
 
 async function readFileText(file: File) {

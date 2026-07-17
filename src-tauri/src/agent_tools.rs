@@ -97,6 +97,9 @@ pub fn tool_needs_store(tool: &str) -> bool {
 }
 
 pub fn permission_profile_for_request(request: &str) -> AgentToolPermissionProfile {
+    if let Some(profile) = permission_profile_from_marker(request) {
+        return profile;
+    }
     let lower = request.to_lowercase();
     let wants_write_memory = contains_any(
         &lower,
@@ -133,6 +136,22 @@ pub fn permission_profile_for_request(request: &str) -> AgentToolPermissionProfi
         (true, false) => AgentToolPermissionProfile::MemoryWrite,
         (false, true) => AgentToolPermissionProfile::CommandRunner,
         (false, false) => AgentToolPermissionProfile::ReadOnly,
+    }
+}
+
+fn permission_profile_from_marker(request: &str) -> Option<AgentToolPermissionProfile> {
+    let marker = request
+        .split("<!-- ino-agent:mode=")
+        .nth(1)?
+        .split("-->")
+        .next()?
+        .trim();
+    match marker {
+        "read" => Some(AgentToolPermissionProfile::ReadOnly),
+        "memory" => Some(AgentToolPermissionProfile::MemoryWrite),
+        "command" => Some(AgentToolPermissionProfile::CommandRunner),
+        "workspace" => Some(AgentToolPermissionProfile::WorkspaceWrite),
+        _ => None,
     }
 }
 

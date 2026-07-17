@@ -1805,13 +1805,14 @@ impl Store {
         for row in rows {
             if matches!(row.role.as_str(), "user" | "assistant" | "system") {
                 if latest_user_id.as_deref() == Some(row.id.as_str()) {
+                    let user_content = strip_agent_mode_marker(&row.content);
                     messages.push(ChatContextMessage {
                         role: "system".to_string(),
                         content: format!(
                             "Immediate context for the next user request:\n{local_context}\nIf the request is short or deictic, answer about \"{current_title}\" specifically, not about the broad parent/root material."
                         ),
                     });
-                    let memory_context = self.memory_context_for_query(&row.content, 6)?;
+                    let memory_context = self.memory_context_for_query(&user_content, 6)?;
                     if !memory_context.is_empty() {
                         messages.push(ChatContextMessage {
                             role: "system".to_string(),
@@ -1819,7 +1820,7 @@ impl Store {
                         });
                     }
                     for module in context_builder::dynamic_context_modules(
-                        &row.content,
+                        &user_content,
                         &current_title,
                         &breadcrumb,
                     ) {
@@ -1829,7 +1830,7 @@ impl Store {
                         });
                     }
                     if context_builder::wants_step_graph_response(
-                        &row.content,
+                        &user_content,
                         &current_title,
                         &breadcrumb,
                     ) {
@@ -1838,20 +1839,21 @@ impl Store {
                             content: context_builder::step_graph_prompt(
                                 &current_title,
                                 &breadcrumb,
-                                &row.content,
+                                &user_content,
                             ),
                         });
                     }
                 }
+                let row_content = strip_agent_mode_marker(&row.content);
                 let content = if latest_user_id.as_deref() == Some(row.id.as_str())
-                    && context_builder::is_deictic_topic_request(&row.content)
+                    && context_builder::is_deictic_topic_request(&row_content)
                 {
                     format!(
                         "Current selected leaf/topic: {current_title}\nFull selected path: {breadcrumb}\nUser request about this current leaf/topic: {}",
-                        row.content
+                        row_content
                     )
                 } else {
-                    truncate_for_api_context(&row.content, API_CONTEXT_MESSAGE_CHAR_LIMIT)
+                    truncate_for_api_context(&row_content, API_CONTEXT_MESSAGE_CHAR_LIMIT)
                 };
                 messages.push(ChatContextMessage {
                     role: row.role,
@@ -3165,6 +3167,16 @@ fn clean_title_or(value: String, fallback: &str) -> String {
     } else {
         title
     }
+}
+
+fn strip_agent_mode_marker(value: &str) -> String {
+    value
+        .lines()
+        .filter(|line| !line.trim().starts_with("<!-- ino-agent:mode="))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn memory_item_from_row(row: &Row<'_>) -> rusqlite::Result<MemoryItem> {

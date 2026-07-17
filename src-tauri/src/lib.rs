@@ -687,7 +687,7 @@ fn generate_assistant_reply_blocking(
     };
 
     let (
-        latest_user,
+        latest_user_raw,
         latest_user_id,
         latest_assistant,
         parent_title,
@@ -695,6 +695,7 @@ fn generate_assistant_reply_blocking(
         messages,
         pending_plan,
     ) = snapshot;
+    let latest_user = strip_agent_mode_marker(&latest_user_raw);
 
     if let Some(plan) = pending_plan {
         if is_affirmative(&latest_user) {
@@ -758,13 +759,13 @@ fn generate_assistant_reply_blocking(
         });
     }
 
-    if wants_agent_tools(&latest_user) {
+    if wants_agent_tools(&latest_user_raw) {
         if let Some(output) = run_agent_tool_turn(
             window.clone(),
             store.clone(),
             &settings,
             &messages,
-            &latest_user,
+            &latest_user_raw,
             &tree_id,
             &node_id,
             &request_id,
@@ -959,6 +960,7 @@ fn run_agent_tool_turn(
 ) -> Result<Option<AgentTurnOutput>, String> {
     let workspace_root = agent_tools::workspace_root()?;
     let permission_profile = agent_tools::permission_profile_for_request(latest_user);
+    let user_request = strip_agent_mode_marker(latest_user);
     let mut planner_messages = vec![store::ChatContextMessage {
         role: "system".to_string(),
         content: agent_tool_planner_prompt(
@@ -1009,7 +1011,7 @@ fn run_agent_tool_turn(
         observer_messages.push(store::ChatContextMessage {
             role: "system".to_string(),
             content: agent_tool_observer_prompt(
-                latest_user,
+                &user_request,
                 &observed_results_json,
                 AGENT_MAX_TOTAL_TOOL_CALLS - tool_results.len(),
             ),
@@ -1050,7 +1052,7 @@ fn run_agent_tool_turn(
     final_messages.push(store::ChatContextMessage {
         role: "system".to_string(),
         content: format!(
-            "Latest user request was:\n{latest_user}\n\nNow produce the final assistant answer. Do not return JSON and do not request another tool call."
+            "Latest user request was:\n{user_request}\n\nNow produce the final assistant answer. Do not return JSON and do not request another tool call."
         ),
     });
     let answer = api::chat_completion_stream(settings, &final_messages, |delta| {
@@ -1069,12 +1071,17 @@ fn run_agent_tool_turn(
     if answer.is_empty() {
         return Ok(None);
     }
-    let verification =
-        verify_agent_answer(settings, messages, latest_user, &tool_results_json, &answer)
-            .unwrap_or_else(|_| VerifiedAgentAnswer {
-                answer: answer.clone(),
-                issues: Vec::new(),
-            });
+    let verification = verify_agent_answer(
+        settings,
+        messages,
+        &user_request,
+        &tool_results_json,
+        &answer,
+    )
+    .unwrap_or_else(|_| VerifiedAgentAnswer {
+        answer: answer.clone(),
+        issues: Vec::new(),
+    });
     let verified_answer = verification.answer.trim();
     let final_answer = if verified_answer.is_empty() {
         answer.clone()
@@ -1084,7 +1091,7 @@ fn run_agent_tool_turn(
     let revised = final_answer.trim() != answer.trim();
     let retrieval = lock_store(&store)
         .ok()
-        .and_then(|store| store.retrieval_trace_for_query(latest_user, 6).ok());
+        .and_then(|store| store.retrieval_trace_for_query(&user_request, 6).ok());
     let trace_json = assistant_trace_json(
         Some(permission_profile.name().to_string()),
         tool_results.clone(),
@@ -1713,6 +1720,9 @@ fn wants_branch_creation(raw: &str) -> bool {
 
 fn wants_agent_tools(raw: &str) -> bool {
     let text = raw.to_lowercase();
+    if text.contains("<!-- ino-agent:mode=") {
+        return true;
+    }
     let memory = [
         "найди в памяти",
         "поиск в памяти",
@@ -2193,6 +2203,16 @@ fn normalize_reply(raw: &str) -> String {
 
 fn contains(haystack: &str, needle: &str) -> bool {
     haystack.contains(needle)
+}
+
+fn strip_agent_mode_marker(value: &str) -> String {
+    value
+        .lines()
+        .filter(|line| !line.trim().starts_with("<!-- ino-agent:mode="))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn clean_extracted_text(value: &str) -> String {
