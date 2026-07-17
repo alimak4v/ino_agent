@@ -1,0 +1,65 @@
+name: Release (macOS)
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual runs from the Actions tab. Note: the "Run workflow" button only
+  # appears once this workflow exists on the default branch (GitHub limitation).
+  # A manual run builds and uploads the DMG as a run artifact but does NOT create
+  # a public GitHub Release — that happens only for tag pushes.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS bundle
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Install node_modules up front so the icon step inside build_macos.sh
+      # (`npx tauri icon`) resolves the local Tauri CLI instead of trying to
+      # fetch it from npm on a clean runner.
+      - name: Install dependencies
+        run: npm ci
+
+      # Reuses the same script used for local macOS builds. It generates icons,
+      # builds the styled Tauri .dmg, and writes a .sha256 checksum into dist/.
+      - name: Build app and DMG
+        run: bash ./build_macos.sh
+
+      # Always available for download from the workflow run page (works for both
+      # manual runs and tag pushes).
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ino-agent-macos-dmg
+          path: |
+            dist/ino-agent-mac.dmg
+            dist/ino-agent-mac.dmg.sha256
+          if-no-files-found: error
+
+      # Only publish a public GitHub Release for version tags.
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ino-agent-mac.dmg
+            dist/ino-agent-mac.dmg.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true
