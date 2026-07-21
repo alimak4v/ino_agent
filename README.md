@@ -24,7 +24,13 @@ ino-agent (Intelligent neural operator - agent) - локальное desktop-п�
 - Настройки модели, endpoint и API key внутри приложения.
 - Drag-and-drop или выбор вложений для сообщения.
 - Извлечение текста из PDF на стороне Tauri.
+- Project wizard для Python, C++/CMake, Rust, TypeScript/React, Tauri, учебных и research-проектов.
+- Agent Tasks: PRD/specs/atomic tasks, persisted progress и продолжение после перезапуска.
+- Safe Terminal: workspace-scoped команды, approval для опасных действий, история и диагностика ошибок.
+- Memory: общая память, feedback, review queue, merge/delete, export/import и "why remembered".
+- Knowledge/Search: локальная индексация, hybrid retrieval, Search page с answer, chunks, scores и related memory.
 - Markdown, GFM, математические формулы через KaTeX.
+- Render blocks: matrix, vector, chart, table, proof, source_list, step_example, Mermaid и graphsteps.
 - macOS tray/menu bar: показать приложение, создать новое дерево, выйти.
 - `Cmd+N` для создания нового дерева.
 
@@ -55,6 +61,15 @@ npm run dev
 
 Часть действий доступна только в desktop-окне Tauri, потому что команды идут через `invoke`.
 
+QA-команды:
+
+```bash
+cargo check --manifest-path src-tauri/Cargo.toml
+npx tsc --noEmit
+npm run build
+npm run qa:render-screenshots
+```
+
 ## Сборка
 
 Обычная Tauri-сборка:
@@ -70,6 +85,14 @@ macOS-сборка с `.app`, `.dmg` и checksum:
 ```
 
 Подробности лежат в `README_BUILD_MACOS.md`.
+
+Release-документы:
+
+- [Quickstart](docs/QUICKSTART.md)
+- [Install](docs/INSTALL.md)
+- [Privacy](docs/PRIVACY.md)
+- [Release checklist](docs/RELEASE_CHECKLIST.md)
+- [Demo scenarios](docs/DEMO_SCENARIOS.md)
 
 ## Данные
 
@@ -107,6 +130,22 @@ macOS-сборка с `.app`, `.dmg` и checksum:
 ## Журнал изменений Codex
 
 Этот раздел нужен буквально для будущего Codex: каждый раз, когда я меняю проект, я должен дописывать сюда короткую запись с датой, сутью изменения и файлами. Не надо превращать это в release notes; это рабочая память по репозиторию.
+
+### 2026-07-18
+
+- Добавлены release-документы: полное ТЗ до публичного релиза и рабочий P0 checklist с критериями готовности, проверками RC, macOS-сборкой, onboarding/docs и dogfood-сценариями.
+- Добавлен Project wizard MVP: выбор стека, генерация starter-проектов внутри workspace, кнопки Create/Build/Run/Test/Open Folder/Ask Agent и безопасный allowlist-runner для проектных команд.
+- Добавлен Agent Loop MVP: persisted `agent_runs`/`agent_tasks`, создание PRD/specs/atomic tasks, выполнение одного шага за раз через tool-assisted loop, сохранение результата/ошибки и Tasks-панель для продолжения после перезапуска.
+- Добавлен Safe command runner UI MVP: Terminal-панель, safety assessment, approval для install/network/delete/overwrite/git push/unknown binary, workspace-scoped cwd, timeout/max output, persistent command history, repeat и диагностика результата.
+- Добавлен Search page MVP: общий поиск по memory/knowledge, synthesized answer с fallback, sources/chunks/score/target/open source/related memory и отдельная Search-панель.
+- Добавлен Memory cleanup/review MVP: review queue для duplicates/stale/low-confidence/negative feedback, merge/delete из очереди, export/import JSON и отображение "why remembered" из decision log.
+- Добавлен Render screenshot QA MVP: Playwright config, desktop/mobile screenshots для render-smoke fixture и npm script `qa:render-screenshots`.
+- Добавлены release docs: quickstart, install, privacy и demo/dogfood scenarios; README обновлен под текущий P0 scope.
+- Добавлен Onboarding MVP: first-run overlay через `localStorage` с быстрыми действиями Settings/Projects/Start.
+- Укреплен macOS internal RC build: bundle identifier изменен на `com.inoagent.desktop`, `build_macos.sh` делает ad-hoc signing и `codesign --verify --deep --strict` перед DMG.
+- Выполнен clean-profile smoke для `dist/ino-agent.app` с временным HOME; добавлены demo datasets и `docs/DOGFOOD_REPORT.md` для ручного dogfood прохода.
+- Исправлена обрезка top-bar overlay-панелей: Projects/Terminal/etc больше не позиционируются внутри transformed header ancestor; добавлен Playwright regression test на viewport bounds.
+- Измененные файлы: `docs/RELEASE_TZ.md`, `docs/RELEASE_CHECKLIST.md`, `docs/render_qa.md`, `docs/QUICKSTART.md`, `docs/INSTALL.md`, `docs/PRIVACY.md`, `docs/DEMO_SCENARIOS.md`, `docs/DOGFOOD_REPORT.md`, `demo/lecture_linear_algebra.md`, `demo/research_workspace_notes.md`, `demo/memory_seed.json`, `playwright.config.ts`, `tests/render-screenshot.spec.ts`, `tests/overlay-bounds.spec.ts`, `build_macos.sh`, `src-tauri/tauri.conf.json`, `src-tauri/src/project.rs`, `src-tauri/src/terminal.rs`, `src-tauri/src/lib.rs`, `src-tauri/src/store.rs`, `src/lib/api.ts`, `src/components/ProjectWizardPanel.tsx`, `src/components/AgentTasksPanel.tsx`, `src/components/TerminalPanel.tsx`, `src/components/SearchPanel.tsx`, `src/components/MemoryPanel.tsx`, `src/components/RenderSmoke.tsx`, `src/App.tsx`, `package.json`, `package-lock.json`, `README.md`.
 
 ### 2026-07-12
 

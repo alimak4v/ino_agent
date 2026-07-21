@@ -1,12 +1,14 @@
 # Render QA
 
-Current smoke check:
+Current smoke checks:
 
 ```text
 npm run build
+npm run qa:render-screenshots
 ```
 
-This validates TypeScript, Vite bundling, lazy-loaded chat UI, rich render block imports, and Mermaid module imports.
+These validate TypeScript, Vite bundling, lazy-loaded chat UI, rich render block imports,
+Mermaid module imports, and browser screenshots for desktop/mobile viewports.
 
 Manual fixture:
 
@@ -16,16 +18,16 @@ npm run dev:render-smoke
 
 The fixture renders matrix/vector/chart/step blocks, plain Mermaid, Mermaid fence directives, graphsteps, and math without requiring a model response.
 
-Manual visual targets for the next QA pass:
+Automated screenshot coverage:
 
-- `matrix` with `activeRow`, `activeColumn`, and `highlightCells`.
-- `vector` in row and column orientation.
-- `step_example` with active step and result.
-- static `mermaid` flowchart, sequence diagram, xychart, and mindmap.
-- Mermaid fence directives without `mermaid` wrapper: `block-beta`, `architecture-beta`, `requirementDiagram`, `kanban`, and `C4Context`.
-- `graphsteps` with at least five steps and changing highlighted graph state.
-- mobile-width chat message containing mixed Markdown, math, rich blocks, and graphsteps.
+- desktop viewport: `1280x900`.
+- mobile viewport: `390x844`.
+- `matrix`, `vector`, `chart`, `step_example`, `mermaid`, Mermaid fence directive, and `graphsteps`.
+- graphsteps interaction: advances from step 1 to step 2 before screenshot capture.
+- desktop top-bar overlays: Projects, Tasks, Terminal, Search, Memory, and Knowledge must stay inside the viewport.
+- screenshots are written to `test-results/render-screenshots/`.
 
-Known gap:
+Manual visual targets for follow-up QA:
 
-- Browser screenshot automation was not available in this session, so this pass is build-level/manual-fixture QA. The next production QA step should add screenshot checks for desktop and mobile widths.
+- Add broader Mermaid samples: sequence diagram, xychart, mindmap, architecture-beta, requirementDiagram, kanban, and C4Context.
+- Add a mobile-width chat message fixture with mixed Markdown, math, rich blocks, and graphsteps inside the real chat bubble layout.

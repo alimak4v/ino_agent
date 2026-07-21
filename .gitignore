@@ -16,9 +16,12 @@ treeai.sqlite3
 # Dependency and build outputs
 node_modules/
 dist/
+dmg-root/
 src-tauri/target/
 
 # Tooling caches
 .DS_Store
 .vite/
 *.log
+playwright-report/
+test-results/

@@ -53,7 +53,10 @@ export function RenderSmoke() {
   }, []);
 
   return (
-    <main className="min-h-screen bg-[color:var(--app-bg)] px-4 py-6 text-[color:var(--text)]">
+    <main
+      data-testid="render-smoke"
+      className="min-h-screen bg-[color:var(--app-bg)] px-4 py-6 text-[color:var(--text)]"
+    >
       <div className="mx-auto max-w-3xl rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-5 shadow-[0_16px_40px_rgba(0,0,0,0.08)]">
         <div className="mb-4 border-b border-[color:var(--border)] pb-3">
           <div className="text-sm font-semibold">Render QA Fixture</div>

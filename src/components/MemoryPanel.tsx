@@ -6,6 +6,7 @@ import {
   type MemoryGraph,
   type MemoryInput,
   type MemoryItem,
+  type MemoryReviewItem,
   type MemorySearchResult,
 } from "../lib/api";
 
@@ -17,12 +18,17 @@ interface MemoryPanelProps {
 const EMPTY_GRAPH: MemoryGraph = { nodes: [], links: [] };
 
 export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
+  const [activeView, setActiveView] = useState<"browse" | "review" | "io">("browse");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MemorySearchResult[]>([]);
   const [recent, setRecent] = useState<MemoryItem[]>([]);
+  const [review, setReview] = useState<MemoryReviewItem[]>([]);
   const [graph, setGraph] = useState<MemoryGraph>(EMPTY_GRAPH);
   const [decisions, setDecisions] = useState<MemoryDecision[]>([]);
   const [feedbackSummary, setFeedbackSummary] = useState<FeedbackSummary[]>([]);
+  const [exportText, setExportText] = useState("");
+  const [importText, setImportText] = useState("");
+  const [importSummary, setImportSummary] = useState("");
   const [selectedMemoryId, setSelectedMemoryId] = useState("");
   const [editingMemoryId, setEditingMemoryId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,13 +49,15 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
     setBusy(true);
     setError("");
     try {
-      const [nextRecent, nextGraph, nextDecisions, nextFeedbackSummary] = await Promise.all([
+      const [nextRecent, nextReview, nextGraph, nextDecisions, nextFeedbackSummary] = await Promise.all([
         api.listMemoryRecent(24),
+        api.listMemoryReview(24),
         api.getMemoryGraph(36),
         api.listMemoryDecisions(24),
         api.listFeedbackSummary(12),
       ]);
       setRecent(nextRecent);
+      setReview(nextReview);
       setGraph(nextGraph);
       setDecisions(nextDecisions);
       setFeedbackSummary(nextFeedbackSummary);
@@ -174,6 +182,54 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
     }
   };
 
+  const mergeReviewDuplicate = async (item: MemoryItem, duplicateOf: MemoryItem) => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.mergeMemory(duplicateOf.id, item.id);
+      setSelectedMemoryId(duplicateOf.id);
+      await refresh();
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportMemoryJson = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    setImportSummary("");
+    try {
+      setExportText(await api.exportMemory());
+      setActiveView("io");
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importMemoryJson = async () => {
+    if (busy || !importText.trim()) return;
+    setBusy(true);
+    setError("");
+    setImportSummary("");
+    try {
+      const result = await api.importMemory(importText);
+      setImportSummary(
+        `Imported ${result.imported}, skipped ${result.skipped}, updated ${result.updated}, errors ${result.errors.length}.`,
+      );
+      await refresh();
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <aside className="no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)]/95 shadow-[0_12px_40px_rgba(0,0,0,0.14)] backdrop-blur-xl lg:left-auto lg:right-3 lg:w-[760px]">
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
@@ -194,7 +250,21 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
 
       <div className="grid max-h-[calc(100vh-122px)] gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
-          <form onSubmit={submit} className="grid gap-2">
+          <div className="grid grid-cols-3 gap-1 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-1">
+            <ViewButton active={activeView === "browse"} onClick={() => setActiveView("browse")}>
+              Browse
+            </ViewButton>
+            <ViewButton active={activeView === "review"} onClick={() => setActiveView("review")}>
+              Review
+            </ViewButton>
+            <ViewButton active={activeView === "io"} onClick={() => setActiveView("io")}>
+              Import
+            </ViewButton>
+          </div>
+
+          {activeView === "browse" && (
+            <>
+              <form onSubmit={submit} className="grid gap-2">
             {editingMemoryId && (
               <div className="flex items-center justify-between gap-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2 text-xs text-[color:var(--muted)]">
                 <span className="min-w-0 truncate">Editing memory</span>
@@ -312,41 +382,72 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
             >
               {editingMemoryId ? "Save memory" : "Remember"}
             </button>
-          </form>
+              </form>
 
-          <div className="space-y-2">
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className={inputClass}
-              placeholder="Recall by meaning"
-            />
-            {error && <div className="text-xs text-red-600">{error}</div>}
-            <div className="space-y-2">
-              {visibleItems.length === 0 ? (
-                <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-3 text-sm text-[color:var(--muted)]">
-                  {busy ? "Loading" : "No memories yet"}
+              <div className="space-y-2">
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  className={inputClass}
+                  placeholder="Recall by meaning"
+                />
+                {error && <div className="text-xs text-red-600">{error}</div>}
+                <div className="space-y-2">
+                  {visibleItems.length === 0 ? (
+                    <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-3 text-sm text-[color:var(--muted)]">
+                      {busy ? "Loading" : "No memories yet"}
+                    </div>
+                  ) : (
+                    visibleItems.map((item) => {
+                      const result = results.find((candidate) => candidate.item.id === item.id);
+                      return (
+                        <MemoryRow
+                          key={item.id}
+                          item={item}
+                          result={result}
+                          onOpenTarget={onOpenTarget}
+                          onDeleted={refresh}
+                          onEdit={editMemory}
+                          primaryId={selectedMemoryId}
+                          onSetPrimary={setSelectedMemoryId}
+                          onMergeIntoPrimary={mergeIntoSelected}
+                        />
+                      );
+                    })
+                  )}
                 </div>
-              ) : (
-                visibleItems.map((item) => {
-                  const result = results.find((candidate) => candidate.item.id === item.id);
-                  return (
-                    <MemoryRow
-                      key={item.id}
-                      item={item}
-                      result={result}
-                      onOpenTarget={onOpenTarget}
-                      onDeleted={refresh}
-                      onEdit={editMemory}
-                      primaryId={selectedMemoryId}
-                      onSetPrimary={setSelectedMemoryId}
-                      onMergeIntoPrimary={mergeIntoSelected}
-                    />
-                  );
-                })
-              )}
-            </div>
-          </div>
+              </div>
+            </>
+          )}
+
+          {activeView === "review" && (
+            <MemoryReviewQueue
+              items={review}
+              busy={busy}
+              decisions={decisions}
+              onOpenTarget={onOpenTarget}
+              onDeleted={refresh}
+              onEdit={(item) => {
+                editMemory(item);
+                setActiveView("browse");
+              }}
+              onMergeDuplicate={mergeReviewDuplicate}
+              onSelect={setSelectedMemoryId}
+            />
+          )}
+
+          {activeView === "io" && (
+            <MemoryImportExport
+              busy={busy}
+              exportText={exportText}
+              importText={importText}
+              importSummary={importSummary}
+              error={error}
+              onExport={exportMemoryJson}
+              onImport={importMemoryJson}
+              onImportTextChange={setImportText}
+            />
+          )}
         </div>
 
         <div className="min-w-0">
@@ -444,6 +545,282 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
         </div>
       </div>
     </aside>
+  );
+}
+
+function ViewButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`h-8 rounded-lg text-xs font-medium transition-colors ${
+        active
+          ? "bg-[color:var(--panel)] text-[color:var(--text)] shadow-sm"
+          : "text-[color:var(--muted)] hover:bg-[color:var(--panel-soft)] hover:text-[color:var(--text)]"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function MemoryReviewQueue({
+  items,
+  busy,
+  decisions,
+  onOpenTarget,
+  onDeleted,
+  onEdit,
+  onMergeDuplicate,
+  onSelect,
+}: {
+  items: MemoryReviewItem[];
+  busy: boolean;
+  decisions: MemoryDecision[];
+  onOpenTarget: (target: string) => Promise<void>;
+  onDeleted: () => Promise<void>;
+  onEdit: (item: MemoryItem) => void;
+  onMergeDuplicate: (item: MemoryItem, duplicateOf: MemoryItem) => Promise<void>;
+  onSelect: (id: string) => void;
+}) {
+  if (items.length === 0) {
+    return (
+      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-3 text-sm text-[color:var(--muted)]">
+        {busy ? "Loading review queue" : "No cleanup suggestions right now"}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {items.map((item) => (
+        <MemoryReviewCard
+          key={item.id}
+          review={item}
+          decisions={decisions}
+          onOpenTarget={onOpenTarget}
+          onDeleted={onDeleted}
+          onEdit={onEdit}
+          onMergeDuplicate={onMergeDuplicate}
+          onSelect={onSelect}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MemoryReviewCard({
+  review,
+  decisions,
+  onOpenTarget,
+  onDeleted,
+  onEdit,
+  onMergeDuplicate,
+  onSelect,
+}: {
+  review: MemoryReviewItem;
+  decisions: MemoryDecision[];
+  onOpenTarget: (target: string) => Promise<void>;
+  onDeleted: () => Promise<void>;
+  onEdit: (item: MemoryItem) => void;
+  onMergeDuplicate: (item: MemoryItem, duplicateOf: MemoryItem) => Promise<void>;
+  onSelect: (id: string) => void;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const why = decisions.find((decision) => {
+    const rememberedTitle = decision.itemTitle ?? "";
+    const rememberedDescription = decision.itemDescription ?? "";
+    return (
+      decision.target === review.item.target ||
+      rememberedTitle === review.item.title ||
+      (rememberedDescription.length > 20 &&
+        review.item.description.includes(rememberedDescription.slice(0, 80)))
+    );
+  });
+  const deleteItem = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await api.deleteMemory(review.item.id);
+      await onDeleted();
+    } finally {
+      setDeleting(false);
+    }
+  };
+  const mergeDuplicate = async () => {
+    if (!review.duplicateOf || merging) return;
+    setMerging(true);
+    try {
+      await onMergeDuplicate(review.item, review.duplicateOf);
+    } finally {
+      setMerging(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--muted)]">
+              {review.kind.replace("_", " ")}
+            </span>
+            <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--muted)]">
+              {review.suggestedAction.replace("_", " ")}
+            </span>
+            <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--muted)]">
+              {Math.round(review.score * 100)}%
+            </span>
+          </div>
+          <div className="mt-2 truncate text-sm font-medium text-[color:var(--text)]">
+            {review.item.title}
+          </div>
+          <div className="mt-1 line-clamp-3 text-xs leading-5 text-[color:var(--muted)]">
+            {review.reason}
+          </div>
+        </div>
+      </div>
+
+      {review.duplicateOf && (
+        <div className="mt-2 rounded-lg border border-[color:var(--border)] px-2 py-1.5 text-[11px] text-[color:var(--muted)]">
+          Merge into <span className="text-[color:var(--text)]">{review.duplicateOf.title}</span>
+          <code className="mt-1 block truncate">{review.duplicateOf.target}</code>
+        </div>
+      )}
+
+      <div className="mt-2 rounded-lg border border-[color:var(--border)] px-2 py-1.5 text-[11px] text-[color:var(--muted)]">
+        <div className="line-clamp-2">{review.item.description}</div>
+        <code className="mt-1 block truncate">{review.item.target}</code>
+      </div>
+
+      {why && (
+        <div className="mt-2 rounded-lg border border-[color:var(--border)] px-2 py-1.5 text-[11px] text-[color:var(--muted)]">
+          <span className="font-medium text-[color:var(--text)]">Why remembered: </span>
+          {why.action} / {why.reason}
+        </div>
+      )}
+
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={() => void onOpenTarget(review.item.target)}
+          className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          onClick={() => onEdit(review.item)}
+          className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelect(review.item.id)}
+          className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)]"
+        >
+          Graph
+        </button>
+        {review.duplicateOf && (
+          <button
+            type="button"
+            onClick={() => void mergeDuplicate()}
+            disabled={merging}
+            className="rounded-full border border-[color:var(--accent)] px-2 py-0.5 text-[11px] text-[color:var(--accent)] transition-colors hover:bg-[color:var(--selected)] disabled:opacity-40"
+          >
+            Merge
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => void deleteItem()}
+          disabled={deleting}
+          className="rounded-full border border-red-500/30 px-2 py-0.5 text-[11px] text-red-600 transition-colors hover:bg-red-500/10 disabled:opacity-40"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MemoryImportExport({
+  busy,
+  exportText,
+  importText,
+  importSummary,
+  error,
+  onExport,
+  onImport,
+  onImportTextChange,
+}: {
+  busy: boolean;
+  exportText: string;
+  importText: string;
+  importSummary: string;
+  error: string;
+  onExport: () => Promise<void>;
+  onImport: () => Promise<void>;
+  onImportTextChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      {error && <div className="text-xs text-red-600">{error}</div>}
+      {importSummary && (
+        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2 text-xs text-[color:var(--muted)]">
+          {importSummary}
+        </div>
+      )}
+      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm font-medium text-[color:var(--text)]">Export memory</div>
+          <button
+            type="button"
+            onClick={() => void onExport()}
+            disabled={busy}
+            className="h-7 rounded-full border border-[color:var(--border)] px-3 text-xs text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:opacity-40"
+          >
+            Export JSON
+          </button>
+        </div>
+        <textarea
+          readOnly
+          value={exportText}
+          className={`${inputClass} mt-2 h-44 resize-none py-2 font-mono text-xs`}
+          placeholder="Exported JSON appears here"
+        />
+      </div>
+
+      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm font-medium text-[color:var(--text)]">Import memory</div>
+          <button
+            type="button"
+            onClick={() => void onImport()}
+            disabled={busy || !importText.trim()}
+            className="h-7 rounded-full border border-[color:var(--border)] px-3 text-xs text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:opacity-40"
+          >
+            Import JSON
+          </button>
+        </div>
+        <textarea
+          value={importText}
+          onChange={(event) => onImportTextChange(event.target.value)}
+          className={`${inputClass} mt-2 h-44 resize-none py-2 font-mono text-xs`}
+          placeholder='{"version":1,"items":[...]}'
+        />
+      </div>
+    </div>
   );
 }
 

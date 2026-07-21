@@ -26,9 +26,13 @@ import {
   type TreeSummary,
 } from "./lib/api";
 import { applyThemeVars, THEMES, type ThemeName } from "./lib/theme";
+import { AgentTasksPanel } from "./components/AgentTasksPanel";
 import { AppDialog, type AppDialogState } from "./components/AppDialog";
 import { KnowledgePanel } from "./components/KnowledgePanel";
 import { MemoryPanel } from "./components/MemoryPanel";
+import { ProjectWizardPanel } from "./components/ProjectWizardPanel";
+import { SearchPanel } from "./components/SearchPanel";
+import { TerminalPanel } from "./components/TerminalPanel";
 import type { CanvasLayoutNode } from "./components/TreeCanvas";
 
 const ChatPanel = lazy(() =>
@@ -53,6 +57,7 @@ const MIN_TREE_WIDTH = 360;
 const MIN_CHAT_WIDTH = 420;
 const TARGET_CHAT_WIDTH = 760;
 const DIVIDER_WIDTH = 8;
+const ONBOARDING_STORAGE_KEY = "ino-agent:onboarding:v1";
 
 interface KnowledgeWatchEvent {
   ok: boolean;
@@ -113,8 +118,13 @@ export default function App() {
   const [dialog, setDialog] = useState<AppDialogState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatsOpen, setChatsOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
   const [connectorsLoading, setConnectorsLoading] = useState(false);
@@ -126,6 +136,23 @@ export default function App() {
   useEffect(() => {
     applyThemeVars(THEMES[settings.theme] ?? THEMES[DEFAULT_SETTINGS.theme]);
   }, [settings.theme]);
+
+  useEffect(() => {
+    try {
+      setOnboardingOpen(window.localStorage.getItem(ONBOARDING_STORAGE_KEY) !== "done");
+    } catch {
+      setOnboardingOpen(false);
+    }
+  }, []);
+
+  const dismissOnboarding = useCallback(() => {
+    try {
+      window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "done");
+    } catch {
+      // localStorage can be unavailable in hardened or private contexts.
+    }
+    setOnboardingOpen(false);
+  }, []);
 
   useEffect(() => {
     void api
@@ -593,6 +620,10 @@ export default function App() {
         if (resolved.kind === "chat" && resolved.treeId && resolved.nodeId) {
           setSettingsOpen(false);
           setChatsOpen(false);
+          setProjectsOpen(false);
+          setTasksOpen(false);
+          setTerminalOpen(false);
+          setSearchOpen(false);
           setMemoryOpen(false);
           setKnowledgeOpen(false);
           setChatHomeVisible(false);
@@ -616,6 +647,14 @@ export default function App() {
     },
     [loadCanvas, loadMessages],
   );
+
+  const handleOpenFolder = useCallback(async (path: string) => {
+    try {
+      await openShell(path);
+    } catch (e) {
+      setStatusText(String(e));
+    }
+  }, []);
 
   const handleRenameNode = useCallback(
     async (node: CanvasLayoutNode) => {
@@ -1131,7 +1170,7 @@ export default function App() {
         }`}
       >
         <div
-          className={`absolute left-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center justify-start gap-2 ${
+          className={`absolute left-3 top-2 flex min-w-0 items-center justify-start gap-2 ${
             titlebarNeedsTrafficSpace ? "pl-0 sm:pl-[72px]" : "pl-0"
           }`}
         >
@@ -1144,6 +1183,10 @@ export default function App() {
               aria-label="Chats"
               onClick={() => {
                 setSettingsOpen(false);
+                setProjectsOpen(false);
+                setTasksOpen(false);
+                setTerminalOpen(false);
+                setSearchOpen(false);
                 setMemoryOpen(false);
                 setKnowledgeOpen(false);
                 setChatsOpen((value) => !value);
@@ -1170,11 +1213,124 @@ export default function App() {
               />
             )}
           </div>
+          <button
+            type="button"
+            aria-label="Projects"
+            onClick={() => {
+              setSettingsOpen(false);
+              setChatsOpen(false);
+              setTasksOpen(false);
+              setTerminalOpen(false);
+              setSearchOpen(false);
+              setMemoryOpen(false);
+              setKnowledgeOpen(false);
+              setProjectsOpen((value) => !value);
+            }}
+            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
+              projectsOpen
+                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                : "text-[color:var(--muted)]"
+            }`}
+          >
+            <ProjectIcon />
+            <span>Projects</span>
+          </button>
+          {projectsOpen && (
+            <ProjectWizardPanel
+              onClose={() => setProjectsOpen(false)}
+              onOpenFolder={handleOpenFolder}
+              onAskAgent={handleStartChat}
+            />
+          )}
+          <button
+            type="button"
+            aria-label="Tasks"
+            onClick={() => {
+              setSettingsOpen(false);
+              setChatsOpen(false);
+              setProjectsOpen(false);
+              setTerminalOpen(false);
+              setSearchOpen(false);
+              setMemoryOpen(false);
+              setKnowledgeOpen(false);
+              setTasksOpen((value) => !value);
+            }}
+            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
+              tasksOpen
+                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                : "text-[color:var(--muted)]"
+            }`}
+          >
+            <TasksIcon />
+            <span>Tasks</span>
+          </button>
+          {tasksOpen && (
+            <AgentTasksPanel
+              treeId={selectedTreeId}
+              nodeId={selectedCanvasNodeId}
+              onClose={() => setTasksOpen(false)}
+            />
+          )}
+          <button
+            type="button"
+            aria-label="Terminal"
+            onClick={() => {
+              setSettingsOpen(false);
+              setChatsOpen(false);
+              setProjectsOpen(false);
+              setTasksOpen(false);
+              setSearchOpen(false);
+              setMemoryOpen(false);
+              setKnowledgeOpen(false);
+              setTerminalOpen((value) => !value);
+            }}
+            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
+              terminalOpen
+                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                : "text-[color:var(--muted)]"
+            }`}
+          >
+            <TerminalIcon />
+            <span>Terminal</span>
+          </button>
+          {terminalOpen && <TerminalPanel onClose={() => setTerminalOpen(false)} />}
+          <button
+            type="button"
+            aria-label="Search"
+            onClick={() => {
+              setSettingsOpen(false);
+              setChatsOpen(false);
+              setProjectsOpen(false);
+              setTasksOpen(false);
+              setTerminalOpen(false);
+              setMemoryOpen(false);
+              setKnowledgeOpen(false);
+              setSearchOpen((value) => !value);
+            }}
+            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
+              searchOpen
+                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                : "text-[color:var(--muted)]"
+            }`}
+          >
+            <SearchIcon />
+            <span>Search</span>
+          </button>
+          {searchOpen && (
+            <SearchPanel
+              onClose={() => setSearchOpen(false)}
+              onOpenTarget={handleOpenTarget}
+            />
+          )}
           {!chatHomeVisible && (
             <button
               type="button"
               onClick={() => {
                 setChatsOpen(false);
+                setProjectsOpen(false);
+                setTasksOpen(false);
+                setTerminalOpen(false);
+                setSearchOpen(false);
                 setTreeVisible((value) => {
                   const nextVisible = !value;
                   if (nextVisible) {
@@ -1207,13 +1363,17 @@ export default function App() {
             )}
           </div>
         )}
-        <div className="absolute right-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center justify-end gap-2">
+        <div className="absolute right-3 top-2 flex min-w-0 items-center justify-end gap-2">
           <button
             type="button"
             aria-label="Memory"
             onClick={() => {
               setSettingsOpen(false);
               setChatsOpen(false);
+              setProjectsOpen(false);
+              setTasksOpen(false);
+              setTerminalOpen(false);
+              setSearchOpen(false);
               setKnowledgeOpen(false);
               setMemoryOpen((value) => !value);
             }}
@@ -1236,6 +1396,10 @@ export default function App() {
             onClick={() => {
               setSettingsOpen(false);
               setChatsOpen(false);
+              setProjectsOpen(false);
+              setTasksOpen(false);
+              setTerminalOpen(false);
+              setSearchOpen(false);
               setMemoryOpen(false);
               setKnowledgeOpen((value) => !value);
             }}
@@ -1260,6 +1424,10 @@ export default function App() {
             onClick={() => {
               setSettingsDraft(settings);
               setChatsOpen(false);
+              setProjectsOpen(false);
+              setTasksOpen(false);
+              setTerminalOpen(false);
+              setSearchOpen(false);
               setMemoryOpen(false);
               setKnowledgeOpen(false);
               setSettingsOpen((value) => !value);
@@ -1361,8 +1529,121 @@ export default function App() {
           />
         </Suspense>
       </div>
+      {onboardingOpen && (
+        <OnboardingPanel
+          onClose={dismissOnboarding}
+          onOpenSettings={() => {
+            dismissOnboarding();
+            setSettingsDraft(settings);
+            setChatsOpen(false);
+            setProjectsOpen(false);
+            setTasksOpen(false);
+            setTerminalOpen(false);
+            setSearchOpen(false);
+            setMemoryOpen(false);
+            setKnowledgeOpen(false);
+            setSettingsOpen(true);
+          }}
+          onOpenProjects={() => {
+            dismissOnboarding();
+            setSettingsOpen(false);
+            setChatsOpen(false);
+            setTasksOpen(false);
+            setTerminalOpen(false);
+            setSearchOpen(false);
+            setMemoryOpen(false);
+            setKnowledgeOpen(false);
+            setProjectsOpen(true);
+          }}
+        />
+      )}
       <AppDialog dialog={dialog} onClose={() => setDialog(null)} />
     </main>
+  );
+}
+
+function OnboardingPanel({
+  onClose,
+  onOpenSettings,
+  onOpenProjects,
+}: {
+  onClose: () => void;
+  onOpenSettings: () => void;
+  onOpenProjects: () => void;
+}) {
+  return (
+    <div className="no-drag fixed inset-0 z-[70] flex items-center justify-center bg-black/28 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-[560px] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_24px_80px_rgba(0,0,0,0.22)]">
+        <div className="border-b border-[color:var(--border)] px-5 py-4">
+          <div className="text-base font-semibold text-[color:var(--text)]">ino-agent</div>
+          <div className="mt-1 text-sm leading-6 text-[color:var(--muted)]">
+            Local workspace for projects, agent tasks, memory, search, and visual explanations.
+          </div>
+        </div>
+        <div className="grid gap-2 p-4">
+          <OnboardingStep
+            label="1"
+            title="Set model access"
+            text="Save endpoint, model, API key, and theme in Settings."
+          />
+          <OnboardingStep
+            label="2"
+            title="Create or inspect work"
+            text="Use Projects, Tasks, Terminal, Search, Memory, and Knowledge from the top bar."
+          />
+          <OnboardingStep
+            label="3"
+            title="Keep local data private"
+            text="Chats, memory, command history, paths, and API keys stay in the local SQLite database."
+          />
+        </div>
+        <div className="flex flex-col-reverse gap-2 border-t border-[color:var(--border)] px-4 py-3 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 rounded-full border border-[color:var(--border)] px-4 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
+          >
+            Start
+          </button>
+          <button
+            type="button"
+            onClick={onOpenProjects}
+            className="h-9 rounded-full border border-[color:var(--border)] px-4 text-sm text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+          >
+            Open Projects
+          </button>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="h-9 rounded-full bg-[color:var(--button)] px-4 text-sm font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90"
+          >
+            Set Model
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OnboardingStep({
+  label,
+  title,
+  text,
+}: {
+  label: string;
+  title: string;
+  text: string;
+}) {
+  return (
+    <div className="grid grid-cols-[32px_minmax(0,1fr)] gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2.5">
+      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[color:var(--selected)] text-xs font-semibold text-[color:var(--text)]">
+        {label}
+      </div>
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-[color:var(--text)]">{title}</div>
+        <div className="mt-0.5 text-xs leading-5 text-[color:var(--muted)]">{text}</div>
+      </div>
+    </div>
   );
 }
 
@@ -1720,6 +2001,78 @@ function ChatsIcon() {
       <path d="M7 8h10" />
       <path d="M7 12h7" />
       <path d="M5 19a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-8l-4 3v-3Z" />
+    </svg>
+  );
+}
+
+function ProjectIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" />
+      <path d="M8 12h8M8 15h5" />
+    </svg>
+  );
+}
+
+function TasksIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M9 6h11M9 12h11M9 18h11" />
+      <path d="m4 6 1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" />
+    </svg>
+  );
+}
+
+function TerminalIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5Z" />
+      <path d="m8 9 3 3-3 3M13 15h3" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="11" cy="11" r="6" />
+      <path d="m16 16 4 4" />
     </svg>
   );
 }

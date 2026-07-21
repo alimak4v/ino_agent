@@ -4,8 +4,10 @@ mod code_runner;
 mod connectors;
 mod context_builder;
 mod local_embedding;
+mod project;
 mod retrieval_context;
 mod store;
+mod terminal;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -48,6 +50,19 @@ struct AgentToolEvent {
 struct KnowledgeWatchEvent {
     ok: bool,
     content: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchPageResult {
+    query: String,
+    answer: String,
+    memory_results: Vec<store::MemorySearchResult>,
+    knowledge_results: Vec<store::KnowledgeSearchResult>,
+    related_memory: Vec<store::RetrievalRelatedMemoryTrace>,
+    source_count: usize,
+    chunk_count: usize,
+    used_model: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -479,6 +494,65 @@ fn search_knowledge(
 }
 
 #[tauri::command]
+async fn search_page(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<SearchPageResult, String> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let limit = limit.unwrap_or(10).clamp(1, 24);
+        let query = query.trim().chars().take(500).collect::<String>();
+        if query.is_empty() {
+            return Err("Search query is empty.".to_string());
+        }
+        let (settings, memory_results, knowledge_results, related_memory) = {
+            let store = lock_store(&store)?;
+            let memory_results = store.search_memory(&query, limit)?;
+            let knowledge_results = store.search_knowledge(&query, limit)?;
+            let related_memory = store
+                .retrieval_trace_for_query(&query, limit)?
+                .related_memory;
+            (
+                store.get_settings()?,
+                memory_results,
+                knowledge_results,
+                related_memory,
+            )
+        };
+        let source_count = knowledge_results
+            .iter()
+            .map(|result| result.source.id.clone())
+            .collect::<HashSet<_>>()
+            .len()
+            + memory_results.len();
+        let chunk_count = knowledge_results.len();
+        let fallback_answer = fallback_search_answer(&query, &memory_results, &knowledge_results);
+        let answer = synthesize_search_answer(
+            &settings,
+            &query,
+            &memory_results,
+            &knowledge_results,
+            &related_memory,
+        )
+        .unwrap_or_else(|_| fallback_answer.clone());
+        let used_model = answer.trim() != fallback_answer.trim();
+        Ok(SearchPageResult {
+            query,
+            answer,
+            memory_results,
+            knowledge_results,
+            related_memory,
+            source_count,
+            chunk_count,
+            used_model,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn list_memory_recent(
     state: State<AppState>,
     limit: Option<usize>,
@@ -492,6 +566,28 @@ fn list_memory_decisions(
     limit: Option<usize>,
 ) -> Result<Vec<store::MemoryDecision>, String> {
     lock_store(&state.store)?.list_memory_decisions(limit.unwrap_or(24))
+}
+
+#[tauri::command]
+fn list_memory_review(
+    state: State<AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<store::MemoryReviewItem>, String> {
+    lock_store(&state.store)?.memory_review_queue(limit.unwrap_or(24))
+}
+
+#[tauri::command]
+fn export_memory(state: State<AppState>) -> Result<String, String> {
+    lock_store(&state.store)?.export_memory_json()
+}
+
+#[tauri::command]
+fn import_memory(
+    state: State<AppState>,
+    json: String,
+) -> Result<store::MemoryImportResult, String> {
+    let store = &mut *lock_store(&state.store)?;
+    store.import_memory_json(&json)
 }
 
 #[tauri::command]
@@ -546,6 +642,172 @@ fn poll_watched_paths(state: State<AppState>) -> Result<Value, String> {
 fn resolve_target(target: String) -> Result<Value, String> {
     let workspace_root = agent_tools::workspace_root()?;
     agent_tools::resolve_target(&workspace_root, &target)
+}
+
+#[tauri::command]
+fn list_project_stacks() -> Result<Vec<project::ProjectStackSummary>, String> {
+    Ok(project::list_project_stacks())
+}
+
+#[tauri::command]
+fn create_project(
+    request: project::CreateProjectRequest,
+) -> Result<project::CreatedProject, String> {
+    let workspace_root = agent_tools::workspace_root()?;
+    project::create_project(&workspace_root, request)
+}
+
+#[tauri::command]
+async fn run_project_command(
+    request: project::RunProjectCommandRequest,
+) -> Result<project::ProjectCommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace_root = agent_tools::workspace_root()?;
+        project::run_project_command(&workspace_root, request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn assess_terminal_command(
+    request: terminal::TerminalCommandRequest,
+) -> Result<terminal::TerminalCommandSafety, String> {
+    let workspace_root = agent_tools::workspace_root()?;
+    terminal::assess_command(&workspace_root, &request)
+}
+
+#[tauri::command]
+async fn run_terminal_command(
+    state: State<'_, AppState>,
+    request: terminal::TerminalCommandRequest,
+) -> Result<terminal::TerminalCommandResult, String> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace_root = agent_tools::workspace_root()?;
+        let result = terminal::run_command(&workspace_root, request)?;
+        {
+            let store = &mut *lock_store(&store)?;
+            store.record_terminal_command(&result)?;
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn list_terminal_history(
+    state: State<AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<store::TerminalCommandHistoryItem>, String> {
+    lock_store(&state.store)?.list_terminal_history(limit.unwrap_or(30))
+}
+
+#[tauri::command]
+fn list_agent_runs(
+    state: State<AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<store::AgentRunDetail>, String> {
+    lock_store(&state.store)?.list_agent_runs(limit.unwrap_or(12))
+}
+
+#[tauri::command]
+async fn create_agent_run(
+    state: State<'_, AppState>,
+    input: store::AgentRunInput,
+) -> Result<store::AgentRunDetail, String> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = lock_store(&store)?.get_settings()?;
+        let plan = create_agent_run_plan(&settings, &input)
+            .unwrap_or_else(|_| fallback_agent_run_plan(&input.goal, input.title.as_deref()));
+        let store = &mut *lock_store(&store)?;
+        store.create_agent_run(input, plan)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn advance_agent_run(
+    window: Window,
+    state: State<'_, AppState>,
+    run_id: String,
+    request_id: Option<String>,
+) -> Result<store::AgentRunDetail, String> {
+    let store = state.store.clone();
+    let request_id = request_id.unwrap_or_else(|| format!("agent-run:{run_id}"));
+    tauri::async_runtime::spawn_blocking(move || {
+        let task = {
+            let store_guard = lock_store(&store)?;
+            store_guard.start_next_agent_task(&run_id)?
+        };
+        let Some(task) = task else {
+            return lock_store(&store)?.get_agent_run(&run_id);
+        };
+
+        let (settings, detail) = {
+            let store_guard = lock_store(&store)?;
+            (
+                store_guard.get_settings()?,
+                store_guard.get_agent_run(&run_id)?,
+            )
+        };
+        let tree_id = detail
+            .run
+            .tree_id
+            .clone()
+            .unwrap_or_else(|| detail.run.id.clone());
+        let node_id = detail
+            .run
+            .node_id
+            .clone()
+            .unwrap_or_else(|| task.id.clone());
+        let messages = agent_run_execution_messages(&detail, &task);
+        let latest_user = agent_run_task_request(&detail, &task);
+
+        let output = run_agent_tool_turn(
+            window,
+            store.clone(),
+            &settings,
+            &messages,
+            &latest_user,
+            &tree_id,
+            &node_id,
+            &request_id,
+        )
+        .and_then(|output| {
+            if let Some(output) = output {
+                Ok(output)
+            } else {
+                let answer = api::chat_completion(&settings, &messages)?;
+                Ok(AgentTurnOutput {
+                    answer,
+                    trace_json: String::new(),
+                })
+            }
+        });
+
+        match output {
+            Ok(output) => {
+                let trace_json = if output.trace_json.trim().is_empty() {
+                    None
+                } else {
+                    Some(output.trace_json)
+                };
+                lock_store(&store)?.complete_agent_task(
+                    &run_id,
+                    &task.id,
+                    &output.answer,
+                    trace_json,
+                )
+            }
+            Err(error) => lock_store(&store)?.fail_agent_task(&run_id, &task.id, &error),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn start_knowledge_watcher(app: AppHandle, store: Arc<Mutex<store::Store>>) {
@@ -964,6 +1226,324 @@ struct AutoMemoryItem {
     confidence: Option<f64>,
     #[serde(default)]
     stability: Option<String>,
+}
+
+fn create_agent_run_plan(
+    settings: &store::ChatSettings,
+    input: &store::AgentRunInput,
+) -> Result<store::AgentRunPlan, String> {
+    let messages = vec![
+        store::ChatContextMessage {
+            role: "system".to_string(),
+            content: agent_run_planner_prompt(),
+        },
+        store::ChatContextMessage {
+            role: "user".to_string(),
+            content: format!(
+                "Title hint: {}\n\nGoal:\n{}",
+                input.title.as_deref().unwrap_or(""),
+                input.goal.trim()
+            ),
+        },
+    ];
+    let raw = api::chat_completion(settings, &messages)?;
+    parse_agent_run_plan(&raw).ok_or_else(|| "Could not parse agent run plan.".to_string())
+}
+
+fn fallback_agent_run_plan(goal: &str, title: Option<&str>) -> store::AgentRunPlan {
+    let clean_goal = goal.trim();
+    let fallback_title = clean_goal
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("Agent run")
+        .chars()
+        .take(72)
+        .collect::<String>();
+    store::AgentRunPlan {
+        title: title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&fallback_title)
+            .to_string(),
+        prd: format!(
+            "Goal\n\n{}\n\nSuccess criteria\n\n- The work is split into small, restartable tasks.\n- Each task has a concrete result or a clear blocker.\n- Progress is persisted after every step.",
+            clean_goal
+        ),
+        specs: vec![
+            "Keep each step atomic and verifiable.".to_string(),
+            "Prefer read/build/test checks before broad changes.".to_string(),
+            "Stop and mark a task failed when external input or approval is required.".to_string(),
+        ],
+        tasks: vec![
+            store::AgentTaskDraft {
+                title: "Understand current state".to_string(),
+                description: "Inspect the relevant project context and summarize what already exists for the goal.".to_string(),
+            },
+            store::AgentTaskDraft {
+                title: "Plan first implementation step".to_string(),
+                description: "Identify the smallest next implementation step, expected files, and verification command.".to_string(),
+            },
+            store::AgentTaskDraft {
+                title: "Verify progress".to_string(),
+                description: "Run or describe the most relevant check and update the remaining work.".to_string(),
+            },
+        ],
+    }
+}
+
+fn parse_agent_run_plan(raw: &str) -> Option<store::AgentRunPlan> {
+    serde_json::from_str::<store::AgentRunPlan>(raw.trim())
+        .ok()
+        .or_else(|| {
+            let text = raw.trim();
+            if text.starts_with("```") {
+                let inner = text
+                    .lines()
+                    .skip(1)
+                    .take_while(|line| !line.trim_start().starts_with("```"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::from_str::<store::AgentRunPlan>(inner.trim()).ok()
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            let start = raw.find('{')?;
+            let end = raw.rfind('}')?;
+            if end <= start {
+                return None;
+            }
+            serde_json::from_str::<store::AgentRunPlan>(&raw[start..=end]).ok()
+        })
+}
+
+fn synthesize_search_answer(
+    settings: &store::ChatSettings,
+    query: &str,
+    memory_results: &[store::MemorySearchResult],
+    knowledge_results: &[store::KnowledgeSearchResult],
+    related_memory: &[store::RetrievalRelatedMemoryTrace],
+) -> Result<String, String> {
+    if settings.api_key.trim().is_empty()
+        || (memory_results.is_empty() && knowledge_results.is_empty())
+    {
+        return Err("No model or sources available.".to_string());
+    }
+    let messages = vec![
+        store::ChatContextMessage {
+            role: "system".to_string(),
+            content: search_answer_prompt(),
+        },
+        store::ChatContextMessage {
+            role: "user".to_string(),
+            content: format!(
+                "Query:\n{}\n\nMemory results:\n{}\n\nKnowledge chunks:\n{}\n\nRelated memory:\n{}",
+                query,
+                format_search_memory(memory_results),
+                format_search_knowledge(knowledge_results),
+                format_related_memory(related_memory)
+            ),
+        },
+    ];
+    let answer = api::chat_completion(settings, &messages)?;
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Err("Model returned an empty search answer.".to_string());
+    }
+    Ok(answer.chars().take(6000).collect())
+}
+
+fn fallback_search_answer(
+    query: &str,
+    memory_results: &[store::MemorySearchResult],
+    knowledge_results: &[store::KnowledgeSearchResult],
+) -> String {
+    if memory_results.is_empty() && knowledge_results.is_empty() {
+        return format!("No indexed memory or knowledge chunks matched `{query}`.");
+    }
+    let mut lines = vec![format!("Found local context for `{query}`.")];
+    if let Some(top) = knowledge_results.first() {
+        lines.push(format!(
+            "Top source: {} at {} (score {}%).",
+            top.source.title,
+            top.chunk.target,
+            (top.score * 100.0).round() as i64
+        ));
+        lines.push(format!(
+            "Snippet: {}",
+            clip_search_text(&top.chunk.text, 420)
+        ));
+    }
+    if let Some(top) = memory_results.first() {
+        lines.push(format!(
+            "Top memory: {} at {} (score {}%).",
+            top.item.title,
+            top.item.target,
+            (top.score * 100.0).round() as i64
+        ));
+    }
+    lines.push("Open the listed sources/chunks below for the exact context.".to_string());
+    lines.join("\n\n")
+}
+
+fn search_answer_prompt() -> String {
+    r#"You answer a local Search page query using only retrieved local memory and knowledge chunks.
+
+Rules:
+- Use only the provided sources. Do not invent facts.
+- If sources are weak or partial, say what is known and what is missing.
+- Be concise and practical.
+- Cite source targets inline when useful, e.g. `(docs/file.md#chunk=2)`.
+- Mention related memory only when it clearly helps.
+- Preserve the user's language.
+"#
+    .to_string()
+}
+
+fn format_search_memory(results: &[store::MemorySearchResult]) -> String {
+    if results.is_empty() {
+        return "[]".to_string();
+    }
+    results
+        .iter()
+        .take(8)
+        .map(|result| {
+            format!(
+                "- title: {}\n  target: {}\n  source_type: {}\n  score: {:.2}\n  description: {}",
+                result.item.title,
+                result.item.target,
+                result.item.source_type,
+                result.score,
+                clip_search_text(&result.item.description, 700)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_search_knowledge(results: &[store::KnowledgeSearchResult]) -> String {
+    if results.is_empty() {
+        return "[]".to_string();
+    }
+    results
+        .iter()
+        .take(10)
+        .map(|result| {
+            format!(
+                "- title: {}\n  target: {}\n  source_type: {}\n  offsets: {}-{}\n  score: {:.2}\n  text: {}",
+                result.source.title,
+                result.chunk.target,
+                result.source.source_type,
+                result.chunk.start_offset,
+                result.chunk.end_offset,
+                result.score,
+                clip_search_text(&result.chunk.text, 900)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_related_memory(results: &[store::RetrievalRelatedMemoryTrace]) -> String {
+    if results.is_empty() {
+        return "[]".to_string();
+    }
+    results
+        .iter()
+        .take(8)
+        .map(|result| {
+            format!(
+                "- title: {}\n  target: {}\n  relation: {}\n  weight: {:.2}",
+                result.title, result.target, result.label, result.weight
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn clip_search_text(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.trim().to_string();
+    }
+    let mut clipped = value.chars().take(max_chars).collect::<String>();
+    clipped.push_str("...");
+    clipped
+}
+
+fn agent_run_execution_messages(
+    detail: &store::AgentRunDetail,
+    task: &store::AgentTask,
+) -> Vec<store::ChatContextMessage> {
+    let completed = detail
+        .tasks
+        .iter()
+        .filter(|item| item.status == "done")
+        .map(|item| {
+            format!(
+                "- {}. {}: {}",
+                item.position,
+                item.title,
+                item.result
+                    .as_deref()
+                    .map(|value| clip_agent_progress(value, 700))
+                    .unwrap_or_else(|| "done".to_string())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    vec![
+        store::ChatContextMessage {
+            role: "system".to_string(),
+            content: context_builder::base_assistant_prompt(),
+        },
+        store::ChatContextMessage {
+            role: "system".to_string(),
+            content: agent_run_executor_prompt(),
+        },
+        store::ChatContextMessage {
+            role: "user".to_string(),
+            content: format!(
+                "Agent run: {}\nStatus: {}\n\nGoal:\n{}\n\nPRD:\n{}\n\nSpecs:\n{}\n\nCompleted progress:\n{}\n\nCurrent atomic task #{}:\n{}\n\n{}",
+                detail.run.title,
+                detail.run.status,
+                detail.run.goal,
+                detail.run.prd,
+                detail
+                    .run
+                    .specs
+                    .iter()
+                    .map(|spec| format!("- {spec}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                if completed.trim().is_empty() {
+                    "No completed tasks yet.".to_string()
+                } else {
+                    completed
+                },
+                task.position,
+                task.title,
+                task.description
+            ),
+        },
+    ]
+}
+
+fn agent_run_task_request(detail: &store::AgentRunDetail, task: &store::AgentTask) -> String {
+    format!(
+        "<!-- ino-agent:mode=workspace -->\nAgent loop step. Execute exactly one atomic task and persist progress.\n\nRun: {}\nGoal: {}\nCurrent task: {}\nTask description: {}\n\nUse local tools only when needed. Prefer inspection and verification. Do not perform destructive actions. Return a concise progress result with: Done, Evidence, Next.",
+        detail.run.title, detail.run.goal, task.title, task.description
+    )
+}
+
+fn clip_agent_progress(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.trim().to_string();
+    }
+    let mut clipped = value.chars().take(max_chars).collect::<String>();
+    clipped.push_str("...");
+    clipped
 }
 
 fn run_agent_tool_turn(
@@ -1665,6 +2245,44 @@ Rules:
 - Current workspace root: {workspace_root}
 "#
     )
+}
+
+fn agent_run_planner_prompt() -> String {
+    r#"You are the planning pass for ino-agent's restartable local agent loop.
+
+Return ONLY compact JSON with this exact shape:
+{"title":"...","prd":"...","specs":["..."],"tasks":[{"title":"...","description":"..."}]}
+
+Planning rules:
+- Create a practical PRD for the user's goal.
+- Split the goal into specs, then into atomic tasks.
+- Atomic tasks must be small enough to execute one at a time and verify.
+- Prefer 4-10 tasks. Use fewer only for tiny goals.
+- Include project/file inspection, implementation, verification, docs, and release checks when relevant.
+- Do not include dangerous actions such as deletion, overwriting user data, installs, network calls, or git push unless the task says explicit approval is required.
+- Write in the user's language.
+- Keep task titles short. Task descriptions must be concrete and actionable.
+"#
+    .to_string()
+}
+
+fn agent_run_executor_prompt() -> String {
+    r#"You are ino-agent's restartable execution loop.
+
+Execute exactly one atomic task from the current agent run.
+
+Rules:
+- Stay inside the current task; do not complete future tasks.
+- Use tools only when needed and only within the active permission profile.
+- Prefer reading files and running safe build/test/check commands.
+- Do not perform destructive actions, dependency installs, network operations, git push, or unknown binary execution.
+- If the task cannot be completed safely, mark the result as blocked and explain the required approval or missing input.
+- The final response must be concise and structured:
+Done:
+Evidence:
+Next:
+"#
+    .to_string()
 }
 
 fn agent_tool_observer_prompt(
@@ -2493,8 +3111,12 @@ pub fn run() {
             merge_memory,
             search_memory,
             search_knowledge,
+            search_page,
             list_memory_recent,
             list_memory_decisions,
+            list_memory_review,
+            export_memory,
+            import_memory,
             delete_memory,
             record_feedback,
             list_feedback_summary,
@@ -2504,6 +3126,15 @@ pub fn run() {
             unwatch_path,
             poll_watched_paths,
             resolve_target,
+            list_project_stacks,
+            create_project,
+            run_project_command,
+            assess_terminal_command,
+            run_terminal_command,
+            list_terminal_history,
+            list_agent_runs,
+            create_agent_run,
+            advance_agent_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -42,6 +42,13 @@ if [[ ! -d "$APP_PATH" ]]; then
   APP_PATH=$(find src-tauri/target/release/bundle/macos -name "*.app" -type d | head -1)
 fi
 
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+  codesign --force --deep --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
+else
+  codesign --force --deep --sign - "$APP_PATH"
+fi
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
 mkdir -p dist
 rm -rf "dist/${APP_NAME}.app"
 cp -R "$APP_PATH" "dist/${APP_NAME}.app"

@@ -270,6 +270,23 @@ export interface MemorySearchResult {
   keywordScore: number;
 }
 
+export interface MemoryReviewItem {
+  id: string;
+  kind: string;
+  item: MemoryItem;
+  reason: string;
+  score: number;
+  duplicateOf?: MemoryItem | null;
+  suggestedAction: string;
+}
+
+export interface MemoryImportResult {
+  imported: number;
+  skipped: number;
+  updated: number;
+  errors: string[];
+}
+
 export interface MemoryDecision {
   id: string;
   fingerprint: string;
@@ -329,6 +346,17 @@ export interface KnowledgeSearchResult {
   keywordScore: number;
 }
 
+export interface SearchPageResult {
+  query: string;
+  answer: string;
+  memoryResults: MemorySearchResult[];
+  knowledgeResults: KnowledgeSearchResult[];
+  relatedMemory: RetrievalRelatedMemoryTrace[];
+  sourceCount: number;
+  chunkCount: number;
+  usedModel: boolean;
+}
+
 export interface FeedbackInput {
   targetType: "message" | "memory" | "knowledge_chunk" | "knowledge_source" | string;
   targetId: string;
@@ -356,6 +384,143 @@ export interface ResolvedTarget {
   absolutePath?: string;
   exists?: boolean;
   openable?: boolean;
+}
+
+export interface ProjectCommandSpec {
+  kind: "build" | "run" | "test" | string;
+  label: string;
+  command: string;
+}
+
+export interface ProjectStackSummary {
+  id: string;
+  name: string;
+  description: string;
+  commands: ProjectCommandSpec[];
+}
+
+export interface CreateProjectRequest {
+  name: string;
+  stack: string;
+  path?: string | null;
+  description?: string | null;
+}
+
+export interface CreatedProject {
+  name: string;
+  stack: string;
+  path: string;
+  absolutePath: string;
+  files: string[];
+  commands: ProjectCommandSpec[];
+}
+
+export interface RunProjectCommandRequest {
+  path: string;
+  stack: string;
+  commandKind: string;
+  timeoutMs?: number | null;
+}
+
+export interface ProjectCommandResult {
+  command: string;
+  cwd: string;
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  durationMs: number;
+  timedOut: boolean;
+  diagnosis: string;
+}
+
+export interface AgentRunInput {
+  treeId?: string | null;
+  nodeId?: string | null;
+  title?: string | null;
+  goal: string;
+}
+
+export interface AgentRun {
+  id: string;
+  treeId?: string | null;
+  nodeId?: string | null;
+  title: string;
+  goal: string;
+  prd: string;
+  specs: string[];
+  status: string;
+  currentTaskId?: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentTask {
+  id: string;
+  runId: string;
+  position: number;
+  title: string;
+  description: string;
+  status: string;
+  result?: string | null;
+  error?: string | null;
+  traceJson?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number | null;
+  completedAt?: number | null;
+}
+
+export interface AgentRunDetail {
+  run: AgentRun;
+  tasks: AgentTask[];
+}
+
+export interface TerminalCommandRequest {
+  command: string;
+  cwd?: string | null;
+  timeoutMs?: number | null;
+  approved?: boolean | null;
+}
+
+export interface TerminalCommandSafety {
+  command: string;
+  cwd: string;
+  requiresApproval: boolean;
+  reasons: string[];
+  blocked: boolean;
+  blockReason?: string | null;
+}
+
+export interface TerminalCommandResult {
+  command: string;
+  cwd: string;
+  approved: boolean;
+  safety: TerminalCommandSafety;
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  durationMs: number;
+  timedOut: boolean;
+  diagnosis: string;
+}
+
+export interface TerminalCommandHistoryItem {
+  id: string;
+  command: string;
+  cwd: string;
+  approved: boolean;
+  requiresApproval: boolean;
+  reasons: string[];
+  success: boolean;
+  exitCode: number | null;
+  durationMs: number;
+  timedOut: boolean;
+  diagnosis: string;
+  stdout: string;
+  stderr: string;
+  createdAt: number;
 }
 
 export type SettingsInput = ChatSettings;
@@ -475,6 +640,8 @@ export const api = {
     invokeDesktop<MemorySearchResult[]>("search_memory", { query, limit }),
   searchKnowledge: (query: string, limit = 12) =>
     invokeDesktop<KnowledgeSearchResult[]>("search_knowledge", { query, limit }),
+  searchPage: (query: string, limit = 10) =>
+    invokeDesktop<SearchPageResult>("search_page", { query, limit }),
   listMemoryRecent: (limit = 24) =>
     isTauriRuntime()
       ? invoke<MemoryItem[]>("list_memory_recent", { limit })
@@ -483,6 +650,13 @@ export const api = {
     isTauriRuntime()
       ? invoke<MemoryDecision[]>("list_memory_decisions", { limit })
       : Promise.resolve([]),
+  listMemoryReview: (limit = 24) =>
+    isTauriRuntime()
+      ? invoke<MemoryReviewItem[]>("list_memory_review", { limit })
+      : Promise.resolve([]),
+  exportMemory: () => invokeDesktop<string>("export_memory"),
+  importMemory: (json: string) =>
+    invokeDesktop<MemoryImportResult>("import_memory", { json }),
   deleteMemory: (id: string) => invokeDesktop<void>("delete_memory", { id }),
   recordFeedback: (input: FeedbackInput) => invokeDesktop<void>("record_feedback", { input }),
   listFeedbackSummary: (limit = 12) =>
@@ -502,4 +676,28 @@ export const api = {
   pollWatchedPaths: () => invokeDesktop<unknown>("poll_watched_paths"),
   resolveTarget: (target: string) =>
     invokeDesktop<ResolvedTarget>("resolve_target", { target }),
+  listProjectStacks: () =>
+    isTauriRuntime()
+      ? invoke<ProjectStackSummary[]>("list_project_stacks")
+      : Promise.resolve([]),
+  createProject: (request: CreateProjectRequest) =>
+    invokeDesktop<CreatedProject>("create_project", { request }),
+  runProjectCommand: (request: RunProjectCommandRequest) =>
+    invokeDesktop<ProjectCommandResult>("run_project_command", { request }),
+  assessTerminalCommand: (request: TerminalCommandRequest) =>
+    invokeDesktop<TerminalCommandSafety>("assess_terminal_command", { request }),
+  runTerminalCommand: (request: TerminalCommandRequest) =>
+    invokeDesktop<TerminalCommandResult>("run_terminal_command", { request }),
+  listTerminalHistory: (limit = 30) =>
+    isTauriRuntime()
+      ? invoke<TerminalCommandHistoryItem[]>("list_terminal_history", { limit })
+      : Promise.resolve([]),
+  listAgentRuns: (limit = 12) =>
+    isTauriRuntime()
+      ? invoke<AgentRunDetail[]>("list_agent_runs", { limit })
+      : Promise.resolve([]),
+  createAgentRun: (input: AgentRunInput) =>
+    invokeDesktop<AgentRunDetail>("create_agent_run", { input }),
+  advanceAgentRun: (runId: string, requestId: string) =>
+    invokeDesktop<AgentRunDetail>("advance_agent_run", { runId, requestId }),
 };

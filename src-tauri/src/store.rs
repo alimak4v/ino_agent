@@ -1,5 +1,6 @@
 use crate::context_builder;
 use crate::local_embedding;
+use crate::terminal;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, ToSql, Transaction};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -209,6 +210,35 @@ pub struct MemorySearchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MemoryReviewItem {
+    pub id: String,
+    pub kind: String,
+    pub item: MemoryItem,
+    pub reason: String,
+    pub score: f64,
+    pub duplicate_of: Option<MemoryItem>,
+    pub suggested_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryExport {
+    pub version: i64,
+    pub exported_at: i64,
+    pub items: Vec<MemoryItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryImportResult {
+    pub imported: usize,
+    pub skipped: usize,
+    pub updated: usize,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MemoryDecision {
     pub id: String,
     pub fingerprint: String,
@@ -372,6 +402,91 @@ pub struct FeedbackSummary {
 #[serde(rename_all = "camelCase")]
 pub struct WatchedPath {
     pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRunInput {
+    pub tree_id: Option<String>,
+    pub node_id: Option<String>,
+    pub title: Option<String>,
+    pub goal: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTaskDraft {
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRunPlan {
+    pub title: String,
+    pub prd: String,
+    pub specs: Vec<String>,
+    pub tasks: Vec<AgentTaskDraft>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRun {
+    pub id: String,
+    pub tree_id: Option<String>,
+    pub node_id: Option<String>,
+    pub title: String,
+    pub goal: String,
+    pub prd: String,
+    pub specs: Vec<String>,
+    pub status: String,
+    pub current_task_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTask {
+    pub id: String,
+    pub run_id: String,
+    pub position: i64,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub result: Option<String>,
+    pub error: Option<String>,
+    pub trace_json: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRunDetail {
+    pub run: AgentRun,
+    pub tasks: Vec<AgentTask>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandHistoryItem {
+    pub id: String,
+    pub command: String,
+    pub cwd: String,
+    pub approved: bool,
+    pub requires_approval: bool,
+    pub reasons: Vec<String>,
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub duration_ms: i64,
+    pub timed_out: bool,
+    pub diagnosis: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub created_at: i64,
 }
 
 pub struct Store {
@@ -539,6 +654,54 @@ impl Store {
                     note TEXT,
                     created_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    id TEXT PRIMARY KEY,
+                    tree_id TEXT,
+                    node_id TEXT,
+                    title TEXT NOT NULL,
+                    goal TEXT NOT NULL,
+                    prd TEXT NOT NULL,
+                    specs_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    current_task_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY(tree_id) REFERENCES trees(id) ON DELETE SET NULL,
+                    FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE SET NULL
+                );
+                CREATE TABLE IF NOT EXISTS agent_tasks (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result TEXT,
+                    error TEXT,
+                    trace_json TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    completed_at INTEGER,
+                    UNIQUE(run_id, position),
+                    FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS terminal_command_history (
+                    id TEXT PRIMARY KEY,
+                    command TEXT NOT NULL,
+                    cwd TEXT NOT NULL,
+                    approved INTEGER NOT NULL,
+                    requires_approval INTEGER NOT NULL,
+                    reasons_json TEXT NOT NULL,
+                    success INTEGER NOT NULL,
+                    exit_code INTEGER,
+                    duration_ms INTEGER NOT NULL,
+                    timed_out INTEGER NOT NULL,
+                    diagnosis TEXT NOT NULL,
+                    stdout TEXT NOT NULL,
+                    stderr TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_memory_items_updated_at
                     ON memory_items(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_memory_links_target
@@ -549,6 +712,12 @@ impl Store {
                     ON knowledge_sources(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_feedback_events_target
                     ON feedback_events(target_type, target_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_agent_runs_updated
+                    ON agent_runs(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_agent_tasks_run_position
+                    ON agent_tasks(run_id, position);
+                CREATE INDEX IF NOT EXISTS idx_terminal_command_history_created
+                    ON terminal_command_history(created_at DESC);
                 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts
                     USING fts5(
                         chunk_id UNINDEXED,
@@ -731,6 +900,54 @@ impl Store {
                     note TEXT,
                     created_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    id TEXT PRIMARY KEY,
+                    tree_id TEXT,
+                    node_id TEXT,
+                    title TEXT NOT NULL,
+                    goal TEXT NOT NULL,
+                    prd TEXT NOT NULL,
+                    specs_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    current_task_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY(tree_id) REFERENCES trees(id) ON DELETE SET NULL,
+                    FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE SET NULL
+                );
+                CREATE TABLE IF NOT EXISTS agent_tasks (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result TEXT,
+                    error TEXT,
+                    trace_json TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    completed_at INTEGER,
+                    UNIQUE(run_id, position),
+                    FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS terminal_command_history (
+                    id TEXT PRIMARY KEY,
+                    command TEXT NOT NULL,
+                    cwd TEXT NOT NULL,
+                    approved INTEGER NOT NULL,
+                    requires_approval INTEGER NOT NULL,
+                    reasons_json TEXT NOT NULL,
+                    success INTEGER NOT NULL,
+                    exit_code INTEGER,
+                    duration_ms INTEGER NOT NULL,
+                    timed_out INTEGER NOT NULL,
+                    diagnosis TEXT NOT NULL,
+                    stdout TEXT NOT NULL,
+                    stderr TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_memory_items_updated_at
                     ON memory_items(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_memory_links_target
@@ -741,6 +958,12 @@ impl Store {
                     ON knowledge_sources(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_feedback_events_target
                     ON feedback_events(target_type, target_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_agent_runs_updated
+                    ON agent_runs(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_agent_tasks_run_position
+                    ON agent_tasks(run_id, position);
+                CREATE INDEX IF NOT EXISTS idx_terminal_command_history_created
+                    ON terminal_command_history(created_at DESC);
                 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts
                     USING fts5(
                         chunk_id UNINDEXED,
@@ -1910,6 +2133,381 @@ impl Store {
         Ok(messages)
     }
 
+    pub fn create_agent_run(
+        &mut self,
+        input: AgentRunInput,
+        plan: AgentRunPlan,
+    ) -> Result<AgentRunDetail, String> {
+        let goal = clean_required_text(&input.goal, 20_000, "Goal")?;
+        if let (Some(tree_id), Some(node_id)) = (input.tree_id.as_deref(), input.node_id.as_deref())
+        {
+            self.get_node(tree_id, node_id)?;
+        }
+        let title = input
+            .title
+            .as_deref()
+            .map(|value| clean_title_or(value.to_string(), "Agent run"))
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| clean_title_or(plan.title.clone(), "Agent run"));
+        let prd = clean_required_text(&plan.prd, 40_000, "PRD")?;
+        let specs = normalize_specs(plan.specs);
+        let mut tasks = plan
+            .tasks
+            .into_iter()
+            .filter_map(|task| normalize_agent_task_draft(task).ok())
+            .take(24)
+            .collect::<Vec<_>>();
+        if tasks.is_empty() {
+            tasks.push(AgentTaskDraft {
+                title: "Clarify next step".to_string(),
+                description: "Restate the goal, identify missing context, and propose the first safe implementation step.".to_string(),
+            });
+        }
+        let specs_json = serde_json::to_string(&specs).map_err(|e| e.to_string())?;
+        let ts = Self::now();
+        let run_id = Uuid::new_v4().to_string();
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO agent_runs(
+                id, tree_id, node_id, title, goal, prd, specs_json, status,
+                current_task_id, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', NULL, ?8, ?9)",
+            params![
+                run_id,
+                input.tree_id.as_deref(),
+                input.node_id.as_deref(),
+                title,
+                goal,
+                prd,
+                specs_json,
+                ts,
+                ts
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        for (index, task) in tasks.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO agent_tasks(
+                    id, run_id, position, title, description, status, result, error,
+                    trace_json, created_at, updated_at, started_at, completed_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', NULL, NULL, NULL, ?6, ?7, NULL, NULL)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    run_id,
+                    index as i64 + 1,
+                    task.title,
+                    task.description,
+                    ts,
+                    ts
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        self.get_agent_run(&run_id)
+    }
+
+    pub fn list_agent_runs(&self, limit: usize) -> Result<Vec<AgentRunDetail>, String> {
+        let limit = limit.clamp(1, 50) as i64;
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, tree_id, node_id, title, goal, prd, specs_json, status,
+                        current_task_id, created_at, updated_at
+                 FROM agent_runs ORDER BY updated_at DESC LIMIT ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let runs = stmt
+            .query_map(params![limit], agent_run_from_row)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        runs.into_iter()
+            .map(|run| {
+                let tasks = self.list_agent_tasks(&run.id)?;
+                Ok(AgentRunDetail { run, tasks })
+            })
+            .collect::<Result<Vec<_>, String>>()
+    }
+
+    pub fn get_agent_run(&self, run_id: &str) -> Result<AgentRunDetail, String> {
+        let run = self
+            .conn
+            .query_row(
+                "SELECT id, tree_id, node_id, title, goal, prd, specs_json, status,
+                        current_task_id, created_at, updated_at
+                 FROM agent_runs WHERE id = ?1",
+                params![run_id],
+                agent_run_from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Agent run not found.".to_string())?;
+        let tasks = self.list_agent_tasks(&run.id)?;
+        Ok(AgentRunDetail { run, tasks })
+    }
+
+    pub fn start_next_agent_task(&self, run_id: &str) -> Result<Option<AgentTask>, String> {
+        let detail = self.get_agent_run(run_id)?;
+        if detail.run.status == "completed" || detail.run.status == "cancelled" {
+            return Ok(None);
+        }
+        if let Some(task) = detail
+            .tasks
+            .iter()
+            .find(|task| task.status == "in_progress")
+            .cloned()
+        {
+            return Ok(Some(task));
+        }
+        let Some(task) = detail
+            .tasks
+            .iter()
+            .find(|task| task.status == "pending")
+            .cloned()
+        else {
+            self.mark_agent_run_completed(run_id)?;
+            return Ok(None);
+        };
+        let ts = Self::now();
+        self.conn
+            .execute(
+                "UPDATE agent_tasks
+                 SET status = 'in_progress', started_at = COALESCE(started_at, ?1), updated_at = ?2
+                 WHERE id = ?3 AND run_id = ?4",
+                params![ts, ts, task.id, run_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "UPDATE agent_runs
+                 SET status = 'active', current_task_id = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![task.id, ts, run_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.get_agent_task(&task.id)
+    }
+
+    pub fn complete_agent_task(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        result: &str,
+        trace_json: Option<String>,
+    ) -> Result<AgentRunDetail, String> {
+        let ts = Self::now();
+        self.conn
+            .execute(
+                "UPDATE agent_tasks
+                 SET status = 'done', result = ?1, error = NULL, trace_json = ?2,
+                     updated_at = ?3, completed_at = ?4
+                 WHERE id = ?5 AND run_id = ?6",
+                params![
+                    result.trim(),
+                    trace_json.as_deref(),
+                    ts,
+                    ts,
+                    task_id,
+                    run_id
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        self.refresh_agent_run_after_task(run_id)
+    }
+
+    pub fn fail_agent_task(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        error: &str,
+    ) -> Result<AgentRunDetail, String> {
+        let ts = Self::now();
+        self.conn
+            .execute(
+                "UPDATE agent_tasks
+                 SET status = 'failed', error = ?1, updated_at = ?2, completed_at = ?3
+                 WHERE id = ?4 AND run_id = ?5",
+                params![error.trim(), ts, ts, task_id, run_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "UPDATE agent_runs
+                 SET status = 'blocked', current_task_id = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![task_id, ts, run_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.get_agent_run(run_id)
+    }
+
+    fn list_agent_tasks(&self, run_id: &str) -> Result<Vec<AgentTask>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, run_id, position, title, description, status, result, error,
+                        trace_json, created_at, updated_at, started_at, completed_at
+                 FROM agent_tasks WHERE run_id = ?1 ORDER BY position",
+            )
+            .map_err(|e| e.to_string())?;
+        let tasks = stmt
+            .query_map(params![run_id], agent_task_from_row)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(tasks)
+    }
+
+    fn get_agent_task(&self, task_id: &str) -> Result<Option<AgentTask>, String> {
+        self.conn
+            .query_row(
+                "SELECT id, run_id, position, title, description, status, result, error,
+                        trace_json, created_at, updated_at, started_at, completed_at
+                 FROM agent_tasks WHERE id = ?1",
+                params![task_id],
+                agent_task_from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    fn mark_agent_run_completed(&self, run_id: &str) -> Result<(), String> {
+        let ts = Self::now();
+        self.conn
+            .execute(
+                "UPDATE agent_runs
+                 SET status = 'completed', current_task_id = NULL, updated_at = ?1
+                 WHERE id = ?2",
+                params![ts, run_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn refresh_agent_run_after_task(&self, run_id: &str) -> Result<AgentRunDetail, String> {
+        let pending = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_tasks
+                 WHERE run_id = ?1 AND status IN ('pending', 'in_progress')",
+                params![run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let failed = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_tasks WHERE run_id = ?1 AND status = 'failed'",
+                params![run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let status = if pending == 0 && failed == 0 {
+            "completed"
+        } else if failed > 0 {
+            "blocked"
+        } else {
+            "active"
+        };
+        let next_task_id = if status == "active" {
+            self.conn
+                .query_row(
+                    "SELECT id FROM agent_tasks
+                     WHERE run_id = ?1 AND status IN ('pending', 'in_progress')
+                     ORDER BY CASE status WHEN 'in_progress' THEN 0 ELSE 1 END, position
+                     LIMIT 1",
+                    params![run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+        } else {
+            None
+        };
+        let ts = Self::now();
+        self.conn
+            .execute(
+                "UPDATE agent_runs
+                 SET status = ?1, current_task_id = ?2, updated_at = ?3
+                 WHERE id = ?4",
+                params![status, next_task_id.as_deref(), ts, run_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.get_agent_run(run_id)
+    }
+
+    pub fn record_terminal_command(
+        &mut self,
+        result: &terminal::TerminalCommandResult,
+    ) -> Result<TerminalCommandHistoryItem, String> {
+        let id = Uuid::new_v4().to_string();
+        let ts = Self::now();
+        let reasons_json =
+            serde_json::to_string(&result.safety.reasons).map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "INSERT INTO terminal_command_history(
+                    id, command, cwd, approved, requires_approval, reasons_json,
+                    success, exit_code, duration_ms, timed_out, diagnosis, stdout, stderr, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    id,
+                    result.command,
+                    result.cwd,
+                    result.approved,
+                    result.safety.requires_approval,
+                    reasons_json,
+                    result.success,
+                    result.exit_code,
+                    result.duration_ms as i64,
+                    result.timed_out,
+                    result.diagnosis,
+                    result.stdout,
+                    result.stderr,
+                    ts
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        self.get_terminal_history_item(&id)
+    }
+
+    pub fn list_terminal_history(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<TerminalCommandHistoryItem>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, command, cwd, approved, requires_approval, reasons_json,
+                        success, exit_code, duration_ms, timed_out, diagnosis, stdout, stderr, created_at
+                 FROM terminal_command_history
+                 ORDER BY created_at DESC LIMIT ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(
+                params![limit.clamp(1, 100) as i64],
+                terminal_history_from_row,
+            )
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
+    fn get_terminal_history_item(&self, id: &str) -> Result<TerminalCommandHistoryItem, String> {
+        self.conn
+            .query_row(
+                "SELECT id, command, cwd, approved, requires_approval, reasons_json,
+                        success, exit_code, duration_ms, timed_out, diagnosis, stdout, stderr, created_at
+                 FROM terminal_command_history WHERE id = ?1",
+                params![id],
+                terminal_history_from_row,
+            )
+            .map_err(|e| e.to_string())
+    }
+
     pub fn add_memory(&mut self, input: MemoryInput) -> Result<MemoryItem, String> {
         let description = clean_memory_text(&input.description, 16_000, "Description")?;
         let target = clean_memory_text(&input.target, 4096, "Target")?;
@@ -2141,6 +2739,184 @@ impl Store {
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
+    }
+
+    pub fn memory_review_queue(&self, limit: usize) -> Result<Vec<MemoryReviewItem>, String> {
+        let rows = self.memory_rows_with_embeddings()?;
+        let feedback_scores = self.feedback_scores_for_type("memory")?;
+        let now = Self::now();
+        let mut review = Vec::new();
+        let mut duplicate_items = HashSet::new();
+
+        for i in 0..rows.len() {
+            for j in (i + 1)..rows.len() {
+                let (left, left_embedding) = &rows[i];
+                let (right, right_embedding) = &rows[j];
+                let similarity =
+                    local_embedding::cosine_similarity(left_embedding, right_embedding)
+                        .clamp(0.0, 1.0);
+                let same_named_target = memory_review_key(&left.target)
+                    == memory_review_key(&right.target)
+                    && memory_review_key(&left.title) == memory_review_key(&right.title);
+                if similarity < 0.92 && !same_named_target {
+                    continue;
+                }
+                let (item, duplicate_of) = if should_review_remove(left, right) {
+                    (left, right)
+                } else {
+                    (right, left)
+                };
+                if !duplicate_items.insert(item.id.clone()) {
+                    continue;
+                }
+                review.push(MemoryReviewItem {
+                    id: format!("duplicate:{}:{}", item.id, duplicate_of.id),
+                    kind: "duplicate".to_string(),
+                    item: item.clone(),
+                    reason: format!(
+                        "Likely duplicate of \"{}\" with {}% similarity.",
+                        duplicate_of.title,
+                        (similarity * 100.0).round() as i64
+                    ),
+                    score: similarity,
+                    duplicate_of: Some(duplicate_of.clone()),
+                    suggested_action: "merge".to_string(),
+                });
+            }
+        }
+
+        for (item, _) in &rows {
+            if item.confidence < 0.55 {
+                review.push(MemoryReviewItem {
+                    id: format!("low-confidence:{}", item.id),
+                    kind: "low_confidence".to_string(),
+                    item: item.clone(),
+                    reason: format!(
+                        "Confidence is {}%, so this memory needs human review.",
+                        (item.confidence * 100.0).round() as i64
+                    ),
+                    score: (1.0 - item.confidence).clamp(0.0, 1.0),
+                    duplicate_of: None,
+                    suggested_action: "review".to_string(),
+                });
+            }
+
+            let age_seconds = now - item.last_accessed_at.max(item.updated_at);
+            let age_days = (age_seconds.max(0) as f64 / 86_400.0).floor() as i64;
+            let stale = match item.stability.as_str() {
+                "temporary" => age_days >= 14,
+                "durable" => age_days >= 120,
+                _ => false,
+            };
+            if stale {
+                review.push(MemoryReviewItem {
+                    id: format!("stale:{}", item.id),
+                    kind: "stale".to_string(),
+                    item: item.clone(),
+                    reason: format!(
+                        "Not accessed or updated for {age_days} days; stability is {}.",
+                        item.stability
+                    ),
+                    score: (age_days as f64 / 365.0).clamp(0.0, 1.0),
+                    duplicate_of: None,
+                    suggested_action: "delete_or_archive".to_string(),
+                });
+            }
+
+            let feedback_score = feedback_scores.get(&item.id).copied().unwrap_or(0.0);
+            if feedback_score < -0.2 {
+                review.push(MemoryReviewItem {
+                    id: format!("negative-feedback:{}", item.id),
+                    kind: "negative_feedback".to_string(),
+                    item: item.clone(),
+                    reason: format!(
+                        "Recent feedback is negative (score {:.2}); check whether this memory is useful.",
+                        feedback_score
+                    ),
+                    score: feedback_score.abs().clamp(0.0, 1.0),
+                    duplicate_of: None,
+                    suggested_action: "review".to_string(),
+                });
+            }
+        }
+
+        review.sort_by(|a, b| {
+            review_kind_rank(&a.kind)
+                .cmp(&review_kind_rank(&b.kind))
+                .then_with(|| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| b.item.updated_at.cmp(&a.item.updated_at))
+        });
+        review.truncate(limit.clamp(1, 80));
+        Ok(review)
+    }
+
+    pub fn export_memory_json(&self) -> Result<String, String> {
+        let items = self
+            .memory_rows_with_embeddings()?
+            .into_iter()
+            .map(|(item, _)| item)
+            .collect::<Vec<_>>();
+        let export = MemoryExport {
+            version: 1,
+            exported_at: Self::now(),
+            items,
+        };
+        serde_json::to_string_pretty(&export).map_err(|e| e.to_string())
+    }
+
+    pub fn import_memory_json(&mut self, raw: &str) -> Result<MemoryImportResult, String> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err("Memory import JSON is empty.".to_string());
+        }
+        let export = serde_json::from_str::<MemoryExport>(raw).or_else(|_| {
+            serde_json::from_str::<Vec<MemoryItem>>(raw).map(|items| MemoryExport {
+                version: 1,
+                exported_at: Self::now(),
+                items,
+            })
+        });
+        let export = export.map_err(|e| format!("Invalid memory import JSON: {e}"))?;
+        let mut result = MemoryImportResult {
+            imported: 0,
+            skipped: 0,
+            updated: 0,
+            errors: Vec::new(),
+        };
+
+        for item in export.items {
+            match self.memory_exact_exists(&item.title, &item.target, &item.description) {
+                Ok(true) => {
+                    result.skipped += 1;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    result.errors.push(error);
+                    continue;
+                }
+            }
+            let input = MemoryInput {
+                title: Some(item.title),
+                description: item.description,
+                target: item.target,
+                source_type: Some(item.source_type),
+                tags: Some(item.tags),
+                importance: Some(item.importance),
+                memory_kind: Some(item.memory_kind),
+                confidence: Some(item.confidence),
+                stability: Some(item.stability),
+            };
+            match self.add_memory(input) {
+                Ok(_) => result.imported += 1,
+                Err(error) => result.errors.push(error),
+            }
+        }
+        Ok(result)
     }
 
     pub fn delete_memory(&mut self, id: &str) -> Result<(), String> {
@@ -2681,6 +3457,27 @@ impl Store {
             .ok_or_else(|| "Memory item not found.".to_string())
     }
 
+    fn memory_exact_exists(
+        &self,
+        title: &str,
+        target: &str,
+        description: &str,
+    ) -> Result<bool, String> {
+        let exists = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM memory_items
+                 WHERE title = ?1 AND target = ?2 AND description = ?3
+                 LIMIT 1",
+                params![title, target, description],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .is_some();
+        Ok(exists)
+    }
+
     fn knowledge_source_by_id(&self, id: &str) -> Result<KnowledgeSource, String> {
         self.conn
             .query_row(
@@ -3212,6 +4009,63 @@ fn quiz_attempt_from_row(row: &Row<'_>) -> rusqlite::Result<QuizAttempt> {
     })
 }
 
+fn agent_run_from_row(row: &Row<'_>) -> rusqlite::Result<AgentRun> {
+    let specs_json: String = row.get(6)?;
+    let specs = serde_json::from_str::<Vec<String>>(&specs_json).unwrap_or_default();
+    Ok(AgentRun {
+        id: row.get(0)?,
+        tree_id: row.get(1)?,
+        node_id: row.get(2)?,
+        title: row.get(3)?,
+        goal: row.get(4)?,
+        prd: row.get(5)?,
+        specs,
+        status: row.get(7)?,
+        current_task_id: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+
+fn agent_task_from_row(row: &Row<'_>) -> rusqlite::Result<AgentTask> {
+    Ok(AgentTask {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        position: row.get(2)?,
+        title: row.get(3)?,
+        description: row.get(4)?,
+        status: row.get(5)?,
+        result: row.get(6)?,
+        error: row.get(7)?,
+        trace_json: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+        started_at: row.get(11)?,
+        completed_at: row.get(12)?,
+    })
+}
+
+fn terminal_history_from_row(row: &Row<'_>) -> rusqlite::Result<TerminalCommandHistoryItem> {
+    let reasons_json: String = row.get(5)?;
+    let reasons = serde_json::from_str::<Vec<String>>(&reasons_json).unwrap_or_default();
+    Ok(TerminalCommandHistoryItem {
+        id: row.get(0)?,
+        command: row.get(1)?,
+        cwd: row.get(2)?,
+        approved: row.get(3)?,
+        requires_approval: row.get(4)?,
+        reasons,
+        success: row.get(6)?,
+        exit_code: row.get(7)?,
+        duration_ms: row.get(8)?,
+        timed_out: row.get(9)?,
+        diagnosis: row.get(10)?,
+        stdout: row.get(11)?,
+        stderr: row.get(12)?,
+        created_at: row.get(13)?,
+    })
+}
+
 fn compact_path_context(nodes: &[PathContextNode]) -> String {
     let mut lines = vec!["Cached path context (node summaries, root to leaf):".to_string()];
     for (index, node) in nodes.iter().enumerate() {
@@ -3289,6 +4143,33 @@ fn clean_title_or(value: String, fallback: &str) -> String {
     } else {
         title
     }
+}
+
+fn clean_required_text(value: &str, limit: usize, label: &str) -> Result<String, String> {
+    let cleaned = value.trim().chars().take(limit).collect::<String>();
+    if cleaned.trim().is_empty() {
+        return Err(format!("{label} is empty."));
+    }
+    Ok(cleaned)
+}
+
+fn normalize_specs(specs: Vec<String>) -> Vec<String> {
+    let mut normalized = specs
+        .into_iter()
+        .map(|spec| spec.trim().chars().take(1200).collect::<String>())
+        .filter(|spec| !spec.is_empty())
+        .take(16)
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        normalized.push("Deliver the goal through small, verifiable tasks.".to_string());
+    }
+    normalized
+}
+
+fn normalize_agent_task_draft(task: AgentTaskDraft) -> Result<AgentTaskDraft, String> {
+    let title = clean_title_or(task.title, "Atomic task");
+    let description = clean_required_text(&task.description, 4000, "Task description")?;
+    Ok(AgentTaskDraft { title, description })
 }
 
 fn strip_agent_mode_marker(value: &str) -> String {
@@ -3526,6 +4407,44 @@ fn memory_embedding_text(title: &str, description: &str, tags: &[String]) -> Str
         format!("{title}\n{description}")
     } else {
         format!("{title}\n{description}\n{}", tags.join(" "))
+    }
+}
+
+fn memory_review_key(value: &str) -> String {
+    let mut key = String::new();
+    let mut previous_space = false;
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        if ch.is_alphanumeric() {
+            key.push(ch);
+            previous_space = false;
+        } else if !previous_space {
+            key.push(' ');
+            previous_space = true;
+        }
+    }
+    key.trim().to_string()
+}
+
+fn should_review_remove(left: &MemoryItem, right: &MemoryItem) -> bool {
+    left.confidence
+        .partial_cmp(&right.confidence)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
+            left.importance
+                .partial_cmp(&right.importance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| left.updated_at.cmp(&right.updated_at))
+        .is_lt()
+}
+
+fn review_kind_rank(kind: &str) -> i32 {
+    match kind {
+        "duplicate" => 0,
+        "negative_feedback" => 1,
+        "low_confidence" => 2,
+        "stale" => 3,
+        _ => 4,
     }
 }
 

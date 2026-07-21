@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "exportedAt": 1784595600,
+  "items": [
+    {
+      "id": "demo-memory-001",
+      "title": "Prefer safe commands",
+      "description": "The user wants dangerous commands such as delete, overwrite, install, network, git push, and unknown binaries to require explicit approval.",
+      "target": "demo/research_workspace_notes.md#constraints",
+      "sourceType": "file",
+      "tags": ["release", "safety", "commands"],
+      "importance": 9,
+      "memoryKind": "project_decision",
+      "confidence": 0.95,
+      "stability": "permanent",
+      "createdAt": 1784595600,
+      "updatedAt": 1784595600,
+      "lastAccessedAt": 1784595600,
+      "accessCount": 0
+    },
+    {
+      "id": "demo-memory-002",
+      "title": "Prefer safe command approvals",
+      "description": "Commands with delete, overwrite, package install, network calls, git push, or unknown binaries should go through an explicit approval step.",
+      "target": "demo/research_workspace_notes.md#constraints",
+      "sourceType": "file",
+      "tags": ["release", "safety", "commands"],
+      "importance": 7,
+      "memoryKind": "project_decision",
+      "confidence": 0.82,
+      "stability": "durable",
+      "createdAt": 1784595600,
+      "updatedAt": 1784595600,
+      "lastAccessedAt": 1784595600,
+      "accessCount": 0
+    },
+    {
+      "id": "demo-memory-003",
+      "title": "Unverified exam preference",
+      "description": "The student might prefer visual explanations for linear algebra, but this needs confirmation during dogfood.",
+      "target": "demo/lecture_linear_algebra.md#study-prompt",
+      "sourceType": "file",
+      "tags": ["study", "linear-algebra"],
+      "importance": 5,
+      "memoryKind": "preference",
+      "confidence": 0.35,
+      "stability": "temporary",
+      "createdAt": 1784595600,
+      "updatedAt": 1784595600,
+      "lastAccessedAt": 1784595600,
+      "accessCount": 0
+    }
+  ]
+}
