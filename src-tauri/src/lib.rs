@@ -89,6 +89,7 @@ struct VerifiedAgentAnswer {
 }
 
 const BRANCH_PLAN_ACTION_MARKER: &str = "<!-- treeai:branch-plan -->";
+const BRANCH_PLAN_PAYLOAD_FENCE: &str = "ino-agent-branch-plan";
 
 fn lock_store(store: &Arc<Mutex<store::Store>>) -> Result<MutexGuard<'_, store::Store>, String> {
     store.lock().map_err(|e| e.to_string())
@@ -314,12 +315,17 @@ fn confirm_pending_branches(
     state: State<AppState>,
     tree_id: String,
     node_id: String,
+    titles: Option<Vec<String>>,
 ) -> Result<store::AssistantReplyResult, String> {
     let store = &mut *lock_store(&state.store)?;
     let plan = store
         .get_pending_branch_plan(&tree_id, &node_id)?
         .ok_or_else(|| "No branch plan is waiting for confirmation.".to_string())?;
     let parent = store.get_node(&tree_id, &node_id)?;
+    let plan = match titles {
+        Some(titles) => branch_plan_from_titles(&parent.title, &plan.question, titles)?,
+        None => plan,
+    };
     create_branches_from_plan(store, &tree_id, &node_id, &parent.title, &plan)
 }
 
@@ -923,7 +929,7 @@ fn force_branch_split_blocking(
     };
 
     let store = &mut *lock_store(&store)?;
-    create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan)
+    save_branch_plan_question(store, &tree_id, &node_id, &plan)
 }
 
 fn generate_assistant_reply_blocking(
@@ -938,80 +944,22 @@ fn generate_assistant_reply_blocking(
         let rows = store.get_messages_for_node(&tree_id, &node_id)?;
         let mut latest_user = String::new();
         let mut latest_user_id = String::new();
-        let mut latest_assistant = String::new();
         for row in rows.iter().rev() {
             if latest_user.is_empty() && row.role == "user" {
                 latest_user = row.content.clone();
                 latest_user_id = row.id.clone();
             }
-            if latest_assistant.is_empty() && row.role == "assistant" {
-                latest_assistant = row.content.clone();
-            }
-            if !latest_user.is_empty() && !latest_assistant.is_empty() {
+            if !latest_user.is_empty() {
                 break;
             }
         }
-        let parent = store.get_node(&tree_id, &node_id)?;
         let settings = store.get_settings()?;
         let messages = store.build_api_messages_for_node(&tree_id, &node_id)?;
-        let pending_plan = store.get_pending_branch_plan(&tree_id, &node_id)?;
-        (
-            latest_user,
-            latest_user_id,
-            latest_assistant,
-            parent.title,
-            settings,
-            messages,
-            pending_plan,
-        )
+        (latest_user, latest_user_id, settings, messages)
     };
 
-    let (
-        latest_user_raw,
-        latest_user_id,
-        latest_assistant,
-        parent_title,
-        settings,
-        messages,
-        pending_plan,
-    ) = snapshot;
+    let (latest_user_raw, latest_user_id, settings, messages) = snapshot;
     let latest_user = strip_agent_mode_marker(&latest_user_raw);
-
-    if let Some(plan) = pending_plan {
-        if is_affirmative(&latest_user) {
-            let store = &mut *lock_store(&store)?;
-            return create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan);
-        }
-        if is_negative(&latest_user) {
-            let store = &mut *lock_store(&store)?;
-            store.clear_pending_branch_plan(&tree_id, &node_id)?;
-            let message = store.add_message(
-                &tree_id,
-                &node_id,
-                "assistant",
-                "Ок, оставляю это в текущей ветке. Продолжаем здесь.",
-            )?;
-            return Ok(store::AssistantReplyResult {
-                message,
-                selected_node_id: node_id,
-                created_branches: Vec::new(),
-            });
-        }
-    }
-
-    if is_affirmative(&latest_user) {
-        if let Some(plan) = fallback_branch_plan_from_text(&latest_assistant) {
-            let store = &mut *lock_store(&store)?;
-            return create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan);
-        }
-    }
-
-    if wants_branch_creation(&latest_user) && !has_attachment_payload(&latest_user) {
-        if let Some(plan) = fallback_branch_plan_from_text(&latest_user) {
-            let store = &mut *lock_store(&store)?;
-            return save_branch_plan_question(store, &tree_id, &node_id, &plan);
-        }
-    }
 
     if let Some(memory_input) =
         remember_request_to_memory_input(&latest_user, &tree_id, &node_id, &latest_user_id)
@@ -1077,42 +1025,6 @@ fn generate_assistant_reply_blocking(
         }
     }
 
-    if looks_branchable(&latest_user) {
-        let branch_limit = 7;
-        let mut planner_messages = vec![store::ChatContextMessage {
-            role: "system".to_string(),
-            content: branch_planner_prompt(branch_limit),
-        }];
-        planner_messages.extend(
-            messages
-                .iter()
-                .filter(|message| message.role != "system")
-                .cloned(),
-        );
-
-        let mut plan = match api::chat_completion(&settings, &planner_messages) {
-            Ok(answer) => api::parse_branch_plan(&answer, branch_limit),
-            Err(error) => return Err(error),
-        };
-        if plan.is_none() || wants_branch_creation(&latest_user) {
-            let fallback = fallback_branch_plan_from_text(&latest_user)
-                .or_else(|| fallback_branch_plan_from_text(&latest_assistant));
-            if let Some(fallback_plan) = fallback {
-                if plan.is_none() {
-                    plan = Some(fallback_plan);
-                }
-            }
-        }
-
-        if let Some(plan) = plan {
-            let store = &mut *lock_store(&store)?;
-            if wants_branch_creation(&latest_user) {
-                return create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan);
-            }
-            return save_branch_plan_question(store, &tree_id, &node_id, &plan);
-        }
-    }
-
     let answer = api::chat_completion_stream(&settings, &messages, |delta| {
         let _ = window.emit(
             "assistant-delta",
@@ -1163,7 +1075,17 @@ fn save_branch_plan_question(
     plan: &store::BranchPlan,
 ) -> Result<store::AssistantReplyResult, String> {
     store.save_pending_branch_plan(tree_id, node_id, plan)?;
-    let content = format!("{}\n\n{}", plan.question, BRANCH_PLAN_ACTION_MARKER);
+    let branches = plan
+        .branches
+        .iter()
+        .map(|branch| serde_json::json!({ "title": branch.title }))
+        .collect::<Vec<_>>();
+    let payload = serde_json::to_string_pretty(&serde_json::json!({ "branches": branches }))
+        .map_err(|e| e.to_string())?;
+    let content = format!(
+        "{}\n\n```{}\n{}\n```\n\n{}",
+        plan.question, BRANCH_PLAN_PAYLOAD_FENCE, payload, BRANCH_PLAN_ACTION_MARKER
+    );
     let message = store.add_message(tree_id, node_id, "assistant", &content)?;
     Ok(store::AssistantReplyResult {
         message,
@@ -1180,6 +1102,65 @@ fn create_branches_from_plan(
     plan: &store::BranchPlan,
 ) -> Result<store::AssistantReplyResult, String> {
     store.create_branches_from_plan(tree_id, node_id, parent_title, plan)
+}
+
+fn branch_plan_from_titles(
+    parent_title: &str,
+    question: &str,
+    titles: Vec<String>,
+) -> Result<store::BranchPlan, String> {
+    let mut seen = HashSet::new();
+    let branches = titles
+        .into_iter()
+        .filter_map(|title| {
+            let title = clean_branch_topic_title(&title);
+            if title.is_empty() {
+                return None;
+            }
+            let key = title.to_lowercase();
+            if !seen.insert(key) {
+                return None;
+            }
+            let context = generated_branch_context(parent_title, &title);
+            Some(store::BranchPlanItem { title, context })
+        })
+        .collect::<Vec<_>>();
+
+    if branches.is_empty() {
+        return Err("Add at least one branch topic before creating branches.".to_string());
+    }
+
+    Ok(store::BranchPlan {
+        question: question.to_string(),
+        branches,
+    })
+}
+
+fn clean_branch_topic_title(title: &str) -> String {
+    title
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches(|ch: char| {
+            ch.is_ascii_digit()
+                || ch == '-'
+                || ch == '*'
+                || ch == '.'
+                || ch == ')'
+                || ch.is_whitespace()
+        })
+        .trim()
+        .chars()
+        .take(80)
+        .collect::<String>()
+}
+
+fn generated_branch_context(parent_title: &str, title: &str) -> String {
+    format!(
+        "Автоматически созданное направление для темы \"{}\" внутри родительской ветки \"{}\". В этой ветке нужно отдельно разобрать именно эту тему, использовать общий контекст родительского диалога и не смешивать ее с соседними направлениями.",
+        title, parent_title
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -2351,12 +2332,6 @@ Draft answer:
     )
 }
 
-fn branch_planner_prompt(count: usize) -> String {
-    format!(
-        "You are a strict branch-planning classifier for a local tree chat app. Decide whether the latest user request truly needs separate child branches.\n\nReturn ONLY JSON with this exact shape:\n{{\"should_branch\": boolean, \"question\": string, \"branches\": [{{\"title\": string, \"context\": string}}]}}\n\nSet should_branch=true whenever the request, pasted text, file, plan, project, research idea, study program, comparison, or broad problem would be cleaner as several independent subtopics that can be explored separately without polluting one chat. This is not limited to PDFs: any multi-topic content should be considered. If the latest user explicitly asks to create/split/separate branches or topics, set should_branch=true unless the conversation has no separable topics.\n\nSet should_branch=false for ordinary single-topic questions, single algorithm explanations, short follow-ups, simple clarifications, or lists that are small enough to answer in one message.\n\nWhen branching, create COARSE top-level branches, not one branch per tiny item. Prefer 3-{count} large blocks. For exam/program files, use blocks such as dynamic programming, graphs, flows/matchings, trees/decompositions, math/combinatorics, strings/geometry when those fit. For non-academic content, choose the natural large areas of work. Preserve explicit top-level sections/headings/modules when the source has them, but group fine-grained items under larger directions. Each title must be concise. Each context must explain what that branch is about so another assistant call can understand the branch focus.\n\nThe question must be one concise Russian paragraph in this style: \"Здесь есть несколько крупных направлений (...). Чтобы разбирать их отдельно и не смешивать контекст, создать отдельные ветки для этих блоков?\" Do not include a bullet list in the question. If should_branch=false, use an empty branches array and an empty question."
-    )
-}
-
 fn force_branch_planner_prompt(count: usize) -> String {
     format!(
         "You are a branch planner for a local tree chat app. The user pressed a dedicated Split button, so you MUST create useful child branches from the CURRENT SELECTED NODE, current composer content, attached file, or recent conversation inside that node.\n\nReturn ONLY JSON with this exact shape:\n{{\"should_branch\": true, \"question\": \"\", \"branches\": [{{\"title\": string, \"context\": string}}]}}\n\nThe current node title and description are authoritative. If the current node is already one block inside a broader parent program, split that block into its own subtopics. Do NOT recreate sibling or parent-level branches unless the current node title itself is that broad parent. For example, if the current node is about dynamic programming, create dynamic-programming subtopics; do not create graph/flow/tree branches just because they appeared in the parent context.\n\nCreate COARSE child branches, not one branch per tiny item. Prefer 3-{count} large blocks. If the content is an exam/program/algorithm list, group fine-grained topics under the selected node's domain. If the content is not academic, choose the natural large areas of work inside the selected node. Each title must be concise. Each context must explicitly mention how the child belongs to the current selected node and be specific enough that another assistant call can continue inside that branch without reading the parent chat."
@@ -2371,88 +2346,6 @@ fn force_branch_focus_prompt(current_title: &str, current_summary: Option<&str>)
     format!(
         "CURRENT SELECTED NODE TO SPLIT:\nTitle: {current_title}\nDescription: {summary}\n\nHard rule: every branch you create must be a subtopic of this exact node. Use the title and description as the primary source of scope. If recent messages mention broader parent topics or sibling branches, treat them only as background and never split them again."
     )
-}
-
-fn is_affirmative(raw: &str) -> bool {
-    let text = normalize_reply(raw);
-    let tokens = text.split_whitespace().collect::<HashSet<_>>();
-    matches!(
-        text.as_str(),
-        "да" | "ага"
-            | "угу"
-            | "ок"
-            | "окей"
-            | "yes"
-            | "y"
-            | "sure"
-            | "давай"
-            | "конечно"
-            | "подтверждаю"
-            | "согласен"
-            | "согласна"
-            | "можно"
-            | "го"
-    ) || tokens.iter().any(|token| {
-        matches!(
-            *token,
-            "да" | "ага"
-                | "угу"
-                | "ок"
-                | "окей"
-                | "yes"
-                | "y"
-                | "sure"
-                | "давай"
-                | "конечно"
-                | "подтверждаю"
-                | "согласен"
-                | "согласна"
-                | "можно"
-                | "го"
-        )
-    }) || wants_branch_creation(&text)
-        || (contains(&text, "делай") && contains(&text, "вет"))
-        || (contains(&text, "создавай") && contains(&text, "вет"))
-}
-
-fn is_negative(raw: &str) -> bool {
-    matches!(
-        normalize_reply(raw).as_str(),
-        "нет" | "не" | "no" | "n" | "не надо" | "не нужно" | "оставь так"
-    )
-}
-
-fn wants_branch_creation(raw: &str) -> bool {
-    let text = raw.to_lowercase();
-    let action = [
-        "создай",
-        "создашь",
-        "создать",
-        "сделай",
-        "разбей",
-        "разбить",
-        "раздели",
-        "разделить",
-        "разложи",
-        "раскидай",
-        "оформи",
-    ]
-    .iter()
-    .any(|needle| contains(&text, needle));
-    let target = [
-        "ветк",
-        "отдельн",
-        "тем",
-        "модул",
-        "блок",
-        "направлен",
-        "категор",
-        "сфер",
-        "част",
-    ]
-    .iter()
-    .any(|needle| contains(&text, needle));
-    action && target
 }
 
 fn wants_agent_tools(raw: &str) -> bool {
@@ -2509,93 +2402,6 @@ fn wants_agent_tools(raw: &str) -> bool {
     .iter()
     .any(|needle| contains(&text, needle));
     memory || files || command
-}
-
-fn looks_branchable(raw: &str) -> bool {
-    let text = raw.to_lowercase();
-    let char_count = text.chars().count();
-    if is_negative(&text) || is_affirmative(&text) {
-        return false;
-    }
-    if wants_branch_creation(&text) {
-        return true;
-    }
-    if char_count < 24 {
-        return false;
-    }
-    if has_attachment_payload(&text) {
-        return true;
-    }
-    let many = [
-        "несколько",
-        "много",
-        "разные",
-        "разных",
-        "варианты",
-        "идеи",
-        "темы",
-        "темам",
-        "тем",
-        "сферы",
-        "направления",
-        "категории",
-        "модули",
-        "модул",
-        "блоки",
-        "блок",
-        "разложи",
-        "разбери",
-        "сравни",
-    ]
-    .iter()
-    .any(|needle| contains(&text, needle));
-    let split = [
-        "отдельно",
-        "по отдельности",
-        "ветк",
-        "кажд",
-        "сфер",
-        "направлен",
-        "категор",
-        "стартап",
-        "предмет",
-        "блок",
-    ]
-    .iter()
-    .any(|needle| contains(&text, needle));
-    let structure_hint = text.lines().filter(|line| !line.trim().is_empty()).count() >= 3
-        || text.matches(';').count() >= 2
-        || text.matches(',').count() >= 4
-        || text.matches(" и ").count() >= 3
-        || text.matches(" или ").count() >= 2;
-    let broad_task = [
-        "план",
-        "проект",
-        "иде",
-        "исслед",
-        "курс",
-        "програм",
-        "подготов",
-        "стратег",
-        "архитект",
-        "продукт",
-        "стартап",
-        "разбор",
-        "обуч",
-        "roadmap",
-        "research",
-    ]
-    .iter()
-    .any(|needle| contains(&text, needle));
-
-    (many && split)
-        || (structure_hint && char_count >= 60)
-        || (broad_task && char_count >= 90)
-        || char_count >= 180
-}
-
-fn has_attachment_payload(raw: &str) -> bool {
-    contains(&raw.to_lowercase(), "[attached file:")
 }
 
 fn remember_request_to_memory_input(
@@ -2918,24 +2724,6 @@ fn clean_fallback_branch_title(raw: &str) -> Option<String> {
         return None;
     }
     Some(text.chars().take(96).collect())
-}
-
-fn normalize_reply(raw: &str) -> String {
-    raw.trim()
-        .to_lowercase()
-        .replace('ё', "е")
-        .chars()
-        .map(|ch| {
-            if ch.is_alphanumeric() || ch.is_whitespace() {
-                ch
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn contains(haystack: &str, needle: &str) -> bool {

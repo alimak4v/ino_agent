@@ -70,6 +70,11 @@ type TranslationKey =
   | "modeWorkspaceTitle"
   | "branchSplit"
   | "cancelBranchSplit"
+  | "branchTopics"
+  | "branchTopicPlaceholder"
+  | "addBranchTopic"
+  | "removeBranchTopic"
+  | "createBranches"
   | "connectorDraft"
   | "cancelConnectorDraft"
   | "onboardingDescription"
@@ -141,6 +146,11 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     modeWorkspaceTitle: "Allow memory/indexing and safe commands",
     branchSplit: "Split into branches after sending",
     cancelBranchSplit: "Cancel branch split after sending",
+    branchTopics: "Branch topics",
+    branchTopicPlaceholder: "Topic",
+    addBranchTopic: "Add topic",
+    removeBranchTopic: "Remove topic",
+    createBranches: "Create branches",
     connectorDraft: "Create connector draft",
     cancelConnectorDraft: "Cancel connector draft",
     onboardingDescription: "Local workspace for projects, agent tasks, memory, search, and visual explanations.",
@@ -211,6 +221,11 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     modeWorkspaceTitle: "Разрешить память, индексацию и безопасные команды",
     branchSplit: "Разделить на ветки после отправки",
     cancelBranchSplit: "Отменить разделение на ветки после отправки",
+    branchTopics: "Темы веток",
+    branchTopicPlaceholder: "Тема",
+    addBranchTopic: "Добавить тему",
+    removeBranchTopic: "Удалить тему",
+    createBranches: "Создать ветки",
     connectorDraft: "Создать черновик коннектора",
     cancelConnectorDraft: "Отменить черновик коннектора",
     onboardingDescription: "Локальное рабочее пространство для проектов, задач агента, памяти, поиска и визуальных объяснений.",
@@ -281,6 +296,11 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     modeWorkspaceTitle: "Permitir memoria, indexación y comandos seguros",
     branchSplit: "Dividir en ramas después de enviar",
     cancelBranchSplit: "Cancelar división en ramas después de enviar",
+    branchTopics: "Temas de ramas",
+    branchTopicPlaceholder: "Tema",
+    addBranchTopic: "Añadir tema",
+    removeBranchTopic: "Quitar tema",
+    createBranches: "Crear ramas",
     connectorDraft: "Crear borrador de conector",
     cancelConnectorDraft: "Cancelar borrador de conector",
     onboardingDescription: "Espacio local para proyectos, tareas del agente, memoria, búsqueda y explicaciones visuales.",
@@ -351,6 +371,11 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     modeWorkspaceTitle: "Дазволіць памяць, індэксацыю і бяспечныя каманды",
     branchSplit: "Падзяліць на галіны пасля адпраўкі",
     cancelBranchSplit: "Скасаваць падзел на галіны пасля адпраўкі",
+    branchTopics: "Тэмы галін",
+    branchTopicPlaceholder: "Тэма",
+    addBranchTopic: "Дадаць тэму",
+    removeBranchTopic: "Выдаліць тэму",
+    createBranches: "Стварыць галіны",
     connectorDraft: "Стварыць чарнавік канектара",
     cancelConnectorDraft: "Скасаваць чарнавік канектара",
     onboardingDescription: "Лакальная працоўная прастора для праектаў, задач агента, памяці, пошуку і візуальных тлумачэнняў.",

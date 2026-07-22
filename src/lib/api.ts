@@ -621,8 +621,8 @@ export const api = {
     }),
   generateAssistantReply: (treeId: string, nodeId: string, requestId: string) =>
     invokeDesktop<AssistantReplyResult>("generate_assistant_reply", { treeId, nodeId, requestId }),
-  confirmPendingBranches: (treeId: string, nodeId: string) =>
-    invokeDesktop<AssistantReplyResult>("confirm_pending_branches", { treeId, nodeId }),
+  confirmPendingBranches: (treeId: string, nodeId: string, titles?: string[]) =>
+    invokeDesktop<AssistantReplyResult>("confirm_pending_branches", { treeId, nodeId, titles }),
   forceBranchSplit: (treeId: string, nodeId: string) =>
     invokeDesktop<AssistantReplyResult>("force_branch_split", { treeId, nodeId }),
   listConnectors: () =>

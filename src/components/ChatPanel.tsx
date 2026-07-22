@@ -40,7 +40,7 @@ interface ChatPanelProps {
   onStartConnector?: (content: string) => Promise<void>;
   onEditMessage: (message: Message, content: string) => Promise<void>;
   onRegenerateMessage: (message: Message) => Promise<void>;
-  onConfirmBranches: (message: Message) => Promise<void>;
+  onConfirmBranches: (message: Message, titles?: string[]) => Promise<void>;
   onForceBranchSplit: (content: string) => Promise<void>;
   onProposeConnector: (content: string) => Promise<void>;
   onOpenTarget: (target: string) => Promise<void>;
@@ -62,6 +62,7 @@ const MAX_ATTACHMENTS = 8;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_CHARS = 180_000;
 const BRANCH_PLAN_ACTION_MARKER = "<!-- treeai:branch-plan -->";
+const BRANCH_PLAN_PAYLOAD_FENCE = "ino-agent-branch-plan";
 const AGENT_MODES: AgentMode[] = ["auto", "read", "memory", "command", "workspace"];
 const HOME_INSTITUTIONS = ["MIPT", "MSU", "HSE", "MEPhI", "ITMO", "NSU"] as const;
 const TYPE_SPEED_MS = 72;
@@ -605,26 +606,19 @@ export function ChatPanel({
                     }}
                   />
                   {message.role === "assistant" && hasBranchPlanAction(message.content) && (
-                    <div className="mt-4 flex items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={sending || branchActionBusy === message.id}
-                        onClick={async () => {
-                          setBranchActionBusy(message.id);
-                          try {
-                            await onConfirmBranches(message);
-                          } finally {
-                            setBranchActionBusy("");
-                          }
-                        }}
-                        className="inline-flex h-9 items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--panel)] px-3 text-sm font-medium text-[color:var(--text)] shadow-[0_1px_3px_rgba(0,0,0,0.08)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-45"
-                        aria-label="Split into branches"
-                        title="Split into branches"
-                      >
-                        <CheckIcon />
-                        <span>Split into branches</span>
-                      </button>
-                    </div>
+                    <BranchPlanEditor
+                      message={message}
+                      language={language}
+                      busy={sending || branchActionBusy === message.id}
+                      onConfirm={async (titles) => {
+                        setBranchActionBusy(message.id);
+                        try {
+                          await onConfirmBranches(message, titles);
+                        } finally {
+                          setBranchActionBusy("");
+                        }
+                      }}
+                    />
                   )}
                   <MessageActions
                     message={message}
@@ -732,6 +726,91 @@ function HomeHeroTitle({ language }: { language: InterfaceLanguage }) {
           className="ml-0.5 inline-block h-[0.9em] w-[2px] translate-y-[2px] animate-pulse rounded-full bg-[color:var(--text)]"
         />
       </span>
+    </div>
+  );
+}
+
+function BranchPlanEditor({
+  message,
+  language,
+  busy,
+  onConfirm,
+}: {
+  message: Message;
+  language: InterfaceLanguage;
+  busy: boolean;
+  onConfirm: (titles: string[]) => Promise<void>;
+}) {
+  const initialTitles = branchPlanTitlesFromMessage(message.content);
+  const [titles, setTitles] = useState<string[]>(
+    initialTitles.length > 0 ? initialTitles : [""],
+  );
+
+  useEffect(() => {
+    const nextTitles = branchPlanTitlesFromMessage(message.content);
+    setTitles(nextTitles.length > 0 ? nextTitles : [""]);
+  }, [message.id, message.content]);
+
+  const cleanTitles = () => uniqueNonEmptyTitles(titles);
+  const canCreate = cleanTitles().length > 0 && !busy;
+
+  return (
+    <div className="mt-4 max-w-[520px] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+      <div className="mb-2 text-xs font-medium text-[color:var(--muted)]">
+        {uiText(language, "branchTopics")}
+      </div>
+      <div className="space-y-2">
+        {titles.map((title, index) => (
+          <div key={index} className="flex items-center gap-2">
+            <input
+              type="text"
+              value={title}
+              disabled={busy}
+              onChange={(event) => {
+                const next = [...titles];
+                next[index] = event.target.value;
+                setTitles(next);
+              }}
+              className="h-9 min-w-0 flex-1 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-colors placeholder:text-[color:var(--muted)] focus:border-[color:var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
+              placeholder={uiText(language, "branchTopicPlaceholder")}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setTitles((current) =>
+                  current.length <= 1 ? [""] : current.filter((_, itemIndex) => itemIndex !== index),
+                )
+              }
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label={uiText(language, "removeBranchTopic")}
+              title={uiText(language, "removeBranchTopic")}
+            >
+              <CloseIcon />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setTitles((current) => [...current, ""])}
+          className="inline-flex h-9 items-center gap-2 rounded-full border border-[color:var(--border)] bg-transparent px-3 text-sm font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          <PlusIcon />
+          <span>{uiText(language, "addBranchTopic")}</span>
+        </button>
+        <button
+          type="button"
+          disabled={!canCreate}
+          onClick={() => void onConfirm(cleanTitles())}
+          className="inline-flex h-9 items-center gap-2 rounded-full border border-[color:var(--button)] bg-[color:var(--button)] px-3 text-sm font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+        >
+          <CheckIcon />
+          <span>{uiText(language, "createBranches")}</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -1412,12 +1491,51 @@ function stripBranchPlanAction(content: string) {
   return content.replace(BRANCH_PLAN_ACTION_MARKER, "").trim();
 }
 
+function branchPlanPayloadPattern(flags = "") {
+  return new RegExp("```" + BRANCH_PLAN_PAYLOAD_FENCE + "\\n([\\s\\S]*?)\\n```\\s*", flags);
+}
+
+function stripBranchPlanPayload(content: string) {
+  return content.replace(branchPlanPayloadPattern("g"), "").trim();
+}
+
+function branchPlanTitlesFromMessage(content: string) {
+  const match = content.match(branchPlanPayloadPattern());
+  if (!match?.[1]) return [];
+  try {
+    const payload = JSON.parse(match[1]) as {
+      branches?: Array<{ title?: unknown }>;
+    };
+    return uniqueNonEmptyTitles(
+      (payload.branches ?? [])
+        .map((branch) => (typeof branch.title === "string" ? branch.title : ""))
+        .filter(Boolean),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function uniqueNonEmptyTitles(titles: string[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of titles) {
+    const title = value.trim();
+    if (!title) continue;
+    const key = title.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(title);
+  }
+  return result;
+}
+
 function stripAgentModeMarker(content: string) {
   return content.replace(/<!--\s*ino-agent:mode=(read|memory|command|workspace)\s*-->\s*/g, "").trim();
 }
 
 function stripMessageControlMarkers(content: string) {
-  return stripAgentModeMarker(stripBranchPlanAction(content));
+  return stripAgentModeMarker(stripBranchPlanPayload(stripBranchPlanAction(content)));
 }
 
 function StreamingMessage({ content }: { content: string }) {

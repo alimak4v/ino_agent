@@ -961,7 +961,7 @@ export default function App() {
   );
 
   const handleConfirmBranches = useCallback(
-    async (message: Message) => {
+    async (message: Message, titles?: string[]) => {
       const nodeId = message.node_id;
       const treeId = message.tree_id;
       if (activeRequestsRef.current[nodeId]) return;
@@ -970,7 +970,7 @@ export default function App() {
       setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
       setChatError("");
       try {
-        const reply = await api.confirmPendingBranches(treeId, nodeId);
+        const reply = await api.confirmPendingBranches(treeId, nodeId, titles);
         await applyAssistantReply(treeId, nodeId, reply);
       } catch (e) {
         setChatError(String(e));
