@@ -15,6 +15,7 @@ import {
   type Message,
   type QuizAttempt,
 } from "../lib/api";
+import { uiText, type InterfaceLanguage } from "../lib/i18n";
 import type { CanvasLayoutNode } from "./TreeCanvas";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { QuizBlock } from "./QuizBlock";
@@ -32,6 +33,7 @@ interface ChatPanelProps {
   error: string;
   targetMessageId?: string;
   panelWidth?: number;
+  language: InterfaceLanguage;
   onSend: (content: string) => Promise<void>;
   onStartChat?: (content: string) => Promise<void>;
   onStartBranchSplit?: (content: string) => Promise<void>;
@@ -60,13 +62,7 @@ const MAX_ATTACHMENTS = 8;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_CHARS = 180_000;
 const BRANCH_PLAN_ACTION_MARKER = "<!-- treeai:branch-plan -->";
-const AGENT_MODE_LABELS: Array<{ mode: AgentMode; label: string; title: string }> = [
-  { mode: "auto", label: "Auto", title: "Infer tool permissions from the request" },
-  { mode: "read", label: "Read", title: "Search memory and inspect files only" },
-  { mode: "memory", label: "Memory", title: "Allow memory and knowledge indexing" },
-  { mode: "command", label: "Cmd", title: "Allow safe local commands" },
-  { mode: "workspace", label: "Work", title: "Allow memory/indexing and safe commands" },
-];
+const AGENT_MODES: AgentMode[] = ["auto", "read", "memory", "command", "workspace"];
 const HOME_INSTITUTIONS = ["MIPT", "MSU", "HSE", "MEPhI", "ITMO", "NSU"] as const;
 const TYPE_SPEED_MS = 72;
 const DELETE_SPEED_MS = 42;
@@ -86,6 +82,7 @@ export function ChatPanel({
   error,
   targetMessageId = "",
   panelWidth,
+  language,
   onSend,
   onStartChat,
   onStartBranchSplit,
@@ -181,6 +178,20 @@ export function ChatPanel({
   );
   const canToggleBranchMode = canUseActionModes;
   const canToggleConnectorMode = canUseActionModes;
+  const modeLabelKey: Record<AgentMode, Parameters<typeof uiText>[1]> = {
+    auto: "modeAuto",
+    read: "modeRead",
+    memory: "modeMemory",
+    command: "modeCommand",
+    workspace: "modeWorkspace",
+  };
+  const modeTitleKey: Record<AgentMode, Parameters<typeof uiText>[1]> = {
+    auto: "modeAutoTitle",
+    read: "modeReadTitle",
+    memory: "modeMemoryTitle",
+    command: "modeCommandTitle",
+    workspace: "modeWorkspaceTitle",
+  };
 
   const attachFiles = async (files: FileList | null) => {
     if (!files?.length || !composerWritable || sending) return;
@@ -345,18 +356,18 @@ export function ChatPanel({
       <div className={composerShell} style={composerShellStyle}>
         {!canWrite && selectedNode && (
           <div className="mb-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] px-4 py-2 text-xs text-[color:var(--muted)]">
-            Select or create a leaf branch to write.
+            {uiText(language, "selectLeafBranch")}
           </div>
         )}
         {editingMessage && (
           <div className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] px-4 py-2 text-xs text-[color:var(--muted)]">
-            <span className="truncate">Editing your message</span>
+            <span className="truncate">{uiText(language, "editingYourMessage")}</span>
             <button
               type="button"
               onClick={cancelEditing}
               className="shrink-0 rounded-full px-2 py-1 text-[color:var(--text)] hover:bg-[color:var(--selected)]"
             >
-              Cancel
+              {uiText(language, "cancel")}
             </button>
           </div>
         )}
@@ -381,7 +392,7 @@ export function ChatPanel({
                     type="button"
                     onClick={() => removeAttachment(file.id)}
                     className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
-                    aria-label={`Remove ${file.name}`}
+                    aria-label={`${uiText(language, "removeFile")} ${file.name}`}
                   >
                     <CloseIcon />
                   </button>
@@ -389,7 +400,7 @@ export function ChatPanel({
               ))}
               {attachmentBusy && (
                 <div className="inline-flex h-8 shrink-0 items-center rounded-full border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 text-xs text-[color:var(--muted)]">
-                  Loading files
+                  {uiText(language, "loadingFiles")}
                 </div>
               )}
             </div>
@@ -407,10 +418,10 @@ export function ChatPanel({
                 selectedNode
                   ? canWrite
                     ? editingMessage
-                      ? "Edit your prompt"
-                      : "Ask anything"
-                    : "Parent branches are read-only"
-                  : "Ask anything"
+                      ? uiText(language, "editYourPrompt")
+                      : uiText(language, "askAnything")
+                    : uiText(language, "parentBranchesReadonly")
+                  : uiText(language, "askAnything")
               }
             />
           </div>
@@ -428,7 +439,7 @@ export function ChatPanel({
                 disabled={!composerWritable || sending || attachmentBusy}
                 onClick={() => fileInputRef.current?.click()}
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] bg-transparent p-0 text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label={attachmentBusy ? "Loading files" : "Attach files"}
+                aria-label={attachmentBusy ? uiText(language, "loadingFiles") : uiText(language, "attachFiles")}
               >
                 {attachmentBusy ? (
                   <span className="text-xs leading-none">...</span>
@@ -448,9 +459,9 @@ export function ChatPanel({
                     ? "border-[color:var(--button)] bg-[color:var(--button)] text-[color:var(--button-text)]"
                     : "border-[color:var(--border)] bg-transparent text-[color:var(--text)] hover:bg-[color:var(--selected)]"
                 }`}
-                aria-label={branchMode ? "Cancel branch split after sending" : "Split into branches after sending"}
+                aria-label={branchMode ? uiText(language, "cancelBranchSplit") : uiText(language, "branchSplit")}
                 aria-pressed={branchMode}
-                title={branchMode ? "Split into branches after sending" : "Split into branches after sending"}
+                title={branchMode ? uiText(language, "cancelBranchSplit") : uiText(language, "branchSplit")}
               >
                 <BranchSplitIcon />
               </button>
@@ -466,31 +477,31 @@ export function ChatPanel({
                     ? "border-[color:var(--button)] bg-[color:var(--button)] text-[color:var(--button-text)]"
                     : "border-[color:var(--border)] bg-transparent text-[color:var(--text)] hover:bg-[color:var(--selected)]"
                 }`}
-                aria-label={connectorMode ? "Cancel connector draft" : "Create connector draft"}
+                aria-label={connectorMode ? uiText(language, "cancelConnectorDraft") : uiText(language, "connectorDraft")}
                 aria-pressed={connectorMode}
-                title={connectorMode ? "Create connector draft" : "Create connector draft"}
+                title={connectorMode ? uiText(language, "cancelConnectorDraft") : uiText(language, "connectorDraft")}
               >
                 <ConnectorIcon />
               </button>
               <div
                 className="hidden h-8 items-center rounded-full border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-0.5 sm:inline-flex"
-                aria-label="Agent mode"
+                aria-label={uiText(language, "agentMode")}
               >
-                {AGENT_MODE_LABELS.map((item) => (
+                {AGENT_MODES.map((mode) => (
                   <button
-                    key={item.mode}
+                    key={mode}
                     type="button"
                     disabled={!composerWritable || sending || Boolean(editingMessage)}
-                    onClick={() => setAgentMode(item.mode)}
-                    title={item.title}
+                    onClick={() => setAgentMode(mode)}
+                    title={uiText(language, modeTitleKey[mode])}
                     className={`h-7 rounded-full px-2 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                      agentMode === item.mode
+                      agentMode === mode
                         ? "bg-[color:var(--button)] text-[color:var(--button-text)]"
                         : "text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
                     }`}
-                    aria-pressed={agentMode === item.mode}
+                    aria-pressed={agentMode === mode}
                   >
-                    {item.label}
+                    {uiText(language, modeLabelKey[mode])}
                   </button>
                 ))}
               </div>
@@ -499,7 +510,7 @@ export function ChatPanel({
               type="submit"
               disabled={!canSend}
               className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 bg-[color:var(--button)] p-0 text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label="Send"
+              aria-label={uiText(language, "send")}
             >
               <SendIcon />
             </button>
@@ -520,7 +531,7 @@ export function ChatPanel({
     >
       {showEmptyState ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 pb-16 pt-10">
-          <HomeHeroTitle />
+          <HomeHeroTitle language={language} />
           <div className="w-full space-y-3">
             {errorBlock}
             {composerForm}
@@ -671,12 +682,15 @@ export function ChatPanel({
   );
 }
 
-function HomeHeroTitle() {
+function HomeHeroTitle({ language }: { language: InterfaceLanguage }) {
   const [institutionIndex, setInstitutionIndex] = useState(0);
   const [characterCount, setCharacterCount] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const institution = HOME_INSTITUTIONS[institutionIndex];
   const typedInstitution = institution.slice(0, characterCount);
+  const localizedInstitution = getInstitutionLabel(institution, language);
+  const typedLocalizedInstitution =
+    characterCount === institution.length ? localizedInstitution : typedInstitution;
 
   useEffect(() => {
     const complete = characterCount === institution.length;
@@ -708,11 +722,11 @@ function HomeHeroTitle() {
   return (
     <div
       className="mb-7 max-w-full text-center text-[26px] font-semibold leading-tight text-[color:var(--text)] sm:text-[30px]"
-      aria-label={`ino-agent for ${institution}`}
+      aria-label={`ino-agent ${uiText(language, "homeFor")} ${localizedInstitution}`}
     >
-      <span>ino-agent for </span>
+      <span>ino-agent {uiText(language, "homeFor")} </span>
       <span className="inline-block min-w-[5ch] text-left">
-        <span>{typedInstitution}</span>
+        <span>{typedLocalizedInstitution}</span>
         <span
           aria-hidden="true"
           className="ml-0.5 inline-block h-[0.9em] w-[2px] translate-y-[2px] animate-pulse rounded-full bg-[color:var(--text)]"
@@ -720,6 +734,19 @@ function HomeHeroTitle() {
       </span>
     </div>
   );
+}
+
+function getInstitutionLabel(
+  institution: (typeof HOME_INSTITUTIONS)[number],
+  language: InterfaceLanguage,
+) {
+  if ((language === "Russian" || language === "Belarusian") && institution === "MEPhI") {
+    return "МИФИ";
+  }
+  if ((language === "Russian" || language === "Belarusian") && institution === "MSU") {
+    return language === "Russian" ? "МГУ" : "БДУ";
+  }
+  return institution;
 }
 
 function PlusIcon() {

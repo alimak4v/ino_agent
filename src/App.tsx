@@ -821,13 +821,13 @@ export default function App() {
 
   const createInitialTree = useCallback(
     async (content: string): Promise<TreeCreated> => {
-      const created = await api.createTree(titleFromPrompt(content));
+      const created = await api.createTree(titleFromPrompt(content, language));
       await api.setCurrentNode(created.tree_id, created.root_node_id);
       setChatHomeVisible(false);
       await loadCanvas(created.root_node_id, created.tree_id);
       return created;
     },
-    [loadCanvas],
+    [language, loadCanvas],
   );
 
   const handleSendMessage = useCallback(
@@ -1321,6 +1321,7 @@ export default function App() {
             error={chatError}
             targetMessageId={targetMessageId}
             panelWidth={treeVisible && !compactLayout ? chatWidth : undefined}
+            language={language}
             onSend={handleSendMessage}
             onStartChat={handleStartChat}
             onStartBranchSplit={handleStartBranchSplit}
@@ -1336,6 +1337,7 @@ export default function App() {
       </div>
       {onboardingOpen && (
         <OnboardingPanel
+          language={language}
           onClose={dismissOnboarding}
           onOpenSettings={() => {
             dismissOnboarding();
@@ -1597,6 +1599,7 @@ function PanelWindowApp({ panel }: { panel: AuxPanel }) {
         windowed
         trees={trees}
         activeTreeId={activeTreeId}
+        language={settings.language}
         onCreateRoot={handleCreateRoot}
         onSelectTree={handleSelectTree}
       />
@@ -1653,10 +1656,12 @@ function PanelWindowApp({ panel }: { panel: AuxPanel }) {
 }
 
 function OnboardingPanel({
+  language,
   onClose,
   onOpenSettings,
   onOpenProjects,
 }: {
+  language: InterfaceLanguage;
   onClose: () => void;
   onOpenSettings: () => void;
   onOpenProjects: () => void;
@@ -1667,24 +1672,24 @@ function OnboardingPanel({
         <div className="border-b border-[color:var(--border)] px-5 py-4">
           <div className="text-base font-semibold text-[color:var(--text)]">ino-agent</div>
           <div className="mt-1 text-sm leading-6 text-[color:var(--muted)]">
-            Local workspace for projects, agent tasks, memory, search, and visual explanations.
+            {uiText(language, "onboardingDescription")}
           </div>
         </div>
         <div className="grid gap-2 p-4">
           <OnboardingStep
             label="1"
-            title="Set model access"
-            text="Save endpoint, model, API key, and theme in Settings."
+            title={uiText(language, "onboardingSetAccessTitle")}
+            text={uiText(language, "onboardingSetAccessText")}
           />
           <OnboardingStep
             label="2"
-            title="Create or inspect work"
-            text="Use Projects, Tasks, Terminal, Search, Memory, and Knowledge from the top bar."
+            title={uiText(language, "onboardingWorkTitle")}
+            text={uiText(language, "onboardingWorkText")}
           />
           <OnboardingStep
             label="3"
-            title="Keep local data private"
-            text="Chats, memory, command history, paths, and API keys stay in the local SQLite database."
+            title={uiText(language, "onboardingPrivacyTitle")}
+            text={uiText(language, "onboardingPrivacyText")}
           />
         </div>
         <div className="flex flex-col-reverse gap-2 border-t border-[color:var(--border)] px-4 py-3 sm:flex-row sm:justify-end">
@@ -1772,12 +1777,12 @@ function TopBarButton({
   );
 }
 
-function titleFromPrompt(content: string) {
+function titleFromPrompt(content: string, language: InterfaceLanguage) {
   const firstLine =
     content
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .find((line) => line && !line.startsWith("[Attached file:")) ?? "New chat";
+      .find((line) => line && !line.startsWith("[Attached file:")) ?? uiText(language, "newChat");
   const normalized = firstLine.replace(/\s+/g, " ");
   return normalized.length > 56 ? `${normalized.slice(0, 53).trim()}...` : normalized;
 }
@@ -1785,12 +1790,14 @@ function titleFromPrompt(content: string) {
 function ChatsPanel({
   trees,
   activeTreeId,
+  language,
   onCreateRoot,
   onSelectTree,
   windowed = false,
 }: {
   trees: TreeSummary[];
   activeTreeId: string | null;
+  language: InterfaceLanguage;
   onCreateRoot: () => void;
   onSelectTree: (treeId: string) => void;
   windowed?: boolean;
@@ -1807,22 +1814,28 @@ function ChatsPanel({
     >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[color:var(--text)]">Chats</div>
-          <div className="truncate text-[11px] text-[color:var(--muted)]">Latest first</div>
+          <div className="truncate text-sm font-semibold text-[color:var(--text)]">
+            {uiText(language, "chats")}
+          </div>
+          <div className="truncate text-[11px] text-[color:var(--muted)]">
+            {uiText(language, "latestFirst")}
+          </div>
         </div>
         <button
           type="button"
           onClick={onCreateRoot}
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
-          aria-label="New chat"
-          title="New chat"
+          aria-label={uiText(language, "newChat")}
+          title={uiText(language, "newChat")}
         >
           <PlusIcon />
         </button>
       </div>
       <div className={`${windowed ? "min-h-0 flex-1" : "max-h-[360px]"} overflow-y-auto p-1.5`}>
         {orderedTrees.length === 0 ? (
-          <div className="px-3 py-3 text-sm text-[color:var(--muted)]">No chats</div>
+          <div className="px-3 py-3 text-sm text-[color:var(--muted)]">
+            {uiText(language, "noChats")}
+          </div>
         ) : (
           orderedTrees.map((tree) => {
             const active = tree.id === activeTreeId;
@@ -1845,7 +1858,7 @@ function ChatsPanel({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{tree.title}</span>
                   <span className="block truncate text-[11px] text-[color:var(--muted)]">
-                    {tree.message_count} messages
+                    {tree.message_count} {uiText(language, "messages")}
                   </span>
                 </span>
               </button>
