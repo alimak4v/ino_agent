@@ -740,13 +740,27 @@ function getInstitutionLabel(
   institution: (typeof HOME_INSTITUTIONS)[number],
   language: InterfaceLanguage,
 ) {
-  if ((language === "Russian" || language === "Belarusian") && institution === "MEPhI") {
-    return "МИФИ";
-  }
-  if ((language === "Russian" || language === "Belarusian") && institution === "MSU") {
-    return language === "Russian" ? "МГУ" : "БДУ";
-  }
-  return institution;
+  const localized: Partial<
+    Record<InterfaceLanguage, Partial<Record<(typeof HOME_INSTITUTIONS)[number], string>>>
+  > = {
+    Russian: {
+      MIPT: "МФТИ",
+      MSU: "МГУ",
+      HSE: "ВШЭ",
+      MEPhI: "МИФИ",
+      ITMO: "ИТМО",
+      NSU: "НГУ",
+    },
+    Belarusian: {
+      MIPT: "МФТІ",
+      MSU: "БДУ",
+      HSE: "ВШЭ",
+      MEPhI: "МІФІ",
+      ITMO: "ІТМА",
+      NSU: "НДУ",
+    },
+  };
+  return localized[language]?.[institution] ?? institution;
 }
 
 function PlusIcon() {
