@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "identifier": "default",
   "description": "Default permissions",
-  "windows": ["main"],
+  "windows": ["main", "panel-*"],
   "permissions": [
     "core:default",
     "core:tray:default",

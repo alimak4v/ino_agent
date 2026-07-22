@@ -5,9 +5,10 @@ interface AgentTasksPanelProps {
   treeId: string | null;
   nodeId: string | null;
   onClose: () => void;
+  windowed?: boolean;
 }
 
-export function AgentTasksPanel({ treeId, nodeId, onClose }: AgentTasksPanelProps) {
+export function AgentTasksPanel({ treeId, nodeId, onClose, windowed = false }: AgentTasksPanelProps) {
   const [runs, setRuns] = useState<AgentRunDetail[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [goal, setGoal] = useState("");
@@ -73,7 +74,13 @@ export function AgentTasksPanel({ treeId, nodeId, onClose }: AgentTasksPanelProp
   };
 
   return (
-    <aside className="no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[820px]">
+    <aside
+      className={
+        windowed
+          ? "no-drag flex h-screen min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[820px]"
+      }
+    >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-[color:var(--text)]">Tasks</div>
@@ -90,7 +97,11 @@ export function AgentTasksPanel({ treeId, nodeId, onClose }: AgentTasksPanelProp
         </button>
       </div>
 
-      <div className="grid max-h-[calc(100vh-122px)] gap-4 overflow-y-auto p-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+      <div
+        className={`grid gap-4 overflow-y-auto p-4 lg:grid-cols-[300px_minmax(0,1fr)] ${
+          windowed ? "min-h-0 flex-1" : "max-h-[calc(100vh-122px)]"
+        }`}
+      >
         <div className="min-w-0 space-y-3">
           <form
             onSubmit={createRun}

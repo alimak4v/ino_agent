@@ -8,9 +8,10 @@ import {
 
 interface TerminalPanelProps {
   onClose: () => void;
+  windowed?: boolean;
 }
 
-export function TerminalPanel({ onClose }: TerminalPanelProps) {
+export function TerminalPanel({ onClose, windowed = false }: TerminalPanelProps) {
   const [command, setCommand] = useState("git status --short");
   const [cwd, setCwd] = useState(".");
   const [timeoutMs, setTimeoutMs] = useState(12000);
@@ -121,7 +122,13 @@ export function TerminalPanel({ onClose }: TerminalPanelProps) {
   };
 
   return (
-    <aside className="no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[860px]">
+    <aside
+      className={
+        windowed
+          ? "no-drag flex h-screen min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[860px]"
+      }
+    >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-[color:var(--text)]">Terminal</div>
@@ -138,7 +145,11 @@ export function TerminalPanel({ onClose }: TerminalPanelProps) {
         </button>
       </div>
 
-      <div className="grid max-h-[calc(100vh-122px)] gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+      <div
+        className={`grid gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_300px] ${
+          windowed ? "min-h-0 flex-1" : "max-h-[calc(100vh-122px)]"
+        }`}
+      >
         <div className="min-w-0 space-y-3">
           <form
             onSubmit={(event) => void submit(event)}

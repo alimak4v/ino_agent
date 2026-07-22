@@ -18,6 +18,7 @@ const DEFAULT_THEME: &str = "Minimal Light";
 const API_CONTEXT_RECENT_MESSAGE_LIMIT: usize = 16;
 const API_CONTEXT_SUMMARY_CHAR_LIMIT: usize = 420;
 const API_CONTEXT_MESSAGE_CHAR_LIMIT: usize = 12_000;
+const DIRECT_ATTACHMENT_FENCE: &str = "```ino-agent-attachment\n";
 const MEMORY_GRAPH_LINK_LIMIT: usize = 6;
 const WATCHED_PATHS_SETTING: &str = "knowledge_watched_paths";
 
@@ -2074,7 +2075,8 @@ impl Store {
         for row in rows {
             if matches!(row.role.as_str(), "user" | "assistant" | "system") {
                 if latest_user_id.as_deref() == Some(row.id.as_str()) {
-                    let user_content = strip_agent_mode_marker(&row.content);
+                    let user_content =
+                        compact_direct_attachment_payloads(&strip_agent_mode_marker(&row.content));
                     messages.push(ChatContextMessage {
                         role: "system".to_string(),
                         content: format!(
@@ -2114,15 +2116,19 @@ impl Store {
                     }
                 }
                 let row_content = strip_agent_mode_marker(&row.content);
-                let content = if latest_user_id.as_deref() == Some(row.id.as_str())
-                    && context_builder::is_deictic_topic_request(&row_content)
+                let is_latest_user = latest_user_id.as_deref() == Some(row.id.as_str());
+                let row_content_for_scope = compact_direct_attachment_payloads(&row_content);
+                let content = if is_latest_user
+                    && context_builder::is_deictic_topic_request(&row_content_for_scope)
                 {
                     format!(
                         "Current selected leaf/topic: {current_title}\nFull selected path: {breadcrumb}\nUser request about this current leaf/topic: {}",
                         row_content
                     )
+                } else if is_latest_user && has_direct_attachment_payload(&row_content) {
+                    row_content
                 } else {
-                    truncate_for_api_context(&row_content, API_CONTEXT_MESSAGE_CHAR_LIMIT)
+                    truncate_for_api_context(&row_content_for_scope, API_CONTEXT_MESSAGE_CHAR_LIMIT)
                 };
                 messages.push(ChatContextMessage {
                     role: row.role,
@@ -4096,6 +4102,47 @@ fn truncate_for_api_context(value: &str, max_chars: usize) -> String {
         .collect::<String>();
     truncated.push_str("...");
     truncated
+}
+
+fn has_direct_attachment_payload(value: &str) -> bool {
+    value.contains(DIRECT_ATTACHMENT_FENCE)
+}
+
+fn compact_direct_attachment_payloads(value: &str) -> String {
+    let mut out = String::new();
+    let mut cursor = 0;
+
+    while let Some(relative_start) = value[cursor..].find("[Attached file: ") {
+        let start = cursor + relative_start;
+        let Some(relative_fence_start) = value[start..].find(DIRECT_ATTACHMENT_FENCE) else {
+            break;
+        };
+        let fence_start = start + relative_fence_start;
+        let payload_start = fence_start + DIRECT_ATTACHMENT_FENCE.len();
+        let Some(relative_payload_end) = value[payload_start..].find("\n```") else {
+            break;
+        };
+        let payload_end = payload_start + relative_payload_end;
+        let block_end = payload_end + "\n```".len();
+
+        out.push_str(&value[cursor..start]);
+        let descriptor = value[start + "[Attached file: ".len()..fence_start]
+            .trim()
+            .trim_end_matches(']')
+            .trim();
+        if descriptor.is_empty() {
+            out.push_str("[Attached file: bytes omitted from older context]\n");
+        } else {
+            out.push_str("[Attached file: ");
+            out.push_str(descriptor);
+            out.push_str("]\n[File bytes omitted from older context. Use the prior assistant answer unless the user re-attaches the file.]\n");
+        }
+
+        cursor = block_end;
+    }
+
+    out.push_str(&value[cursor..]);
+    out.trim().to_string()
 }
 
 fn branch_context_message(parent_title: &str, item: &BranchPlanItem) -> String {

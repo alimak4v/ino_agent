@@ -10,7 +10,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openShell } from "@tauri-apps/plugin-shell";
 import {
@@ -65,6 +66,40 @@ interface KnowledgeWatchEvent {
   content: unknown;
 }
 
+type AuxPanel = "chats" | "projects" | "tasks" | "terminal" | "search" | "memory" | "knowledge" | "settings";
+
+interface PanelSelectTreeEvent {
+  treeId: string;
+}
+
+interface PanelOpenTargetEvent {
+  target: string;
+}
+
+interface PanelStartChatEvent {
+  content: string;
+}
+
+const AUX_PANEL_CONFIG: Record<
+  AuxPanel,
+  { label: string; title: string; width: number; height: number; minWidth: number; minHeight: number }
+> = {
+  chats: { label: "panel-chats", title: "Chats", width: 360, height: 560, minWidth: 320, minHeight: 420 },
+  projects: { label: "panel-projects", title: "Projects", width: 860, height: 680, minWidth: 760, minHeight: 560 },
+  tasks: { label: "panel-tasks", title: "Tasks", width: 900, height: 680, minWidth: 760, minHeight: 560 },
+  terminal: { label: "panel-terminal", title: "Terminal", width: 920, height: 660, minWidth: 760, minHeight: 520 },
+  search: { label: "panel-search", title: "Search", width: 980, height: 700, minWidth: 760, minHeight: 560 },
+  memory: { label: "panel-memory", title: "Memory", width: 860, height: 720, minWidth: 760, minHeight: 560 },
+  knowledge: { label: "panel-knowledge", title: "Knowledge", width: 820, height: 680, minWidth: 720, minHeight: 520 },
+  settings: { label: "panel-settings", title: "Settings", width: 520, height: 640, minWidth: 460, minHeight: 520 },
+};
+
+function panelFromLocation(): AuxPanel | null {
+  if (typeof window === "undefined") return null;
+  const value = new URLSearchParams(window.location.search).get("panel");
+  return value && value in AUX_PANEL_CONFIG ? (value as AuxPanel) : null;
+}
+
 function getViewportWidth() {
   return typeof window === "undefined" ? 1440 : window.innerWidth;
 }
@@ -87,6 +122,10 @@ export default function App() {
         <RenderSmoke />
       </Suspense>
     );
+  }
+  const auxPanel = panelFromLocation();
+  if (auxPanel) {
+    return <PanelWindowApp panel={auxPanel} />;
   }
 
   const [trees, setTrees] = useState<TreeSummary[]>([]);
@@ -126,10 +165,6 @@ export default function App() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
-  const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
-  const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
-  const [connectorsLoading, setConnectorsLoading] = useState(false);
-  const [savingSettings, setSavingSettings] = useState(false);
   const selectedNodeIdRef = useRef<string | null>(null);
   const activeTreeIdRef = useRef<string | null>(null);
   const activeRequestsRef = useRef<Record<string, string>>({});
@@ -160,26 +195,9 @@ export default function App() {
       .getSettings()
       .then((loaded) => {
         setSettings(loaded);
-        setSettingsDraft(loaded);
       })
       .catch((e) => setChatError(String(e)));
   }, []);
-
-  const loadConnectors = useCallback(async () => {
-    setConnectorsLoading(true);
-    try {
-      setConnectors(await api.listConnectors());
-    } catch (e) {
-      setStatusText(String(e));
-    } finally {
-      setConnectorsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    void loadConnectors();
-  }, [loadConnectors]);
 
   useEffect(() => {
     selectedNodeIdRef.current = selectedNodeId;
@@ -649,14 +667,6 @@ export default function App() {
     [loadCanvas, loadMessages],
   );
 
-  const handleOpenFolder = useCallback(async (path: string) => {
-    try {
-      await openShell(path);
-    } catch (e) {
-      setStatusText(String(e));
-    }
-  }, []);
-
   const handleRenameNode = useCallback(
     async (node: CanvasLayoutNode) => {
       const title = await askText({
@@ -851,6 +861,36 @@ export default function App() {
     [createInitialTree, sendMessageToNode],
   );
 
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const unlisteners: Array<() => void> = [];
+    void listen<PanelSelectTreeEvent>("panel-select-tree", (event) => {
+      if (event.payload.treeId) {
+        void handleSelectTree(event.payload.treeId);
+      }
+    }).then((fn) => unlisteners.push(fn));
+    void listen<PanelOpenTargetEvent>("panel-open-target", (event) => {
+      if (event.payload.target) {
+        void handleOpenTarget(event.payload.target);
+      }
+    }).then((fn) => unlisteners.push(fn));
+    void listen<PanelStartChatEvent>("panel-start-chat", (event) => {
+      if (event.payload.content) {
+        void handleStartChat(event.payload.content);
+      }
+    }).then((fn) => unlisteners.push(fn));
+    void listen("panel-settings-saved", () => {
+      void api.getSettings().then((next) => {
+        setSettings(next);
+      });
+    }).then((fn) => unlisteners.push(fn));
+    return () => {
+      for (const unlisten of unlisteners) {
+        unlisten();
+      }
+    };
+  }, [handleOpenTarget, handleSelectTree, handleStartChat]);
+
   const handleStartBranchSplit = useCallback(
     async (content: string) => {
       let createdNodeId = "";
@@ -908,7 +948,6 @@ export default function App() {
         await loadCanvas(nodeId, treeId);
 
         const connector = await api.proposeConnector(treeId, nodeId, content);
-        await loadConnectors();
         setKnowledgeOpen(false);
         setSettingsOpen(true);
         setStatusText(`Connector draft created: ${connector.manifest.name}`);
@@ -925,7 +964,7 @@ export default function App() {
         }
       }
     },
-    [createInitialTree, loadCanvas, loadConnectors],
+    [createInitialTree, loadCanvas],
   );
 
   const handleConfirmBranches = useCallback(
@@ -1090,7 +1129,6 @@ export default function App() {
       setChatError("");
       try {
         const connector = await api.proposeConnector(treeId, nodeId, content);
-        await loadConnectors();
         setKnowledgeOpen(false);
         setSettingsOpen(true);
         setStatusText(`Connector draft created: ${connector.manifest.name}`);
@@ -1104,62 +1142,73 @@ export default function App() {
         });
       }
     },
-    [loadConnectors, selectedNode],
+    [selectedNode],
   );
 
-  const handleSetConnectorEnabled = useCallback(
-    async (id: string, enabled: boolean) => {
-      try {
-        await api.setConnectorEnabled(id, enabled);
-        await loadConnectors();
-      } catch (e) {
-        setStatusText(String(e));
-      }
-    },
-    [loadConnectors],
-  );
-
-  const handleSaveSettings = useCallback(async (input: SettingsInput) => {
-    try {
-      const saved = await api.saveSettings(input);
-      setSettings(saved);
-      setSettingsDraft(saved);
-      setChatError("");
-    } catch (e) {
-      setChatError(String(e));
-      throw e;
-    }
+  const clearAuxPanelState = useCallback(() => {
+    setSettingsOpen(false);
+    setChatsOpen(false);
+    setProjectsOpen(false);
+    setTasksOpen(false);
+    setTerminalOpen(false);
+    setSearchOpen(false);
+    setMemoryOpen(false);
+    setKnowledgeOpen(false);
   }, []);
 
-  const handleThemeChange = useCallback(
-    async (theme: ThemeName) => {
-      const nextSettings = { ...settings, theme };
-      setSettings(nextSettings);
-      setSettingsDraft((current) => ({ ...current, theme }));
-      setChatError("");
-      try {
-        const saved = await api.saveSettings(nextSettings);
-        setSettings(saved);
-        setSettingsDraft((current) => ({ ...current, theme: saved.theme }));
-      } catch (e) {
-        setChatError(String(e));
-      }
+  const markAuxPanelOpen = useCallback(
+    (panel: AuxPanel) => {
+      clearAuxPanelState();
+      if (panel === "chats") setChatsOpen(true);
+      if (panel === "projects") setProjectsOpen(true);
+      if (panel === "tasks") setTasksOpen(true);
+      if (panel === "terminal") setTerminalOpen(true);
+      if (panel === "search") setSearchOpen(true);
+      if (panel === "memory") setMemoryOpen(true);
+      if (panel === "knowledge") setKnowledgeOpen(true);
+      if (panel === "settings") setSettingsOpen(true);
     },
-    [settings],
+    [clearAuxPanelState],
   );
 
-  const saveSettings = useCallback(
-    async (event: FormEvent) => {
-      event.preventDefault();
-      setSavingSettings(true);
-      try {
-        await handleSaveSettings(settingsDraft);
-        setSettingsOpen(false);
-      } finally {
-        setSavingSettings(false);
+  const openAuxPanelWindow = useCallback(
+    async (panel: AuxPanel) => {
+      markAuxPanelOpen(panel);
+      if (!isTauriRuntime()) return;
+      const config = AUX_PANEL_CONFIG[panel];
+      const existing = await WebviewWindow.getByLabel(config.label);
+      if (existing) {
+        await existing.show();
+        await existing.setFocus();
+        return;
       }
+      const params = new URLSearchParams({ panel });
+      if (panel === "tasks") {
+        if (selectedTreeId) params.set("treeId", selectedTreeId);
+        if (selectedCanvasNodeId) params.set("nodeId", selectedCanvasNodeId);
+      }
+      const window = new WebviewWindow(config.label, {
+        url: `/?${params.toString()}`,
+        title: config.title,
+        width: config.width,
+        height: config.height,
+        minWidth: config.minWidth,
+        minHeight: config.minHeight,
+        center: true,
+        resizable: true,
+        decorations: true,
+        hiddenTitle: false,
+        preventOverflow: true,
+      });
+      void window.once("tauri://destroyed", () => {
+        clearAuxPanelState();
+      });
+      void window.once("tauri://error", (event) => {
+        clearAuxPanelState();
+        setStatusText(String(event.payload));
+      });
     },
-    [handleSaveSettings, settingsDraft],
+    [clearAuxPanelState, markAuxPanelOpen, selectedCanvasNodeId, selectedTreeId],
   );
 
   return (
@@ -1182,119 +1231,39 @@ export default function App() {
             <TopBarButton
               label="Chats"
               active={chatsOpen}
-              onClick={() => {
-                setSettingsOpen(false);
-                setProjectsOpen(false);
-                setTasksOpen(false);
-                setTerminalOpen(false);
-                setSearchOpen(false);
-                setMemoryOpen(false);
-                setKnowledgeOpen(false);
-                setChatsOpen((value) => !value);
-              }}
+              onClick={() => void openAuxPanelWindow("chats")}
             >
               <ChatsIcon />
             </TopBarButton>
-            {chatsOpen && (
-              <ChatsPanel
-                trees={trees}
-                activeTreeId={activeTreeId}
-                onCreateRoot={() => {
-                  setChatsOpen(false);
-                  void handleCreateRoot();
-                }}
-                onSelectTree={(treeId) => {
-                  setChatsOpen(false);
-                  void handleSelectTree(treeId);
-                }}
-              />
-            )}
           </div>
           <TopBarButton
             label="Projects"
             active={projectsOpen}
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setProjectsOpen((value) => !value);
-            }}
+            onClick={() => void openAuxPanelWindow("projects")}
           >
             <ProjectIcon />
           </TopBarButton>
-          {projectsOpen && (
-            <ProjectWizardPanel
-              onClose={() => setProjectsOpen(false)}
-              onOpenFolder={handleOpenFolder}
-              onAskAgent={handleStartChat}
-            />
-          )}
           <TopBarButton
             label="Tasks"
             active={tasksOpen}
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setTasksOpen((value) => !value);
-            }}
+            onClick={() => void openAuxPanelWindow("tasks")}
           >
             <TasksIcon />
           </TopBarButton>
-          {tasksOpen && (
-            <AgentTasksPanel
-              treeId={selectedTreeId}
-              nodeId={selectedCanvasNodeId}
-              onClose={() => setTasksOpen(false)}
-            />
-          )}
           <TopBarButton
             label="Terminal"
             active={terminalOpen}
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setTerminalOpen((value) => !value);
-            }}
+            onClick={() => void openAuxPanelWindow("terminal")}
           >
             <TerminalIcon />
           </TopBarButton>
-          {terminalOpen && <TerminalPanel onClose={() => setTerminalOpen(false)} />}
           <TopBarButton
             label="Search"
             active={searchOpen}
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setSearchOpen((value) => !value);
-            }}
+            onClick={() => void openAuxPanelWindow("search")}
           >
             <SearchIcon />
           </TopBarButton>
-          {searchOpen && (
-            <SearchPanel
-              onClose={() => setSearchOpen(false)}
-              onOpenTarget={handleOpenTarget}
-            />
-          )}
           {!chatHomeVisible && (
             <TopBarButton
               label={treeVisible ? "Focus" : "Tree"}
@@ -1339,83 +1308,26 @@ export default function App() {
             label="Memory"
             active={memoryOpen}
             tooltipAlign="right"
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setKnowledgeOpen(false);
-              setMemoryOpen((value) => !value);
-            }}
+            onClick={() => void openAuxPanelWindow("memory")}
           >
             <MemoryIcon />
           </TopBarButton>
-          {memoryOpen && (
-            <MemoryPanel
-              onClose={() => setMemoryOpen(false)}
-              onOpenTarget={handleOpenTarget}
-            />
-          )}
           <TopBarButton
             label="Knowledge"
             active={knowledgeOpen}
             tooltipAlign="right"
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen((value) => !value);
-            }}
+            onClick={() => void openAuxPanelWindow("knowledge")}
           >
             <KnowledgeIcon />
           </TopBarButton>
-          {knowledgeOpen && (
-            <KnowledgePanel
-              onClose={() => setKnowledgeOpen(false)}
-              onOpenTarget={handleOpenTarget}
-            />
-          )}
           <TopBarButton
             label="Settings"
             active={settingsOpen}
             tooltipAlign="right"
-            onClick={() => {
-              setSettingsDraft(settings);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setSettingsOpen((value) => !value);
-            }}
+            onClick={() => void openAuxPanelWindow("settings")}
           >
             <SettingsIcon />
           </TopBarButton>
-          {settingsOpen && (
-            <SettingsPanel
-              settings={settings}
-              settingsDraft={settingsDraft}
-              saving={savingSettings}
-              connectors={connectors}
-              connectorsLoading={connectorsLoading}
-              onChange={setSettingsDraft}
-              onThemeChange={handleThemeChange}
-              onToggleConnector={handleSetConnectorEnabled}
-              onCancel={() => {
-                setSettingsDraft(settings);
-                setSettingsOpen(false);
-              }}
-              onSubmit={saveSettings}
-            />
-          )}
         </div>
       </header>
       <div className="min-h-0 flex flex-1 flex-col overflow-hidden md:flex-row">
@@ -1496,30 +1408,267 @@ export default function App() {
           onClose={dismissOnboarding}
           onOpenSettings={() => {
             dismissOnboarding();
-            setSettingsDraft(settings);
-            setChatsOpen(false);
-            setProjectsOpen(false);
-            setTasksOpen(false);
-            setTerminalOpen(false);
-            setSearchOpen(false);
-            setMemoryOpen(false);
-            setKnowledgeOpen(false);
-            setSettingsOpen(true);
+            void openAuxPanelWindow("settings");
           }}
           onOpenProjects={() => {
             dismissOnboarding();
-            setSettingsOpen(false);
-            setChatsOpen(false);
-            setTasksOpen(false);
-            setTerminalOpen(false);
-            setSearchOpen(false);
-            setMemoryOpen(false);
-            setKnowledgeOpen(false);
-            setProjectsOpen(true);
+            void openAuxPanelWindow("projects");
           }}
         />
       )}
       <AppDialog dialog={dialog} onClose={() => setDialog(null)} />
+    </main>
+  );
+}
+
+function PanelWindowApp({ panel }: { panel: AuxPanel }) {
+  const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
+  const [connectorsLoading, setConnectorsLoading] = useState(false);
+  const [trees, setTrees] = useState<TreeSummary[]>([]);
+  const [statusText, setStatusText] = useState("");
+
+  const searchParams = useMemo(
+    () => (typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search)),
+    [],
+  );
+  const activeTreeId = searchParams.get("treeId");
+  const activeNodeId = searchParams.get("nodeId");
+
+  const closeWindow = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    await getCurrentWindow().close();
+  }, []);
+
+  const focusMainWindow = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    const mainWindow = await WebviewWindow.getByLabel("main");
+    await mainWindow?.show();
+    await mainWindow?.setFocus();
+  }, []);
+
+  const loadTrees = useCallback(async () => {
+    try {
+      setTrees(await api.listTrees());
+      setStatusText("");
+    } catch (e) {
+      setStatusText(String(e));
+    }
+  }, []);
+
+  const loadConnectors = useCallback(async () => {
+    setConnectorsLoading(true);
+    try {
+      setConnectors(await api.listConnectors());
+      setStatusText("");
+    } catch (e) {
+      setStatusText(String(e));
+    } finally {
+      setConnectorsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void api
+      .getSettings()
+      .then((loaded) => {
+        setSettings(loaded);
+        setSettingsDraft(loaded);
+      })
+      .catch((e) => setStatusText(String(e)));
+  }, []);
+
+  useEffect(() => {
+    applyThemeVars(THEMES[settings.theme] ?? THEMES[DEFAULT_SETTINGS.theme]);
+  }, [settings.theme]);
+
+  useEffect(() => {
+    if (panel === "chats") {
+      void loadTrees();
+    }
+    if (panel === "settings") {
+      void loadConnectors();
+    }
+  }, [loadConnectors, loadTrees, panel]);
+
+  const saveSettings = useCallback(
+    async (input: SettingsInput) => {
+      const saved = await api.saveSettings(input);
+      setSettings(saved);
+      setSettingsDraft(saved);
+      await emit("panel-settings-saved");
+    },
+    [],
+  );
+
+  const handleSubmitSettings = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      setSavingSettings(true);
+      try {
+        await saveSettings(settingsDraft);
+        setStatusText("");
+      } catch (e) {
+        setStatusText(String(e));
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleThemeChange = useCallback(
+    (theme: ThemeName) => {
+      const next = { ...settingsDraft, theme };
+      setSettingsDraft(next);
+      void saveSettings(next).catch((e) => setStatusText(String(e)));
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleToggleConnector = useCallback(
+    async (id: string, enabled: boolean) => {
+      try {
+        await api.setConnectorEnabled(id, enabled);
+        await loadConnectors();
+        await emit("panel-settings-saved");
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [loadConnectors],
+  );
+
+  const handleCreateRoot = useCallback(async () => {
+    try {
+      const created = await api.createTree("Root");
+      await api.setCurrentNode(created.tree_id, created.root_node_id);
+      await emit<PanelSelectTreeEvent>("panel-select-tree", { treeId: created.tree_id });
+      await focusMainWindow();
+      await closeWindow();
+    } catch (e) {
+      setStatusText(String(e));
+    }
+  }, [closeWindow, focusMainWindow]);
+
+  const handleSelectTree = useCallback(
+    async (treeId: string) => {
+      try {
+        await emit<PanelSelectTreeEvent>("panel-select-tree", { treeId });
+        await focusMainWindow();
+        await closeWindow();
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [closeWindow, focusMainWindow],
+  );
+
+  const handleOpenTarget = useCallback(
+    async (target: string) => {
+      const trimmed = target.trim();
+      if (!trimmed) return;
+      try {
+        const resolved = await api.resolveTarget(trimmed);
+        if (resolved.kind === "chat") {
+          await emit<PanelOpenTargetEvent>("panel-open-target", { target: trimmed });
+          await focusMainWindow();
+          await closeWindow();
+          return;
+        }
+        const openTarget =
+          resolved.kind === "url"
+            ? resolved.target
+            : resolved.absolutePath ?? resolved.path ?? resolved.target;
+        if (!openTarget) {
+          throw new Error("Target is not openable.");
+        }
+        await openShell(openTarget);
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [closeWindow, focusMainWindow],
+  );
+
+  const handleOpenFolder = useCallback(async (path: string) => {
+    try {
+      await openShell(path);
+    } catch (e) {
+      setStatusText(String(e));
+    }
+  }, []);
+
+  const handleAskAgent = useCallback(
+    async (content: string) => {
+      try {
+        await emit<PanelStartChatEvent>("panel-start-chat", { content });
+        await focusMainWindow();
+        await closeWindow();
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [closeWindow, focusMainWindow],
+  );
+
+  const panelNode =
+    panel === "chats" ? (
+      <ChatsPanel
+        windowed
+        trees={trees}
+        activeTreeId={activeTreeId}
+        onCreateRoot={handleCreateRoot}
+        onSelectTree={handleSelectTree}
+      />
+    ) : panel === "projects" ? (
+      <ProjectWizardPanel
+        windowed
+        onClose={() => void closeWindow()}
+        onOpenFolder={handleOpenFolder}
+        onAskAgent={handleAskAgent}
+      />
+    ) : panel === "tasks" ? (
+      <AgentTasksPanel
+        windowed
+        treeId={activeTreeId}
+        nodeId={activeNodeId}
+        onClose={() => void closeWindow()}
+      />
+    ) : panel === "terminal" ? (
+      <TerminalPanel windowed onClose={() => void closeWindow()} />
+    ) : panel === "search" ? (
+      <SearchPanel windowed onClose={() => void closeWindow()} onOpenTarget={handleOpenTarget} />
+    ) : panel === "memory" ? (
+      <MemoryPanel windowed onClose={() => void closeWindow()} onOpenTarget={handleOpenTarget} />
+    ) : panel === "knowledge" ? (
+      <KnowledgePanel windowed onClose={() => void closeWindow()} onOpenTarget={handleOpenTarget} />
+    ) : (
+      <SettingsPanel
+        windowed
+        settings={settings}
+        settingsDraft={settingsDraft}
+        saving={savingSettings}
+        connectors={connectors}
+        connectorsLoading={connectorsLoading}
+        onChange={setSettingsDraft}
+        onThemeChange={handleThemeChange}
+        onToggleConnector={handleToggleConnector}
+        onCancel={() => void closeWindow()}
+        onSubmit={handleSubmitSettings}
+      />
+    );
+
+  return (
+    <main className="no-drag h-screen overflow-hidden bg-[color:var(--panel)] text-[color:var(--text)]">
+      {panelNode}
+      {statusText && (
+        <div className="fixed bottom-3 left-3 right-3 z-[100] rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 shadow-[0_8px_28px_rgba(0,0,0,0.14)]">
+          {statusText}
+        </div>
+      )}
     </main>
   );
 }
@@ -1630,8 +1779,8 @@ function TopBarButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className={`group relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:text-[color:var(--text)] focus-visible:outline-none ${
-        active ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
+      className={`group relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sm transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:text-[#202123] focus-visible:outline-none ${
+        active ? "bg-[#e7e7e7] text-[#202123]" : "text-[#5f6368]"
       }`}
     >
       {children}
@@ -1659,16 +1808,24 @@ function ChatsPanel({
   activeTreeId,
   onCreateRoot,
   onSelectTree,
+  windowed = false,
 }: {
   trees: TreeSummary[];
   activeTreeId: string | null;
   onCreateRoot: () => void;
   onSelectTree: (treeId: string) => void;
+  windowed?: boolean;
 }) {
   const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
 
   return (
-    <div className="no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-0 sm:right-auto sm:top-10 sm:w-[300px]">
+    <div
+      className={
+        windowed
+          ? "no-drag flex h-screen min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-0 sm:right-auto sm:top-10 sm:w-[300px]"
+      }
+    >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-[color:var(--text)]">Chats</div>
@@ -1684,7 +1841,7 @@ function ChatsPanel({
           <PlusIcon />
         </button>
       </div>
-      <div className="max-h-[360px] overflow-y-auto p-1.5">
+      <div className={`${windowed ? "min-h-0 flex-1" : "max-h-[360px]"} overflow-y-auto p-1.5`}>
         {orderedTrees.length === 0 ? (
           <div className="px-3 py-3 text-sm text-[color:var(--muted)]">No chats</div>
         ) : (
@@ -1732,6 +1889,7 @@ function SettingsPanel({
   onToggleConnector,
   onCancel,
   onSubmit,
+  windowed = false,
 }: {
   settings: ChatSettings;
   settingsDraft: ChatSettings;
@@ -1743,6 +1901,7 @@ function SettingsPanel({
   onToggleConnector: (id: string, enabled: boolean) => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent) => void;
+  windowed?: boolean;
 }) {
   const inputClass =
     "mt-1 h-9 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
@@ -1750,7 +1909,11 @@ function SettingsPanel({
   return (
     <form
       onSubmit={onSubmit}
-      className="no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:w-[420px]"
+      className={
+        windowed
+          ? "no-drag flex h-screen min-h-0 flex-col overflow-y-auto bg-[color:var(--panel)] p-4"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:w-[420px]"
+      }
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>

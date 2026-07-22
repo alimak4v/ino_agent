@@ -4,9 +4,10 @@ import { api, type KnowledgeSearchResult, type WatchedPath } from "../lib/api";
 interface KnowledgePanelProps {
   onClose: () => void;
   onOpenTarget: (target: string) => Promise<void>;
+  windowed?: boolean;
 }
 
-export function KnowledgePanel({ onClose, onOpenTarget }: KnowledgePanelProps) {
+export function KnowledgePanel({ onClose, onOpenTarget, windowed = false }: KnowledgePanelProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<KnowledgeSearchResult[]>([]);
   const [watchedPaths, setWatchedPaths] = useState<WatchedPath[]>([]);
@@ -100,7 +101,13 @@ export function KnowledgePanel({ onClose, onOpenTarget }: KnowledgePanelProps) {
   };
 
   return (
-    <aside className="no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[720px]">
+    <aside
+      className={
+        windowed
+          ? "no-drag flex h-screen min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[720px]"
+      }
+    >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-[color:var(--text)]">Knowledge</div>
@@ -117,7 +124,7 @@ export function KnowledgePanel({ onClose, onOpenTarget }: KnowledgePanelProps) {
         </button>
       </div>
 
-      <div className="max-h-[calc(100vh-122px)] overflow-y-auto p-4">
+      <div className={`${windowed ? "min-h-0 flex-1" : "max-h-[calc(100vh-122px)]"} overflow-y-auto p-4`}>
         <section className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>

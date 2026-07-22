@@ -9,7 +9,6 @@ import {
 } from "react";
 import {
   api,
-  isTauriRuntime,
   type AgentToolEvent,
   type AgentToolResult,
   type AgentTrace,
@@ -51,6 +50,7 @@ interface AttachmentDraft {
   size: number;
   type: string;
   content: string;
+  directFileData?: string;
   warning?: string;
 }
 
@@ -947,18 +947,15 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
   }
 
   if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
-    const text = isTauriRuntime()
-      ? await api.extractPdfText(Array.from(new Uint8Array(await file.arrayBuffer())))
-      : await extractPdfTextFallback(file);
+    const directFileData = arrayBufferToBase64(await file.arrayBuffer());
     return {
       id: crypto.randomUUID(),
       name: file.name,
       size: file.size,
       type: "application/pdf",
-      content: text.trim() || "[PDF text extraction returned no readable text.]",
-      warning: text
-        ? "PDF text extracted"
-        : "Could not extract PDF text",
+      content: "",
+      directFileData,
+      warning: "PDF sent directly to model",
     };
   }
 
@@ -1470,7 +1467,7 @@ function splitAttachmentPayload(content: string) {
   let index = 0;
   const visibleText = content
     .replace(
-      /\[Attached file: ([\s\S]*?)\]\n\n(```|~~~~)text\n[\s\S]*?\n\2/g,
+      /\[Attached file: ([\s\S]*?)\]\n\n(```|~~~~)(?:text|ino-agent-attachment)\n[\s\S]*?\n\2/g,
       (_match, descriptor: string) => {
         const parsed = descriptor.match(/^(.+?) \((.+)\)(?:\nNote: (.+))?$/);
         attachments.push({
@@ -1758,51 +1755,38 @@ function latestQuizAttempts(attempts: QuizAttempt[]) {
   );
 }
 
-async function extractPdfTextFallback(file: File) {
-  const buffer = await file.arrayBuffer();
-  const raw = new TextDecoder("latin1").decode(buffer);
-  const chunks = new Set<string>();
-
-  for (const match of raw.matchAll(/\((?:\\.|[^\\)]){6,}\)/g)) {
-    const value = match[0]
-      .slice(1, -1)
-      .replace(/\\n/g, "\n")
-      .replace(/\\r/g, "\n")
-      .replace(/\\t/g, " ")
-      .replace(/\\([()\\])/g, "$1")
-      .trim();
-    if (looksReadable(value)) {
-      chunks.add(value);
-    }
-  }
-
-  for (const match of raw.matchAll(/[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9 ,.;:!?()\-\n]{24,}/g)) {
-    const value = match[0].replace(/\s+/g, " ").trim();
-    if (looksReadable(value)) {
-      chunks.add(value);
-    }
-  }
-
-  return Array.from(chunks).join("\n").slice(0, MAX_TEXT_CHARS).trim();
-}
-
-function looksReadable(value: string) {
-  if (value.length < 12) return false;
-  const letters = Array.from(value).filter((ch) => /[A-Za-zА-Яа-яЁё]/.test(ch)).length;
-  return letters / value.length > 0.25;
-}
-
 function buildMessageContent(draft: string, attachments: AttachmentDraft[], agentMode: AgentMode) {
   const text = draft.trim();
   const modeMarker = agentMode === "auto" ? "" : `<!-- ino-agent:mode=${agentMode} -->`;
   const files = attachments.map((file) => {
     const warning = file.warning ? `\nNote: ${file.warning}` : "";
+    if (file.directFileData) {
+      return `[Attached file: ${file.name} (${file.type || "unknown"}, ${formatBytes(
+        file.size,
+      )})${warning}]\n\n\`\`\`ino-agent-attachment\n${JSON.stringify({
+        kind: "file",
+        filename: file.name,
+        mime: file.type || "application/octet-stream",
+        size: file.size,
+        data: file.directFileData,
+      })}\n\`\`\``;
+    }
     const fence = file.content.includes("```") ? "~~~~" : "```";
     return `[Attached file: ${file.name} (${file.type || "unknown"}, ${formatBytes(
       file.size,
     )})${warning}]\n\n${fence}text\n${file.content}\n${fence}`;
   });
   return [modeMarker, text, ...files].filter(Boolean).join("\n\n").trim();
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
 
 async function readFileText(file: File) {

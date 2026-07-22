@@ -7,6 +7,7 @@ use std::thread;
 use std::time::Instant;
 
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
+const DIRECT_ATTACHMENT_FENCE: &str = "```ino-agent-attachment\n";
 
 pub fn chat_completion(
     settings: &ChatSettings,
@@ -277,10 +278,7 @@ fn request_payload(
     stream: bool,
     temperature: f32,
 ) -> String {
-    let api_messages = messages
-        .iter()
-        .map(|message| json!({ "role": message.role, "content": message.content }))
-        .collect::<Vec<_>>();
+    let api_messages = messages.iter().map(message_to_api_json).collect::<Vec<_>>();
     let mut payload = json!({
         "model": settings.model,
         "messages": api_messages,
@@ -297,6 +295,110 @@ fn request_payload(
         }
     }
     payload.to_string()
+}
+
+fn message_to_api_json(message: &ChatContextMessage) -> Value {
+    if message.role == "user" {
+        if let Some(parts) = content_parts_with_direct_attachments(&message.content) {
+            return json!({ "role": message.role, "content": parts });
+        }
+    }
+    json!({ "role": message.role, "content": message.content })
+}
+
+fn content_parts_with_direct_attachments(content: &str) -> Option<Vec<Value>> {
+    let (text, attachments) = split_direct_attachment_payloads(content);
+    if attachments.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    let text = text.trim();
+    parts.push(json!({
+        "type": "text",
+        "text": if text.is_empty() {
+            "The user attached file(s). Analyze them according to the current request.".to_string()
+        } else {
+            text.to_string()
+        },
+    }));
+    for attachment in attachments {
+        parts.push(json!({
+            "type": "file",
+            "file": {
+                "filename": attachment.filename,
+                "file_data": attachment.data,
+            },
+        }));
+    }
+    Some(parts)
+}
+
+#[derive(Debug)]
+struct DirectAttachment {
+    filename: String,
+    data: String,
+}
+
+fn split_direct_attachment_payloads(content: &str) -> (String, Vec<DirectAttachment>) {
+    let mut visible = String::new();
+    let mut attachments = Vec::new();
+    let mut cursor = 0;
+
+    while let Some(relative_start) = content[cursor..].find("[Attached file: ") {
+        let start = cursor + relative_start;
+        let Some(relative_fence_start) = content[start..].find(DIRECT_ATTACHMENT_FENCE) else {
+            break;
+        };
+        let fence_start = start + relative_fence_start;
+        let payload_start = fence_start + DIRECT_ATTACHMENT_FENCE.len();
+        let Some(relative_payload_end) = content[payload_start..].find("\n```") else {
+            break;
+        };
+        let payload_end = payload_start + relative_payload_end;
+        let block_end = payload_end + "\n```".len();
+
+        visible.push_str(&content[cursor..start]);
+        let descriptor = content[start + "[Attached file: ".len()..fence_start]
+            .trim()
+            .trim_end_matches(']')
+            .trim();
+        if !descriptor.is_empty() {
+            visible.push_str("[Attached file: ");
+            visible.push_str(descriptor);
+            visible.push_str("]\n");
+        }
+
+        if let Some(attachment) = parse_direct_attachment(&content[payload_start..payload_end]) {
+            attachments.push(attachment);
+        }
+        cursor = block_end;
+    }
+
+    visible.push_str(&content[cursor..]);
+    (visible.trim().to_string(), attachments)
+}
+
+fn parse_direct_attachment(payload: &str) -> Option<DirectAttachment> {
+    let parsed = serde_json::from_str::<Value>(payload.trim()).ok()?;
+    if parsed.get("kind").and_then(Value::as_str) != Some("file") {
+        return None;
+    }
+    let filename = parsed
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or("attachment.pdf")
+        .trim()
+        .to_string();
+    let data = parsed
+        .get("data")
+        .and_then(Value::as_str)?
+        .trim()
+        .to_string();
+    if data.is_empty() {
+        return None;
+    }
+    Some(DirectAttachment { filename, data })
 }
 
 fn should_use_openai_prompt_cache_hints(endpoint: &str) -> bool {
@@ -323,7 +425,10 @@ fn prompt_cache_retention(model: &str) -> Option<&'static str> {
 
 fn prompt_cache_key(settings: &ChatSettings, messages: &[ChatContextMessage]) -> String {
     let mut prefix = format!("model:{}\n", settings.model.trim());
-    for message in messages.iter().take_while(|message| message.role == "system") {
+    for message in messages
+        .iter()
+        .take_while(|message| message.role == "system")
+    {
         prefix.push_str("system\n");
         prefix.push_str(&message.content);
         prefix.push('\n');
@@ -506,7 +611,7 @@ fn json_candidates(answer: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_stream_delta;
+    use super::{content_parts_with_direct_attachments, normalize_stream_delta};
 
     #[test]
     fn keeps_plain_stream_delta() {
@@ -532,6 +637,21 @@ mod tests {
             normalize_stream_delta("динамическое програм", "программирование", "програм"),
             "мирование"
         );
+    }
+
+    #[test]
+    fn builds_file_content_part_from_direct_attachment() {
+        let content = "Разбери этот файл\n\n[Attached file: lecture.pdf (application/pdf, 12 B)\nNote: PDF sent directly to model]\n\n```ino-agent-attachment\n{\"kind\":\"file\",\"filename\":\"lecture.pdf\",\"mime\":\"application/pdf\",\"size\":12,\"data\":\"JVBERi0=\"}\n```";
+        let parts = content_parts_with_direct_attachments(content).expect("content parts");
+
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["type"], "text");
+        assert!(parts[0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Разбери этот файл")));
+        assert_eq!(parts[1]["type"], "file");
+        assert_eq!(parts[1]["file"]["filename"], "lecture.pdf");
+        assert_eq!(parts[1]["file"]["file_data"], "JVBERi0=");
     }
 }
 

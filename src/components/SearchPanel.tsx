@@ -4,11 +4,12 @@ import { api, type KnowledgeSearchResult, type MemorySearchResult, type SearchPa
 interface SearchPanelProps {
   onClose: () => void;
   onOpenTarget: (target: string) => Promise<void>;
+  windowed?: boolean;
 }
 
 type SearchTab = "sources" | "chunks" | "memory";
 
-export function SearchPanel({ onClose, onOpenTarget }: SearchPanelProps) {
+export function SearchPanel({ onClose, onOpenTarget, windowed = false }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(10);
   const [result, setResult] = useState<SearchPageResult | null>(null);
@@ -36,7 +37,13 @@ export function SearchPanel({ onClose, onOpenTarget }: SearchPanelProps) {
   const sourceGroups = groupBySource(result?.knowledgeResults ?? []);
 
   return (
-    <aside className="no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[900px]">
+    <aside
+      className={
+        windowed
+          ? "no-drag flex h-screen min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[900px]"
+      }
+    >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-[color:var(--text)]">Search</div>
@@ -53,7 +60,11 @@ export function SearchPanel({ onClose, onOpenTarget }: SearchPanelProps) {
         </button>
       </div>
 
-      <div className="grid max-h-[calc(100vh-122px)] gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div
+        className={`grid gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_320px] ${
+          windowed ? "min-h-0 flex-1" : "max-h-[calc(100vh-122px)]"
+        }`}
+      >
         <div className="min-w-0 space-y-3">
           <form onSubmit={submit} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_110px]">
