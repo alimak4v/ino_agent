@@ -323,11 +323,16 @@ fn content_parts_with_direct_attachments(content: &str) -> Option<Vec<Value>> {
         },
     }));
     for attachment in attachments {
+        let file_data = if attachment.data.starts_with("data:") {
+            attachment.data
+        } else {
+            format!("data:{};base64,{}", attachment.mime, attachment.data)
+        };
         parts.push(json!({
             "type": "file",
             "file": {
                 "filename": attachment.filename,
-                "file_data": attachment.data,
+                "file_data": file_data,
             },
         }));
     }
@@ -337,6 +342,7 @@ fn content_parts_with_direct_attachments(content: &str) -> Option<Vec<Value>> {
 #[derive(Debug)]
 struct DirectAttachment {
     filename: String,
+    mime: String,
     data: String,
 }
 
@@ -390,6 +396,12 @@ fn parse_direct_attachment(payload: &str) -> Option<DirectAttachment> {
         .unwrap_or("attachment.pdf")
         .trim()
         .to_string();
+    let mime = parsed
+        .get("mime")
+        .and_then(Value::as_str)
+        .unwrap_or("application/pdf")
+        .trim()
+        .to_string();
     let data = parsed
         .get("data")
         .and_then(Value::as_str)?
@@ -398,7 +410,11 @@ fn parse_direct_attachment(payload: &str) -> Option<DirectAttachment> {
     if data.is_empty() {
         return None;
     }
-    Some(DirectAttachment { filename, data })
+    Some(DirectAttachment {
+        filename,
+        mime,
+        data,
+    })
 }
 
 fn should_use_openai_prompt_cache_hints(endpoint: &str) -> bool {
@@ -651,7 +667,10 @@ mod tests {
             .is_some_and(|text| text.contains("Разбери этот файл")));
         assert_eq!(parts[1]["type"], "file");
         assert_eq!(parts[1]["file"]["filename"], "lecture.pdf");
-        assert_eq!(parts[1]["file"]["file_data"], "JVBERi0=");
+        assert_eq!(
+            parts[1]["file"]["file_data"],
+            "data:application/pdf;base64,JVBERi0="
+        );
     }
 }
 
