@@ -1,6 +1,7 @@
 import {
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   Suspense,
   lazy,
   useCallback,
@@ -1178,9 +1179,9 @@ export default function App() {
             <div className="drag-region mr-1 hidden h-8 w-2 shrink-0 sm:flex" />
           )}
           <div className="relative">
-            <button
-              type="button"
-              aria-label="Chats"
+            <TopBarButton
+              label="Chats"
+              active={chatsOpen}
               onClick={() => {
                 setSettingsOpen(false);
                 setProjectsOpen(false);
@@ -1191,13 +1192,9 @@ export default function App() {
                 setKnowledgeOpen(false);
                 setChatsOpen((value) => !value);
               }}
-              className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-                chatsOpen ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
-              }`}
             >
               <ChatsIcon />
-              <span>Chats</span>
-            </button>
+            </TopBarButton>
             {chatsOpen && (
               <ChatsPanel
                 trees={trees}
@@ -1213,9 +1210,9 @@ export default function App() {
               />
             )}
           </div>
-          <button
-            type="button"
-            aria-label="Projects"
+          <TopBarButton
+            label="Projects"
+            active={projectsOpen}
             onClick={() => {
               setSettingsOpen(false);
               setChatsOpen(false);
@@ -1226,15 +1223,9 @@ export default function App() {
               setKnowledgeOpen(false);
               setProjectsOpen((value) => !value);
             }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              projectsOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
           >
             <ProjectIcon />
-            <span>Projects</span>
-          </button>
+          </TopBarButton>
           {projectsOpen && (
             <ProjectWizardPanel
               onClose={() => setProjectsOpen(false)}
@@ -1242,9 +1233,9 @@ export default function App() {
               onAskAgent={handleStartChat}
             />
           )}
-          <button
-            type="button"
-            aria-label="Tasks"
+          <TopBarButton
+            label="Tasks"
+            active={tasksOpen}
             onClick={() => {
               setSettingsOpen(false);
               setChatsOpen(false);
@@ -1255,15 +1246,9 @@ export default function App() {
               setKnowledgeOpen(false);
               setTasksOpen((value) => !value);
             }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              tasksOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
           >
             <TasksIcon />
-            <span>Tasks</span>
-          </button>
+          </TopBarButton>
           {tasksOpen && (
             <AgentTasksPanel
               treeId={selectedTreeId}
@@ -1271,9 +1256,9 @@ export default function App() {
               onClose={() => setTasksOpen(false)}
             />
           )}
-          <button
-            type="button"
-            aria-label="Terminal"
+          <TopBarButton
+            label="Terminal"
+            active={terminalOpen}
             onClick={() => {
               setSettingsOpen(false);
               setChatsOpen(false);
@@ -1284,19 +1269,13 @@ export default function App() {
               setKnowledgeOpen(false);
               setTerminalOpen((value) => !value);
             }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              terminalOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
           >
             <TerminalIcon />
-            <span>Terminal</span>
-          </button>
+          </TopBarButton>
           {terminalOpen && <TerminalPanel onClose={() => setTerminalOpen(false)} />}
-          <button
-            type="button"
-            aria-label="Search"
+          <TopBarButton
+            label="Search"
+            active={searchOpen}
             onClick={() => {
               setSettingsOpen(false);
               setChatsOpen(false);
@@ -1307,15 +1286,9 @@ export default function App() {
               setKnowledgeOpen(false);
               setSearchOpen((value) => !value);
             }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              searchOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
           >
             <SearchIcon />
-            <span>Search</span>
-          </button>
+          </TopBarButton>
           {searchOpen && (
             <SearchPanel
               onClose={() => setSearchOpen(false)}
@@ -1323,8 +1296,8 @@ export default function App() {
             />
           )}
           {!chatHomeVisible && (
-            <button
-              type="button"
+            <TopBarButton
+              label={treeVisible ? "Focus" : "Tree"}
               onClick={() => {
                 setChatsOpen(false);
                 setProjectsOpen(false);
@@ -1339,11 +1312,9 @@ export default function App() {
                   return nextVisible;
                 });
               }}
-              className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
             >
               <PanelIcon />
-              {treeVisible ? "Focus" : "Tree"}
-            </button>
+            </TopBarButton>
           )}
           {!chatHomeVisible && (
             <div className="hidden h-8 max-w-[168px] shrink-0 items-center truncate whitespace-nowrap rounded-full border border-[color:var(--border)] px-3 text-xs text-[color:var(--muted)] lg:inline-flex">
@@ -1364,9 +1335,10 @@ export default function App() {
           </div>
         )}
         <div className="absolute right-3 top-2 flex min-w-0 items-center justify-end gap-2">
-          <button
-            type="button"
-            aria-label="Memory"
+          <TopBarButton
+            label="Memory"
+            active={memoryOpen}
+            tooltipAlign="right"
             onClick={() => {
               setSettingsOpen(false);
               setChatsOpen(false);
@@ -1377,22 +1349,19 @@ export default function App() {
               setKnowledgeOpen(false);
               setMemoryOpen((value) => !value);
             }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              memoryOpen ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
-            }`}
           >
             <MemoryIcon />
-            <span className="hidden sm:inline">Memory</span>
-          </button>
+          </TopBarButton>
           {memoryOpen && (
             <MemoryPanel
               onClose={() => setMemoryOpen(false)}
               onOpenTarget={handleOpenTarget}
             />
           )}
-          <button
-            type="button"
-            aria-label="Knowledge"
+          <TopBarButton
+            label="Knowledge"
+            active={knowledgeOpen}
+            tooltipAlign="right"
             onClick={() => {
               setSettingsOpen(false);
               setChatsOpen(false);
@@ -1403,24 +1372,19 @@ export default function App() {
               setMemoryOpen(false);
               setKnowledgeOpen((value) => !value);
             }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              knowledgeOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
           >
             <KnowledgeIcon />
-            <span className="hidden sm:inline">Knowledge</span>
-          </button>
+          </TopBarButton>
           {knowledgeOpen && (
             <KnowledgePanel
               onClose={() => setKnowledgeOpen(false)}
               onOpenTarget={handleOpenTarget}
             />
           )}
-          <button
-            type="button"
-            aria-label="Settings"
+          <TopBarButton
+            label="Settings"
+            active={settingsOpen}
+            tooltipAlign="right"
             onClick={() => {
               setSettingsDraft(settings);
               setChatsOpen(false);
@@ -1432,11 +1396,9 @@ export default function App() {
               setKnowledgeOpen(false);
               setSettingsOpen((value) => !value);
             }}
-            className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
           >
             <SettingsIcon />
-            <span className="hidden sm:inline">Settings</span>
-          </button>
+          </TopBarButton>
           {settingsOpen && (
             <SettingsPanel
               settings={settings}
@@ -1647,6 +1609,41 @@ function OnboardingStep({
   );
 }
 
+function TopBarButton({
+  label,
+  active = false,
+  tooltipAlign = "center",
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  tooltipAlign?: "center" | "right";
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  const tooltipPosition =
+    tooltipAlign === "right" ? "right-0" : "left-1/2 -translate-x-1/2";
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className={`group relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:text-[color:var(--text)] focus-visible:outline-none ${
+        active ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
+      }`}
+    >
+      {children}
+      <span
+        className={`pointer-events-none absolute top-full z-[80] mt-2 whitespace-nowrap rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] px-2 py-1 text-xs font-medium text-[color:var(--text)] opacity-0 shadow-[0_8px_24px_rgba(0,0,0,0.14)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 ${tooltipPosition}`}
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
+
 function titleFromPrompt(content: string) {
   const firstLine =
     content
@@ -1671,7 +1668,7 @@ function ChatsPanel({
   const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
 
   return (
-    <div className="no-drag fixed left-3 right-3 top-12 z-50 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-0 sm:right-auto sm:top-10 sm:w-[300px]">
+    <div className="no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-0 sm:right-auto sm:top-10 sm:w-[300px]">
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-[color:var(--text)]">Chats</div>
@@ -1753,7 +1750,7 @@ function SettingsPanel({
   return (
     <form
       onSubmit={onSubmit}
-      className="no-drag fixed left-3 right-3 top-12 z-50 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)]/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.14)] backdrop-blur-xl sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:w-[420px]"
+      className="no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:w-[420px]"
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>

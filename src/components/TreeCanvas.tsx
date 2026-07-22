@@ -1051,7 +1051,7 @@ export function TreeCanvas({
 
       {tooltip && (
         <div
-          className="pointer-events-none fixed z-50 max-w-[260px] rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)]/95 px-2.5 py-1.5 text-xs font-medium text-[color:var(--text)] shadow-[0_10px_30px_rgba(0,0,0,0.16)] backdrop-blur-xl"
+          className="pointer-events-none fixed z-50 max-w-[260px] rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] px-2.5 py-1.5 text-xs font-medium text-[color:var(--text)] shadow-[0_10px_30px_rgba(0,0,0,0.16)]"
           style={{ left: tooltip.x, top: tooltip.y }}
         >
           {tooltip.title}
@@ -1060,7 +1060,7 @@ export function TreeCanvas({
 
       {menu && (
         <div
-          className="no-drag fixed z-50 min-w-[180px] rounded-[14px] border border-[color:var(--border)] bg-[color:var(--panel)]/90 p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.16)] backdrop-blur-xl"
+          className="no-drag fixed z-50 min-w-[180px] rounded-[14px] border border-[color:var(--border)] bg-[color:var(--panel)] p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.16)]"
           style={{ left: menu.x, top: menu.y }}
           onClick={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
