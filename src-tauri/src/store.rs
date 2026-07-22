@@ -15,6 +15,7 @@ const LEGACY_DB_FILENAME: &str = "treeai.sqlite3";
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL: &str = "gpt-4.1-mini";
 const DEFAULT_THEME: &str = "Minimal Light";
+const DEFAULT_LANGUAGE: &str = "English";
 const API_CONTEXT_RECENT_MESSAGE_LIMIT: usize = 16;
 const API_CONTEXT_SUMMARY_CHAR_LIMIT: usize = 420;
 const API_CONTEXT_MESSAGE_CHAR_LIMIT: usize = 12_000;
@@ -29,6 +30,20 @@ fn normalize_theme(theme: &str) -> &'static str {
         "Paper" => "Paper",
         _ => DEFAULT_THEME,
     }
+}
+
+fn normalize_language(language: &str) -> &'static str {
+    match language.trim().to_ascii_lowercase().as_str() {
+        "english" | "en" => "English",
+        "russian" | "ru" | "русский" => "Russian",
+        "spanish" | "es" | "español" | "espanol" => "Spanish",
+        "belarusian" | "belorussian" | "be" | "беларуская" | "белорусский" => "Belarusian",
+        _ => DEFAULT_LANGUAGE,
+    }
+}
+
+fn default_language() -> String {
+    DEFAULT_LANGUAGE.to_string()
 }
 const NODE_COLORS: [&str; 6] = ["slate", "sky", "mint", "amber", "rose", "violet"];
 
@@ -101,6 +116,8 @@ pub struct ChatSettings {
     pub model: String,
     pub api_key: String,
     pub theme: String,
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +126,8 @@ pub struct SettingsInput {
     pub model: String,
     pub api_key: String,
     pub theme: String,
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3829,11 +3848,13 @@ impl Store {
 
     pub fn get_settings(&self) -> Result<ChatSettings, String> {
         let theme = self.get_setting("theme", DEFAULT_THEME)?;
+        let language = self.get_setting("language", DEFAULT_LANGUAGE)?;
         Ok(ChatSettings {
             endpoint: self.get_setting("endpoint", DEFAULT_ENDPOINT)?,
             model: self.get_setting("model", DEFAULT_MODEL)?,
             api_key: self.get_setting("api_key", "")?,
             theme: normalize_theme(&theme).to_string(),
+            language: normalize_language(&language).to_string(),
         })
     }
 
@@ -3849,10 +3870,12 @@ impl Store {
             input.model.trim()
         };
         let theme = normalize_theme(&input.theme);
+        let language = normalize_language(&input.language);
         self.set_setting("endpoint", endpoint)?;
         self.set_setting("model", model)?;
         self.set_setting("api_key", input.api_key.trim())?;
         self.set_setting("theme", theme)?;
+        self.set_setting("language", language)?;
         self.get_settings()
     }
 

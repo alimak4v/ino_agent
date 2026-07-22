@@ -27,6 +27,12 @@ import {
   type TreeCreated,
   type TreeSummary,
 } from "./lib/api";
+import {
+  INTERFACE_LANGUAGES,
+  LANGUAGE_LABELS,
+  uiText,
+  type InterfaceLanguage,
+} from "./lib/i18n";
 import { applyThemeVars, THEMES, type ThemeName } from "./lib/theme";
 import { AgentTasksPanel } from "./components/AgentTasksPanel";
 import { AppDialog, type AppDialogState } from "./components/AppDialog";
@@ -52,6 +58,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
   model: "gpt-4.1-mini",
   api_key: "",
   theme: "Minimal Light",
+  language: "English",
 };
 const THEME_NAMES = Object.keys(THEMES) as ThemeName[];
 const COMPACT_LAYOUT_WIDTH = 860;
@@ -84,14 +91,14 @@ const AUX_PANEL_CONFIG: Record<
   AuxPanel,
   { label: string; title: string; width: number; height: number; minWidth: number; minHeight: number }
 > = {
-  chats: { label: "panel-chats", title: "Chats", width: 360, height: 560, minWidth: 320, minHeight: 420 },
-  projects: { label: "panel-projects", title: "Projects", width: 860, height: 680, minWidth: 760, minHeight: 560 },
-  tasks: { label: "panel-tasks", title: "Tasks", width: 900, height: 680, minWidth: 760, minHeight: 560 },
-  terminal: { label: "panel-terminal", title: "Terminal", width: 920, height: 660, minWidth: 760, minHeight: 520 },
-  search: { label: "panel-search", title: "Search", width: 980, height: 700, minWidth: 760, minHeight: 560 },
-  memory: { label: "panel-memory", title: "Memory", width: 860, height: 720, minWidth: 760, minHeight: 560 },
-  knowledge: { label: "panel-knowledge", title: "Knowledge", width: 820, height: 680, minWidth: 720, minHeight: 520 },
-  settings: { label: "panel-settings", title: "Settings", width: 520, height: 640, minWidth: 460, minHeight: 520 },
+  chats: { label: "panel-chats", title: "Chats", width: 320, height: 500, minWidth: 300, minHeight: 380 },
+  projects: { label: "panel-projects", title: "Projects", width: 740, height: 560, minWidth: 640, minHeight: 460 },
+  tasks: { label: "panel-tasks", title: "Tasks", width: 720, height: 540, minWidth: 620, minHeight: 440 },
+  terminal: { label: "panel-terminal", title: "Terminal", width: 720, height: 520, minWidth: 620, minHeight: 420 },
+  search: { label: "panel-search", title: "Search", width: 740, height: 560, minWidth: 620, minHeight: 460 },
+  memory: { label: "panel-memory", title: "Memory", width: 760, height: 580, minWidth: 640, minHeight: 480 },
+  knowledge: { label: "panel-knowledge", title: "Knowledge", width: 720, height: 540, minWidth: 620, minHeight: 440 },
+  settings: { label: "panel-settings", title: "Settings", width: 460, height: 560, minWidth: 400, minHeight: 460 },
 };
 
 function panelFromLocation(): AuxPanel | null {
@@ -156,14 +163,7 @@ export default function App() {
   });
   const [dividerDragging, setDividerDragging] = useState(false);
   const [dialog, setDialog] = useState<AppDialogState | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [chatsOpen, setChatsOpen] = useState(false);
-  const [projectsOpen, setProjectsOpen] = useState(false);
-  const [tasksOpen, setTasksOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [memoryOpen, setMemoryOpen] = useState(false);
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [activeAuxPanel, setActiveAuxPanel] = useState<AuxPanel | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const selectedNodeIdRef = useRef<string | null>(null);
   const activeTreeIdRef = useRef<string | null>(null);
@@ -238,6 +238,7 @@ export default function App() {
     !chatHomeVisible && selectedNode && selectedNode.treeTitle !== selectedNode.title
       ? selectedNode.treeTitle
       : "";
+  const language = settings.language ?? DEFAULT_SETTINGS.language;
 
   const askText = useCallback(
     (options: {
@@ -637,14 +638,7 @@ export default function App() {
       try {
         const resolved = await api.resolveTarget(trimmed);
         if (resolved.kind === "chat" && resolved.treeId && resolved.nodeId) {
-          setSettingsOpen(false);
-          setChatsOpen(false);
-          setProjectsOpen(false);
-          setTasksOpen(false);
-          setTerminalOpen(false);
-          setSearchOpen(false);
-          setMemoryOpen(false);
-          setKnowledgeOpen(false);
+          setActiveAuxPanel(null);
           setChatHomeVisible(false);
           await api.setCurrentNode(resolved.treeId, resolved.nodeId);
           await loadCanvas(resolved.nodeId, resolved.treeId);
@@ -948,8 +942,7 @@ export default function App() {
         await loadCanvas(nodeId, treeId);
 
         const connector = await api.proposeConnector(treeId, nodeId, content);
-        setKnowledgeOpen(false);
-        setSettingsOpen(true);
+        setActiveAuxPanel("settings");
         setStatusText(`Connector draft created: ${connector.manifest.name}`);
       } catch (e) {
         setChatError(String(e));
@@ -1129,8 +1122,7 @@ export default function App() {
       setChatError("");
       try {
         const connector = await api.proposeConnector(treeId, nodeId, content);
-        setKnowledgeOpen(false);
-        setSettingsOpen(true);
+        setActiveAuxPanel("settings");
         setStatusText(`Connector draft created: ${connector.manifest.name}`);
       } catch (e) {
         setChatError(String(e));
@@ -1146,29 +1138,14 @@ export default function App() {
   );
 
   const clearAuxPanelState = useCallback(() => {
-    setSettingsOpen(false);
-    setChatsOpen(false);
-    setProjectsOpen(false);
-    setTasksOpen(false);
-    setTerminalOpen(false);
-    setSearchOpen(false);
-    setMemoryOpen(false);
-    setKnowledgeOpen(false);
+    setActiveAuxPanel(null);
   }, []);
 
   const markAuxPanelOpen = useCallback(
     (panel: AuxPanel) => {
-      clearAuxPanelState();
-      if (panel === "chats") setChatsOpen(true);
-      if (panel === "projects") setProjectsOpen(true);
-      if (panel === "tasks") setTasksOpen(true);
-      if (panel === "terminal") setTerminalOpen(true);
-      if (panel === "search") setSearchOpen(true);
-      if (panel === "memory") setMemoryOpen(true);
-      if (panel === "knowledge") setKnowledgeOpen(true);
-      if (panel === "settings") setSettingsOpen(true);
+      setActiveAuxPanel(panel);
     },
-    [clearAuxPanelState],
+    [],
   );
 
   const openAuxPanelWindow = useCallback(
@@ -1229,50 +1206,25 @@ export default function App() {
           )}
           <div className="relative">
             <TopBarButton
-              label="Chats"
-              active={chatsOpen}
+              label={uiText(language, "chats")}
+              active={activeAuxPanel === "chats"}
               onClick={() => void openAuxPanelWindow("chats")}
             >
               <ChatsIcon />
             </TopBarButton>
           </div>
           <TopBarButton
-            label="Projects"
-            active={projectsOpen}
-            onClick={() => void openAuxPanelWindow("projects")}
-          >
-            <ProjectIcon />
-          </TopBarButton>
-          <TopBarButton
-            label="Tasks"
-            active={tasksOpen}
-            onClick={() => void openAuxPanelWindow("tasks")}
-          >
-            <TasksIcon />
-          </TopBarButton>
-          <TopBarButton
-            label="Terminal"
-            active={terminalOpen}
-            onClick={() => void openAuxPanelWindow("terminal")}
-          >
-            <TerminalIcon />
-          </TopBarButton>
-          <TopBarButton
-            label="Search"
-            active={searchOpen}
+            label={uiText(language, "search")}
+            active={activeAuxPanel === "search"}
             onClick={() => void openAuxPanelWindow("search")}
           >
             <SearchIcon />
           </TopBarButton>
           {!chatHomeVisible && (
             <TopBarButton
-              label={treeVisible ? "Focus" : "Tree"}
+              label={treeVisible ? uiText(language, "focus") : uiText(language, "tree")}
               onClick={() => {
-                setChatsOpen(false);
-                setProjectsOpen(false);
-                setTasksOpen(false);
-                setTerminalOpen(false);
-                setSearchOpen(false);
+                setActiveAuxPanel(null);
                 setTreeVisible((value) => {
                   const nextVisible = !value;
                   if (nextVisible) {
@@ -1284,11 +1236,6 @@ export default function App() {
             >
               <PanelIcon />
             </TopBarButton>
-          )}
-          {!chatHomeVisible && (
-            <div className="hidden h-8 max-w-[168px] shrink-0 items-center truncate whitespace-nowrap rounded-full border border-[color:var(--border)] px-3 text-xs text-[color:var(--muted)] lg:inline-flex">
-              {settings.model || DEFAULT_SETTINGS.model}
-            </div>
           )}
         </div>
         {!chatHomeVisible && (
@@ -1305,24 +1252,8 @@ export default function App() {
         )}
         <div className="absolute right-3 top-2 flex min-w-0 items-center justify-end gap-2">
           <TopBarButton
-            label="Memory"
-            active={memoryOpen}
-            tooltipAlign="right"
-            onClick={() => void openAuxPanelWindow("memory")}
-          >
-            <MemoryIcon />
-          </TopBarButton>
-          <TopBarButton
-            label="Knowledge"
-            active={knowledgeOpen}
-            tooltipAlign="right"
-            onClick={() => void openAuxPanelWindow("knowledge")}
-          >
-            <KnowledgeIcon />
-          </TopBarButton>
-          <TopBarButton
-            label="Settings"
-            active={settingsOpen}
+            label={uiText(language, "settings")}
+            active={activeAuxPanel === "settings"}
             tooltipAlign="right"
             onClick={() => void openAuxPanelWindow("settings")}
           >
@@ -1528,6 +1459,15 @@ function PanelWindowApp({ panel }: { panel: AuxPanel }) {
     [saveSettings, settingsDraft],
   );
 
+  const handleLanguageChange = useCallback(
+    (language: InterfaceLanguage) => {
+      const next = { ...settingsDraft, language };
+      setSettingsDraft(next);
+      void saveSettings(next).catch((e) => setStatusText(String(e)));
+    },
+    [saveSettings, settingsDraft],
+  );
+
   const handleToggleConnector = useCallback(
     async (id: string, enabled: boolean) => {
       try {
@@ -1614,6 +1554,43 @@ function PanelWindowApp({ panel }: { panel: AuxPanel }) {
     [closeWindow, focusMainWindow],
   );
 
+  const handleOpenPanel = useCallback(
+    async (nextPanel: AuxPanel) => {
+      if (nextPanel === panel) return;
+      try {
+        const config = AUX_PANEL_CONFIG[nextPanel];
+        const existing = await WebviewWindow.getByLabel(config.label);
+        if (existing) {
+          await existing.show();
+          await existing.setFocus();
+          await closeWindow();
+          return;
+        }
+        const params = new URLSearchParams({ panel: nextPanel });
+        const nextWindow = new WebviewWindow(config.label, {
+          url: `/?${params.toString()}`,
+          title: config.title,
+          width: config.width,
+          height: config.height,
+          minWidth: config.minWidth,
+          minHeight: config.minHeight,
+          center: true,
+          resizable: true,
+          decorations: true,
+          hiddenTitle: false,
+          preventOverflow: true,
+        });
+        void nextWindow.once("tauri://error", (event) => {
+          setStatusText(String(event.payload));
+        });
+        await closeWindow();
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [closeWindow, panel],
+  );
+
   const panelNode =
     panel === "chats" ? (
       <ChatsPanel
@@ -1655,7 +1632,9 @@ function PanelWindowApp({ panel }: { panel: AuxPanel }) {
         connectorsLoading={connectorsLoading}
         onChange={setSettingsDraft}
         onThemeChange={handleThemeChange}
+        onLanguageChange={handleLanguageChange}
         onToggleConnector={handleToggleConnector}
+        onOpenPanel={handleOpenPanel}
         onCancel={() => void closeWindow()}
         onSubmit={handleSubmitSettings}
       />
@@ -1886,7 +1865,9 @@ function SettingsPanel({
   connectorsLoading,
   onChange,
   onThemeChange,
+  onLanguageChange,
   onToggleConnector,
+  onOpenPanel,
   onCancel,
   onSubmit,
   windowed = false,
@@ -1898,13 +1879,18 @@ function SettingsPanel({
   connectorsLoading: boolean;
   onChange: (next: ChatSettings) => void;
   onThemeChange: (theme: ThemeName) => void;
+  onLanguageChange: (language: InterfaceLanguage) => void;
   onToggleConnector: (id: string, enabled: boolean) => void;
+  onOpenPanel: (panel: AuxPanel) => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent) => void;
   windowed?: boolean;
 }) {
+  const language = settingsDraft.language ?? settings.language ?? DEFAULT_SETTINGS.language;
   const inputClass =
     "mt-1 h-9 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
+  const toolButtonClass =
+    "flex h-9 min-w-0 items-center gap-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-left text-xs text-[color:var(--text)] transition-colors hover:bg-[color:var(--panel-soft)]";
 
   return (
     <form
@@ -1917,18 +1903,20 @@ function SettingsPanel({
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-medium text-[color:var(--text)]">Agent settings</div>
+          <div className="text-sm font-medium text-[color:var(--text)]">
+            {uiText(language, "agentSettings")}
+          </div>
           <div className="text-xs text-[color:var(--muted)]">
-            Appearance, model and API access
+            {uiText(language, "appearanceModelApi")}
           </div>
         </div>
         <div className="rounded-full border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--muted)]">
-          {settings.api_key ? "API connected" : "No API key"}
+          {settings.api_key ? uiText(language, "apiConnected") : uiText(language, "noApiKey")}
         </div>
       </div>
       <div className="grid gap-2">
         <label className="block text-xs text-[color:var(--muted)]">
-          Theme
+          {uiText(language, "theme")}
           <select
             value={settingsDraft.theme}
             onChange={(event) => onThemeChange(event.target.value as ThemeName)}
@@ -1942,7 +1930,21 @@ function SettingsPanel({
           </select>
         </label>
         <label className="block text-xs text-[color:var(--muted)]">
-          Model
+          {uiText(language, "language")}
+          <select
+            value={language}
+            onChange={(event) => onLanguageChange(event.target.value as InterfaceLanguage)}
+            className={inputClass}
+          >
+            {INTERFACE_LANGUAGES.map((languageName) => (
+              <option key={languageName} value={languageName}>
+                {LANGUAGE_LABELS[languageName]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-xs text-[color:var(--muted)]">
+          {uiText(language, "model")}
           <input
             type="text"
             value={settingsDraft.model}
@@ -1952,7 +1954,7 @@ function SettingsPanel({
           />
         </label>
         <label className="block text-xs text-[color:var(--muted)]">
-          API key
+          {uiText(language, "apiKey")}
           <input
             type="password"
             value={settingsDraft.api_key}
@@ -1962,7 +1964,7 @@ function SettingsPanel({
           />
         </label>
         <label className="block text-xs text-[color:var(--muted)]">
-          Endpoint
+          {uiText(language, "endpoint")}
           <input
             type="text"
             value={settingsDraft.endpoint}
@@ -1973,21 +1975,55 @@ function SettingsPanel({
         </label>
       </div>
       <div className="mt-4 border-t border-[color:var(--border)] pt-3">
+        <div className="mb-2">
+          <div className="text-sm font-medium text-[color:var(--text)]">
+            {uiText(language, "tools")}
+          </div>
+          <div className="text-xs text-[color:var(--muted)]">
+            {uiText(language, "toolsDescription")}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" onClick={() => onOpenPanel("projects")} className={toolButtonClass}>
+            <ProjectIcon />
+            <span className="truncate">{uiText(language, "projects")}</span>
+          </button>
+          <button type="button" onClick={() => onOpenPanel("tasks")} className={toolButtonClass}>
+            <TasksIcon />
+            <span className="truncate">{uiText(language, "tasks")}</span>
+          </button>
+          <button type="button" onClick={() => onOpenPanel("terminal")} className={toolButtonClass}>
+            <TerminalIcon />
+            <span className="truncate">{uiText(language, "terminal")}</span>
+          </button>
+          <button type="button" onClick={() => onOpenPanel("memory")} className={toolButtonClass}>
+            <MemoryIcon />
+            <span className="truncate">{uiText(language, "memory")}</span>
+          </button>
+          <button type="button" onClick={() => onOpenPanel("knowledge")} className={toolButtonClass}>
+            <KnowledgeIcon />
+            <span className="truncate">{uiText(language, "knowledge")}</span>
+          </button>
+        </div>
+      </div>
+      <div className="mt-4 border-t border-[color:var(--border)] pt-3">
         <div className="mb-2 flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium text-[color:var(--text)]">Connectors</div>
+            <div className="text-sm font-medium text-[color:var(--text)]">
+              {uiText(language, "connectors")}
+            </div>
             <div className="text-xs text-[color:var(--muted)]">
-              Generated skills stay disabled until enabled
+              {uiText(language, "connectorsDescription")}
             </div>
           </div>
           <div className="rounded-full border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--muted)]">
-            {connectorsLoading ? "Loading" : connectors.length}
+            {connectorsLoading ? uiText(language, "loading") : connectors.length}
           </div>
         </div>
         <div className="max-h-[240px] space-y-2 overflow-y-auto pr-1">
           {connectors.length === 0 ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2 text-xs text-[color:var(--muted)]">
-              No connector drafts yet.
+              {uiText(language, "noConnectorDrafts")}
             </div>
           ) : (
             connectors.map((connector) => (
@@ -2015,13 +2051,13 @@ function SettingsPanel({
                         : "bg-[color:var(--button)] text-[color:var(--button-text)]"
                     }`}
                   >
-                    {connector.manifest.enabled ? "Disable" : "Enable"}
+                    {connector.manifest.enabled ? uiText(language, "disable") : uiText(language, "enable")}
                   </button>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {connector.pending && (
                     <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--muted)]">
-                      pending
+                      {uiText(language, "pending")}
                     </span>
                   )}
                   {connector.manifest.schedule && (
@@ -2044,7 +2080,7 @@ function SettingsPanel({
                 {connector.files.length > 0 && (
                   <details className="mt-2">
                     <summary className="cursor-pointer text-xs text-[color:var(--muted)]">
-                      Files
+                      {uiText(language, "files")}
                     </summary>
                     <div className="mt-2 space-y-2">
                       {connector.files.map((file) => (
@@ -2074,14 +2110,14 @@ function SettingsPanel({
           onClick={onCancel}
           className="h-8 rounded-full px-3 text-xs text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
         >
-          Cancel
+          {uiText(language, "cancel")}
         </button>
         <button
           type="submit"
           disabled={saving}
           className="h-8 rounded-full bg-[color:var(--button)] px-3 text-xs font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:opacity-50"
         >
-          {saving ? "Saving" : "Save"}
+          {saving ? uiText(language, "saving") : uiText(language, "save")}
         </button>
       </div>
     </form>

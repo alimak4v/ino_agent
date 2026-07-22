@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { InterfaceLanguage } from "./i18n";
 import type { ThemeName } from "./theme";
 
 declare global {
@@ -68,6 +69,7 @@ export interface ChatSettings {
   model: string;
   api_key: string;
   theme: ThemeName;
+  language: InterfaceLanguage;
 }
 
 export interface AiBranchCreated {
@@ -530,6 +532,7 @@ const FALLBACK_SETTINGS: ChatSettings = {
   model: "gpt-4.1-mini",
   api_key: "",
   theme: "Minimal Light",
+  language: "English",
 };
 
 const DESKTOP_ONLY_ERROR = "Open the desktop app window to use this action.";
