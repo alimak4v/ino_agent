@@ -1984,6 +1984,7 @@ function MainSidebar({
 }) {
   const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
+  const profileRootRef = useRef<HTMLDivElement | null>(null);
   const [profile, setProfile] = useState<SidebarProfile>(() => loadSidebarProfile());
   const [profileOpen, setProfileOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -2007,6 +2008,24 @@ function MainSidebar({
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && profileRootRef.current?.contains(target)) return;
+      setProfileOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setProfileOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [profileOpen]);
 
   const updateProfile = useCallback((next: SidebarProfile) => {
     setProfile(next);
@@ -2034,10 +2053,10 @@ function MainSidebar({
     .join("") || "IA";
 
   return (
-    <aside className="no-drag hidden h-screen w-[292px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--sidebar)] text-[color:var(--text)] md:flex">
+    <aside className="no-drag hidden h-screen w-[260px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--sidebar)] text-[color:var(--text)] md:flex">
       <div className={`drag-region shrink-0 ${compactTopInset ? "h-0" : "h-10"}`} />
-      <div className="flex h-12 shrink-0 items-center justify-between px-4">
-        <div className="truncate text-xl font-semibold tracking-normal">ino-agent</div>
+      <div className="flex h-11 shrink-0 items-center justify-between px-3">
+        <div className="truncate text-lg font-semibold tracking-normal">ino-agent</div>
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
@@ -2063,18 +2082,18 @@ function MainSidebar({
         <button
           type="button"
           onClick={onNewChat}
-          className="flex h-11 w-full items-center gap-3 rounded-2xl bg-[color:var(--selected)] px-3 text-left text-[15px] font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--panel-soft)] focus-visible:bg-[color:var(--panel-soft)] focus-visible:outline-none"
+          className="flex h-10 w-full items-center gap-2.5 rounded-2xl bg-[color:var(--selected)] px-3 text-left text-sm font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--panel-soft)] focus-visible:bg-[color:var(--panel-soft)] focus-visible:outline-none"
         >
           <NewChatIcon />
           <span className="truncate">{uiText(language, "newChat")}</span>
         </button>
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
-        <div className="mb-2 px-3 text-sm font-semibold text-[color:var(--text)]">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        <div className="mb-2 px-3 text-[13px] font-semibold text-[color:var(--text)]">
           {uiText(language, "recent")}
         </div>
         {orderedTrees.length === 0 ? (
-          <div className="px-3 py-2 text-sm text-[color:var(--muted)]">{uiText(language, "noChats")}</div>
+          <div className="px-3 py-2 text-[13px] text-[color:var(--muted)]">{uiText(language, "noChats")}</div>
         ) : (
           <div className="space-y-0.5">
             {orderedTrees.map((tree) => {
@@ -2090,7 +2109,7 @@ function MainSidebar({
                       y: Math.max(8, Math.min(event.clientY, window.innerHeight - 132)),
                     });
                   }}
-                  className={`group flex h-10 w-full min-w-0 items-center gap-2 rounded-2xl pl-3 pr-1.5 text-left text-[15px] transition-colors focus-visible:outline-none ${
+                  className={`group flex h-9 w-full min-w-0 items-center gap-2 rounded-2xl pl-3 pr-1.5 text-left text-sm transition-colors focus-visible:outline-none ${
                     active
                       ? "bg-[color:var(--selected)] text-[color:var(--text)]"
                       : "text-[color:var(--text)] hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)]"
@@ -2154,32 +2173,32 @@ function MainSidebar({
         </div>
       )}
       <div
-        className="relative shrink-0 border-t border-[color:var(--border)] p-3"
-        onMouseLeave={() => setProfileOpen(false)}
+        ref={profileRootRef}
+        className="relative shrink-0 border-t border-[color:var(--border)] p-2.5"
       >
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onMouseEnter={() => setProfileOpen(true)}
-            onFocus={() => setProfileOpen(true)}
-            className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-2xl px-3 text-left transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+            onClick={() => setProfileOpen((open) => !open)}
+            aria-expanded={profileOpen}
+            className="flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-2xl px-2.5 text-left transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             {profile.avatarDataUrl ? (
               <img
                 src={profile.avatarDataUrl}
                 alt=""
-                className="h-8 w-8 shrink-0 rounded-full object-cover"
+                className="h-7 w-7 shrink-0 rounded-full object-cover"
               />
             ) : (
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-xs font-semibold text-white">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-[11px] font-semibold text-white">
                 {initials}
               </span>
             )}
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[15px] font-medium text-[color:var(--text)]">
+              <span className="block truncate text-sm font-medium text-[color:var(--text)]">
                 {profile.name}
               </span>
-              <span className="block truncate text-xs text-[color:var(--muted)]">
+              <span className="block truncate text-[11px] text-[color:var(--muted)]">
                 {uiText(language, "profile")}
               </span>
             </span>
@@ -2189,15 +2208,14 @@ function MainSidebar({
             onClick={onOpenSettings}
             aria-label={uiText(language, "settings")}
             title={uiText(language, "settings")}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             <SettingsIcon />
           </button>
         </div>
         {profileOpen && (
           <div
-            className="absolute bottom-[68px] left-3 right-3 z-[120] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 text-[color:var(--text)] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
-            onMouseEnter={() => setProfileOpen(true)}
+            className="absolute bottom-[62px] left-2.5 right-2.5 z-[120] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 text-[color:var(--text)] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
           >
             <div className="mb-3 text-sm font-semibold">{uiText(language, "profile")}</div>
             <div className="flex items-center gap-3">
@@ -2205,10 +2223,10 @@ function MainSidebar({
                 <img
                   src={profile.avatarDataUrl}
                   alt=""
-                  className="h-14 w-14 shrink-0 rounded-full object-cover"
+                  className="h-12 w-12 shrink-0 rounded-full object-cover"
                 />
               ) : (
-                <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-sm font-semibold text-white">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-sm font-semibold text-white">
                   {initials}
                 </span>
               )}
@@ -2216,7 +2234,7 @@ function MainSidebar({
                 <button
                   type="button"
                   onClick={() => avatarInputRef.current?.click()}
-                  className="h-8 rounded-full bg-[color:var(--panel-soft)] px-3 text-xs font-medium transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+                  className="h-7 rounded-full bg-[color:var(--panel-soft)] px-3 text-xs font-medium transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
                 >
                   {uiText(language, "chooseAvatar")}
                 </button>
@@ -2246,7 +2264,7 @@ function MainSidebar({
                     updateProfile({ ...profile, name: "ino-agent" });
                   }
                 }}
-                className="mt-1 h-9 w-full rounded-2xl border border-transparent bg-[color:var(--panel-soft)] px-3 text-sm text-[color:var(--text)] outline-none focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
+                className="mt-1 h-8 w-full rounded-2xl border border-transparent bg-[color:var(--panel-soft)] px-3 text-sm text-[color:var(--text)] outline-none focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
               />
             </label>
           </div>
