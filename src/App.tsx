@@ -2055,8 +2055,8 @@ function MainSidebar({
   return (
     <aside className="no-drag hidden h-screen w-[260px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--sidebar)] text-[color:var(--text)] md:flex">
       <div className={`drag-region shrink-0 ${compactTopInset ? "h-0" : "h-10"}`} />
-      <div className="flex h-11 shrink-0 items-center justify-between px-3">
-        <div className="truncate text-lg font-semibold tracking-normal">ino-agent</div>
+      <div className="flex h-12 shrink-0 items-center justify-between px-3">
+        <div className="truncate text-xl font-semibold tracking-normal">ino-agent</div>
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
@@ -2082,7 +2082,7 @@ function MainSidebar({
         <button
           type="button"
           onClick={onNewChat}
-          className="flex h-10 w-full items-center gap-2.5 rounded-2xl bg-[color:var(--selected)] px-3 text-left text-sm font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--panel-soft)] focus-visible:bg-[color:var(--panel-soft)] focus-visible:outline-none"
+          className="flex h-9 w-full items-center gap-2 rounded-2xl bg-[color:var(--selected)] px-3 text-left text-sm font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--panel-soft)] focus-visible:bg-[color:var(--panel-soft)] focus-visible:outline-none"
         >
           <NewChatIcon />
           <span className="truncate">{uiText(language, "newChat")}</span>
