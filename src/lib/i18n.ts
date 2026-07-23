@@ -47,6 +47,8 @@ type TranslationKey =
   | "deleteChatConfirm"
   | "renameChat"
   | "openTree"
+  | "openSidebar"
+  | "closeSidebar"
   | "profile"
   | "displayName"
   | "chooseAvatar"
@@ -134,6 +136,8 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     deleteChatConfirm: "Delete chat",
     renameChat: "Rename chat",
     openTree: "Open tree",
+    openSidebar: "Open sidebar",
+    closeSidebar: "Close sidebar",
     profile: "Profile",
     displayName: "Name",
     chooseAvatar: "Choose avatar",
@@ -220,6 +224,8 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     deleteChatConfirm: "Удалить чат",
     renameChat: "Переименовать чат",
     openTree: "Открыть дерево",
+    openSidebar: "Открыть боковую панель",
+    closeSidebar: "Закрыть боковую панель",
     profile: "Профиль",
     displayName: "Имя",
     chooseAvatar: "Выбрать аватарку",
@@ -306,6 +312,8 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     deleteChatConfirm: "Eliminar chat",
     renameChat: "Renombrar chat",
     openTree: "Abrir árbol",
+    openSidebar: "Abrir barra lateral",
+    closeSidebar: "Cerrar barra lateral",
     profile: "Perfil",
     displayName: "Nombre",
     chooseAvatar: "Elegir avatar",
@@ -392,6 +400,8 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     deleteChatConfirm: "Выдаліць чат",
     renameChat: "Перайменаваць чат",
     openTree: "Адкрыць дрэва",
+    openSidebar: "Адкрыць бакавую панэль",
+    closeSidebar: "Закрыць бакавую панэль",
     profile: "Профіль",
     displayName: "Імя",
     chooseAvatar: "Выбраць аватар",

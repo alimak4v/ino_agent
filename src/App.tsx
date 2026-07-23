@@ -209,6 +209,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [statusText, setStatusText] = useState("");
   const [treeVisible, setTreeVisible] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatHomeVisible, setChatHomeVisible] = useState(true);
   const [startingChat, setStartingChat] = useState(false);
   const [windowFullscreen, setWindowFullscreen] = useState(false);
@@ -1329,19 +1330,22 @@ export default function App() {
   return (
     <main className="no-drag relative flex h-screen overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)]">
       <div className="drag-region absolute left-0 right-0 top-0 z-20 h-2" />
-      <MainSidebar
-        trees={trees}
-        activeTreeId={activeTreeId}
-        language={language}
-        onNewChat={handleNewChat}
-        onSelectTree={handleSelectTree}
-        onDeleteTree={handleDeleteTreeFromSidebar}
-        onRenameTree={handleRenameTreeFromSidebar}
-        onOpenTree={handleOpenTreeFromSidebar}
-        onOpenSearch={() => void openAuxPanelWindow("search")}
-        onOpenSettings={() => void openAuxPanelWindow("settings")}
-        compactTopInset={!titlebarNeedsTrafficSpace}
-      />
+      {sidebarOpen && (
+        <MainSidebar
+          trees={trees}
+          activeTreeId={activeTreeId}
+          language={language}
+          onNewChat={handleNewChat}
+          onSelectTree={handleSelectTree}
+          onDeleteTree={handleDeleteTreeFromSidebar}
+          onRenameTree={handleRenameTreeFromSidebar}
+          onOpenTree={handleOpenTreeFromSidebar}
+          onOpenSearch={() => void openAuxPanelWindow("search")}
+          onOpenSettings={() => void openAuxPanelWindow("settings")}
+          onCloseSidebar={() => setSidebarOpen(false)}
+          compactTopInset={!titlebarNeedsTrafficSpace}
+        />
+      )}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header
           className={`no-drag relative z-40 flex h-12 shrink-0 items-center bg-[color:var(--app-bg)] px-3 ${
@@ -1371,6 +1375,27 @@ export default function App() {
               <SearchIcon />
             </TopBarButton>
           </div>
+          {!sidebarOpen && (
+            <div
+              className={`absolute left-3 top-2 hidden min-w-0 items-center justify-start gap-2 md:flex ${
+                titlebarNeedsTrafficSpace ? "pl-[72px]" : "pl-0"
+              }`}
+            >
+              <TopBarButton
+                label={uiText(language, "search")}
+                active={activeAuxPanel === "search"}
+                onClick={() => void openAuxPanelWindow("search")}
+              >
+                <SearchIcon />
+              </TopBarButton>
+              <TopBarButton
+                label={uiText(language, "openSidebar")}
+                onClick={() => setSidebarOpen(true)}
+              >
+                <SidebarToggleIcon />
+              </TopBarButton>
+            </div>
+          )}
           {!chatHomeVisible && (
             <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(560px,42vw)] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center leading-tight">
               <div className="max-w-full truncate text-sm font-semibold text-[color:var(--text)]">
@@ -1398,7 +1423,7 @@ export default function App() {
                   });
                 }}
               >
-                <PanelIcon />
+                <TreeGraphIcon />
               </TopBarButton>
             )}
             <div className="md:hidden">
@@ -1941,6 +1966,7 @@ function MainSidebar({
   onOpenTree,
   onOpenSearch,
   onOpenSettings,
+  onCloseSidebar,
   compactTopInset,
 }: {
   trees: TreeSummary[];
@@ -1953,6 +1979,7 @@ function MainSidebar({
   onOpenTree: (tree: TreeSummary) => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
+  onCloseSidebar: () => void;
   compactTopInset: boolean;
 }) {
   const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
@@ -2011,15 +2038,26 @@ function MainSidebar({
       <div className={`drag-region shrink-0 ${compactTopInset ? "h-0" : "h-10"}`} />
       <div className="flex h-12 shrink-0 items-center justify-between px-4">
         <div className="truncate text-xl font-semibold tracking-normal">ino-agent</div>
-        <button
-          type="button"
-          onClick={onOpenSearch}
-          aria-label={uiText(language, "search")}
-          title={uiText(language, "search")}
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
-        >
-          <SearchIcon />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            aria-label={uiText(language, "search")}
+            title={uiText(language, "search")}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+          >
+            <SearchIcon />
+          </button>
+          <button
+            type="button"
+            onClick={onCloseSidebar}
+            aria-label={uiText(language, "closeSidebar")}
+            title={uiText(language, "closeSidebar")}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+          >
+            <SidebarToggleIcon />
+          </button>
+        </div>
       </div>
       <nav className="shrink-0 space-y-1 px-3 py-2">
         <button
@@ -2086,7 +2124,7 @@ function MainSidebar({
             }}
             className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm text-[#171717] transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
           >
-            <PanelIcon />
+            <TreeGraphIcon />
             <span className="truncate">{uiText(language, "openTree")}</span>
           </button>
           <button
@@ -2818,7 +2856,7 @@ function PlusIcon() {
   );
 }
 
-function PanelIcon() {
+function SidebarToggleIcon() {
   return (
     <svg
       aria-hidden="true"
@@ -2832,6 +2870,28 @@ function PanelIcon() {
     >
       <rect x="4" y="5" width="16" height="14" rx="2" />
       <path d="M10 5v14" />
+    </svg>
+  );
+}
+
+function TreeGraphIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 6v4" />
+      <path d="M12 10 7 15" />
+      <path d="m12 10 5 5" />
+      <circle cx="12" cy="5" r="2.5" />
+      <circle cx="6" cy="17" r="2.5" />
+      <circle cx="18" cy="17" r="2.5" />
     </svg>
   );
 }
