@@ -11,7 +11,7 @@ mod terminal;
 
 use encoding_rs::WINDOWS_1251;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -1579,6 +1579,9 @@ fn run_agent_tool_turn(
         &window,
         store.clone(),
         &workspace_root,
+        settings,
+        messages,
+        &user_request,
         decision.tool_calls,
         request_id,
         tree_id,
@@ -1616,6 +1619,9 @@ fn run_agent_tool_turn(
             &window,
             store.clone(),
             &workspace_root,
+            settings,
+            messages,
+            &user_request,
             followup.tool_calls,
             request_id,
             tree_id,
@@ -1697,6 +1703,9 @@ fn execute_agent_tool_calls(
     window: &Window,
     store: Arc<Mutex<store::Store>>,
     workspace_root: &std::path::Path,
+    settings: &store::ChatSettings,
+    messages: &[store::ChatContextMessage],
+    user_request: &str,
     calls: Vec<agent_tools::AgentToolCall>,
     request_id: &str,
     tree_id: &str,
@@ -1708,7 +1717,24 @@ fn execute_agent_tool_calls(
         .into_iter()
         .take(limit)
         .map(|call| {
-            if agent_tools::tool_needs_store(&call.tool) {
+            if call.tool == "self_review" {
+                let result = execute_self_review_tool(
+                    settings,
+                    messages,
+                    user_request,
+                    permission_profile,
+                    call,
+                );
+                emit_agent_tool_event(
+                    window,
+                    request_id,
+                    tree_id,
+                    node_id,
+                    permission_profile,
+                    &result,
+                );
+                Ok(result)
+            } else if agent_tools::tool_needs_store(&call.tool) {
                 let store = &mut *lock_store(&store)?;
                 let result = agent_tools::execute_tool(
                     Some(store),
@@ -1740,6 +1766,75 @@ fn execute_agent_tool_calls(
             }
         })
         .collect::<Result<Vec<_>, String>>()
+}
+
+fn execute_self_review_tool(
+    settings: &store::ChatSettings,
+    messages: &[store::ChatContextMessage],
+    user_request: &str,
+    permission_profile: agent_tools::AgentToolPermissionProfile,
+    call: agent_tools::AgentToolCall,
+) -> agent_tools::AgentToolResult {
+    if !permission_profile.allows("self_review") {
+        return agent_tools::AgentToolResult {
+            tool: call.tool,
+            ok: false,
+            content: json!({
+                "error": "Tool is not allowed by the current permission profile.",
+                "permissionProfile": permission_profile.name(),
+            }),
+        };
+    }
+
+    let mode = call
+        .args
+        .get("mode")
+        .and_then(|value| value.as_str())
+        .unwrap_or("full_history");
+    let isolated = matches!(mode, "isolated" | "no_history" | "without_history");
+    let review_question = call
+        .args
+        .get("question")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Critically review the agent's reasoning and point out mistakes, missing checks, or better next steps.");
+
+    let critic_prompt = format!(
+        "You are an independent critic pass for ino-agent. Review the agent's own reasoning with a skeptical engineering mindset. Focus on concrete mistakes, missing evidence, contradictions, and next actions. Do not call tools. Answer in the user's language.\n\nReview task: {review_question}"
+    );
+    let mut critic_messages = vec![store::ChatContextMessage {
+        role: "system".to_string(),
+        content: critic_prompt,
+    }];
+    if isolated {
+        critic_messages.push(store::ChatContextMessage {
+            role: "user".to_string(),
+            content: user_request.to_string(),
+        });
+    } else {
+        critic_messages.extend(messages.iter().cloned());
+    }
+
+    match api::chat_completion(settings, &critic_messages) {
+        Ok(review) => agent_tools::AgentToolResult {
+            tool: call.tool,
+            ok: true,
+            content: json!({
+                "mode": if isolated { "isolated" } else { "full_history" },
+                "usedMessages": critic_messages.len(),
+                "review": review,
+            }),
+        },
+        Err(error) => agent_tools::AgentToolResult {
+            tool: call.tool,
+            ok: false,
+            content: json!({
+                "mode": if isolated { "isolated" } else { "full_history" },
+                "error": error,
+            }),
+        },
+    }
 }
 
 fn emit_agent_tool_event(
@@ -2215,18 +2310,20 @@ fn agent_tool_planner_prompt(
 Return ONLY compact JSON in one of these shapes:
 {{"final_answer":"..."}}
 {{"tool_calls":[{{"tool":"search_memory","args":{{"query":"...","limit":8}}}}]}}
+{{"tool_calls":[{{"tool":"self_review","args":{{"mode":"full_history","question":"..."}}}}]}}
 
 {permission_summary}
 
 Rules:
 - Use only tools allowed by the permission profile.
-- Use tools only when the user explicitly asks to search memory, inspect files, run/check/build code, index files, or save memory.
+- Use tools only when the user explicitly asks to search memory, inspect files, run/check/build code, index files, save memory, or critically review your own reasoning.
 - Prefer search_memory for "remember/найди в памяти/что мы сохраняли" style requests.
 - Prefer add_memory only when the user explicitly asks to remember/save a fact and the profile allows it.
 - Prefer index_path when the user asks to index, remember a file/folder, or add local files to knowledge and the profile allows it.
 - Prefer open_target when the user asks where a memory points or how to open a saved source.
 - Prefer list_files/read_file for file inspection.
 - Use run_command only for explicit command execution, tests, builds, or local inspection and only when the profile allows it.
+- Prefer self_review when the user asks you to call yourself, check your own reasoning, analyze your own steps critically, or compare a full-history view with an isolated view. Use mode "full_history" when the user wants the whole dialogue; use "isolated" when they ask for no history/without context.
 - Never request destructive actions. Commands run without shell operators and inside workspace only.
 - For chat memories, use target "chat://tree/{tree_id}/node/{node_id}".
 - Current workspace root: {workspace_root}
@@ -2290,6 +2387,7 @@ or
 Rules:
 - Request more tools only if the current observations are insufficient to answer correctly.
 - Do not repeat a tool call that already failed or already returned the needed information.
+- Do not request self_review more than once in a single tool loop.
 - Prefer no more tools when the answer can be produced from existing observations.
 - At most {remaining} more tool call(s) are allowed.
 - Never request destructive actions.
@@ -2407,7 +2505,26 @@ fn wants_agent_tools(raw: &str) -> bool {
     ]
     .iter()
     .any(|needle| contains(&text, needle));
-    memory || files || command
+    let self_review = [
+        "проверь себя",
+        "критическим взглядом",
+        "критический взгляд",
+        "проанализируй свои шаги",
+        "анализ своих шагов",
+        "вызови себя",
+        "сам себя",
+        "со всей историей",
+        "без истории",
+        "without history",
+        "full history",
+        "self review",
+        "review yourself",
+        "criticize your reasoning",
+        "critically review",
+    ]
+    .iter()
+    .any(|needle| contains(&text, needle));
+    memory || files || command || self_review
 }
 
 fn remember_request_to_memory_input(

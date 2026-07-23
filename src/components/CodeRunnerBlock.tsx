@@ -60,17 +60,21 @@ export function CodeRunnerBlock({ language, code }: CodeRunnerBlockProps) {
             type="button"
             disabled={running}
             onClick={() => void run()}
-            className="inline-flex h-8 items-center justify-center rounded-full bg-[color:var(--button)] px-4 text-xs font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={running ? "Running" : "Run"}
+            title={running ? "Running" : "Run"}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[color:var(--button)] text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {running ? "Running" : "Run"}
+            {running ? <SpinnerIcon /> : <PlayIcon />}
           </button>
           <button
             type="button"
             disabled={running}
             onClick={() => setEditing((current) => !current)}
-            className="inline-flex h-8 items-center justify-center rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={editing ? "Done" : "Edit"}
+            title={editing ? "Done" : "Edit"}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {editing ? "Done" : "Edit"}
+            {editing ? <CheckIcon /> : <PencilIcon />}
           </button>
           <button
             type="button"
@@ -80,16 +84,20 @@ export function CodeRunnerBlock({ language, code }: CodeRunnerBlockProps) {
               setResult(null);
               setError("");
             }}
-            className="inline-flex h-8 items-center justify-center rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="Reset"
+            title="Reset"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Reset
+            <RotateIcon />
           </button>
           <button
             type="button"
             onClick={() => void navigator.clipboard?.writeText(value)}
-            className="inline-flex h-8 items-center justify-center rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
+            aria-label="Copy"
+            title="Copy"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
           >
-            Copy
+            <CopyIcon />
           </button>
         </div>
       </div>
@@ -153,6 +161,80 @@ function OutputPanel({ label, value }: { label: string; value: string }) {
         {value || " "}
       </pre>
     </div>
+  );
+}
+
+function ToolIcon({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4"
+    >
+      {children}
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <ToolIcon>
+      <path d="M7 5v14l11-7z" fill="currentColor" stroke="none" />
+    </ToolIcon>
+  );
+}
+
+function SpinnerIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="h-4 w-4 animate-spin"
+    >
+      <circle className="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" />
+      <path className="opacity-90" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <ToolIcon>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </ToolIcon>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <ToolIcon>
+      <path d="m20 6-11 11-5-5" />
+    </ToolIcon>
+  );
+}
+
+function RotateIcon() {
+  return (
+    <ToolIcon>
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </ToolIcon>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <ToolIcon>
+      <rect width="14" height="14" x="8" y="8" rx="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </ToolIcon>
   );
 }
 

@@ -1,6 +1,5 @@
 import {
   type FormEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   Suspense,
   lazy,
@@ -62,11 +61,6 @@ const DEFAULT_SETTINGS: ChatSettings = {
   system_prompt: "",
 };
 const THEME_NAMES = Object.keys(THEMES) as ThemeName[];
-const COMPACT_LAYOUT_WIDTH = 860;
-const MIN_TREE_WIDTH = 360;
-const MIN_CHAT_WIDTH = 420;
-const TARGET_CHAT_WIDTH = 760;
-const DIVIDER_WIDTH = 8;
 const ONBOARDING_STORAGE_KEY = "ino-agent:onboarding:v1";
 const SIDEBAR_PROFILE_STORAGE_KEY = "ino-agent:sidebar-profile:v1";
 
@@ -112,15 +106,6 @@ function panelFromLocation(): AuxPanel | null {
   if (typeof window === "undefined") return null;
   const value = new URLSearchParams(window.location.search).get("panel");
   return value && value in AUX_PANEL_CONFIG ? (value as AuxPanel) : null;
-}
-
-function getViewportWidth() {
-  return typeof window === "undefined" ? 1440 : window.innerWidth;
-}
-
-function getMinChatWidth(viewportWidth: number) {
-  const available = viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH;
-  return Math.min(TARGET_CHAT_WIDTH, Math.max(MIN_CHAT_WIDTH, available));
 }
 
 function loadSidebarProfile(): SidebarProfile {
@@ -213,15 +198,6 @@ export default function App() {
   const [chatHomeVisible, setChatHomeVisible] = useState(true);
   const [startingChat, setStartingChat] = useState(false);
   const [windowFullscreen, setWindowFullscreen] = useState(false);
-  const [viewportWidth, setViewportWidth] = useState(getViewportWidth);
-  const [chatWidth, setChatWidth] = useState(() => {
-    const viewportWidth = getViewportWidth();
-    return Math.min(
-      Math.round(viewportWidth * 0.48),
-      viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH,
-    );
-  });
-  const [dividerDragging, setDividerDragging] = useState(false);
   const [dialog, setDialog] = useState<AppDialogState | null>(null);
   const [activeAuxPanel, setActiveAuxPanel] = useState<AuxPanel | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -291,7 +267,6 @@ export default function App() {
   const selectedAgentToolEvents = selectedCanvasNodeId
     ? agentToolEvents[selectedCanvasNodeId] ?? []
     : [];
-  const compactLayout = viewportWidth < COMPACT_LAYOUT_WIDTH;
   const titlebarNeedsTrafficSpace = isTauriRuntime() && !windowFullscreen;
   const titlebarTitle = chatHomeVisible ? "ino-agent" : selectedNode?.title ?? activeTree?.title ?? "ino-agent";
   const titlebarSubtitle =
@@ -342,26 +317,6 @@ export default function App() {
     [],
   );
 
-  const clampChatWidth = useCallback((width: number) => {
-    const viewportWidth = getViewportWidth();
-    const minByViewport = getMinChatWidth(viewportWidth);
-    const maxByViewport = Math.max(
-      minByViewport,
-      viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH,
-    );
-    return Math.min(maxByViewport, Math.max(minByViewport, Math.round(width)));
-  }, []);
-
-  useEffect(() => {
-    const onResize = () => {
-      setViewportWidth(getViewportWidth());
-      setChatWidth((width) => clampChatWidth(width));
-    };
-    window.addEventListener("resize", onResize);
-    onResize();
-    return () => window.removeEventListener("resize", onResize);
-  }, [clampChatWidth]);
-
   useEffect(() => {
     if (!isTauriRuntime()) return;
 
@@ -407,37 +362,6 @@ export default function App() {
       unlistenFocus?.();
     };
   }, []);
-
-  const beginDividerDrag = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      setDividerDragging(true);
-      const previousCursor = document.body.style.cursor;
-      const previousUserSelect = document.body.style.userSelect;
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-
-      const updateWidth = (clientX: number) => {
-        setChatWidth(clampChatWidth(window.innerWidth - clientX));
-      };
-      updateWidth(event.clientX);
-
-      const onPointerMove = (moveEvent: PointerEvent) => {
-        updateWidth(moveEvent.clientX);
-      };
-      const onPointerUp = () => {
-        setDividerDragging(false);
-        document.body.style.cursor = previousCursor;
-        document.body.style.userSelect = previousUserSelect;
-        window.removeEventListener("pointermove", onPointerMove);
-        window.removeEventListener("pointerup", onPointerUp);
-      };
-
-      window.addEventListener("pointermove", onPointerMove);
-      window.addEventListener("pointerup", onPointerUp, { once: true });
-    },
-    [clampChatWidth],
-  );
 
   const selectLocally = useCallback((nodeId: string | null) => {
     selectedNodeIdRef.current = nodeId;
@@ -656,21 +580,10 @@ export default function App() {
       activeTreeIdRef.current = treeId;
       setActiveTreeId(treeId);
       setChatHomeVisible(false);
+      setTreeVisible(false);
       await loadCanvas(tree?.last_node_id ?? null, treeId);
     },
     [loadCanvas, trees],
-  );
-
-  const handleOpenTreeFromSidebar = useCallback(
-    async (tree: TreeSummary) => {
-      activeTreeIdRef.current = tree.id;
-      setActiveTreeId(tree.id);
-      setActiveAuxPanel(null);
-      setChatHomeVisible(false);
-      setTreeVisible(true);
-      await loadCanvas(tree.last_node_id ?? null, tree.id);
-    },
-    [loadCanvas],
   );
 
   const handleRenameTreeFromSidebar = useCallback(
@@ -759,6 +672,7 @@ export default function App() {
   const handleSelectNode = useCallback(
     async (treeId: string, nodeId: string) => {
       setChatHomeVisible(false);
+      setTreeVisible(false);
       setTargetMessageId("");
       selectLocally(nodeId);
       try {
@@ -1333,13 +1247,12 @@ export default function App() {
       {sidebarOpen && (
         <MainSidebar
           trees={trees}
-          activeTreeId={activeTreeId}
+          activeTreeId={chatHomeVisible ? null : activeTreeId}
           language={language}
           onNewChat={handleNewChat}
           onSelectTree={handleSelectTree}
           onDeleteTree={handleDeleteTreeFromSidebar}
           onRenameTree={handleRenameTreeFromSidebar}
-          onOpenTree={handleOpenTreeFromSidebar}
           onOpenSearch={() => void openAuxPanelWindow("search")}
           onOpenSettings={() => void openAuxPanelWindow("settings")}
           onCloseSidebar={() => setSidebarOpen(false)}
@@ -1461,55 +1374,32 @@ export default function App() {
                 />
               </section>
             )}
-            {treeVisible && !compactLayout && (
-              <div
-                role="separator"
-                aria-label="Resize tree and chat panels"
-                aria-orientation="vertical"
-                tabIndex={0}
-                onPointerDown={beginDividerDrag}
-                onKeyDown={(event) => {
-                  if (event.key === "ArrowLeft") {
-                    event.preventDefault();
-                    setChatWidth((width) => clampChatWidth(width + 24));
-                  }
-                  if (event.key === "ArrowRight") {
-                    event.preventDefault();
-                    setChatWidth((width) => clampChatWidth(width - 24));
-                  }
-                }}
-                className={`no-drag group relative z-30 w-2 shrink-0 cursor-col-resize outline-none ${
-                  dividerDragging ? "bg-[color:var(--selected)]" : "bg-transparent"
-                }`}
-              >
-                <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--border)] transition-colors group-hover:bg-[color:var(--selected)] group-focus-visible:bg-[color:var(--selected)]" />
-              </div>
+            {!treeVisible && (
+              <ChatPanel
+                selectedNode={chatHomeVisible ? null : selectedNode}
+                messages={chatHomeVisible ? [] : messages}
+                loading={chatHomeVisible ? false : messagesLoading}
+                sending={startingChat || (!chatHomeVisible && selectedNodeIsSending)}
+                streamingText={chatHomeVisible ? "" : selectedStreamingText}
+                agentToolEvents={chatHomeVisible ? [] : selectedAgentToolEvents}
+                canWrite={Boolean(!chatHomeVisible && selectedNode?.is_leaf)}
+                canStartChat={chatHomeVisible}
+                fullWidth
+                error={chatError}
+                targetMessageId={targetMessageId}
+                language={language}
+                onSend={handleSendMessage}
+                onStartChat={handleStartChat}
+                onStartBranchSplit={handleStartBranchSplit}
+                onStartConnector={handleStartConnector}
+                onEditMessage={handleEditMessage}
+                onRegenerateMessage={handleRegenerateMessage}
+                onConfirmBranches={handleConfirmBranches}
+                onForceBranchSplit={handleForceBranchSplit}
+                onProposeConnector={handleProposeConnector}
+                onOpenTarget={handleOpenTarget}
+              />
             )}
-            <ChatPanel
-              selectedNode={chatHomeVisible ? null : selectedNode}
-              messages={chatHomeVisible ? [] : messages}
-              loading={chatHomeVisible ? false : messagesLoading}
-              sending={startingChat || (!chatHomeVisible && selectedNodeIsSending)}
-              streamingText={chatHomeVisible ? "" : selectedStreamingText}
-              agentToolEvents={chatHomeVisible ? [] : selectedAgentToolEvents}
-              canWrite={Boolean(!chatHomeVisible && selectedNode?.is_leaf)}
-              canStartChat={chatHomeVisible}
-              fullWidth={!treeVisible || compactLayout}
-              error={chatError}
-              targetMessageId={targetMessageId}
-              panelWidth={treeVisible && !compactLayout ? chatWidth : undefined}
-              language={language}
-              onSend={handleSendMessage}
-              onStartChat={handleStartChat}
-              onStartBranchSplit={handleStartBranchSplit}
-              onStartConnector={handleStartConnector}
-              onEditMessage={handleEditMessage}
-              onRegenerateMessage={handleRegenerateMessage}
-              onConfirmBranches={handleConfirmBranches}
-              onForceBranchSplit={handleForceBranchSplit}
-              onProposeConnector={handleProposeConnector}
-              onOpenTarget={handleOpenTarget}
-            />
           </Suspense>
         </div>
       </div>
@@ -1963,7 +1853,6 @@ function MainSidebar({
   onSelectTree,
   onDeleteTree,
   onRenameTree,
-  onOpenTree,
   onOpenSearch,
   onOpenSettings,
   onCloseSidebar,
@@ -1976,7 +1865,6 @@ function MainSidebar({
   onSelectTree: (treeId: string) => void;
   onDeleteTree: (tree: TreeSummary) => void;
   onRenameTree: (tree: TreeSummary) => void;
-  onOpenTree: (tree: TreeSummary) => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
   onCloseSidebar: () => void;
@@ -2106,7 +1994,7 @@ function MainSidebar({
                     setContextMenu({
                       tree,
                       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)),
-                      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 132)),
+                      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 96)),
                     });
                   }}
                   className={`group flex h-9 w-full min-w-0 items-center gap-2 rounded-2xl pl-3 pr-1.5 text-left text-sm transition-colors focus-visible:outline-none ${
@@ -2134,18 +2022,6 @@ function MainSidebar({
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <button
-            type="button"
-            onClick={() => {
-              const tree = contextMenu.tree;
-              setContextMenu(null);
-              onOpenTree(tree);
-            }}
-            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
-          >
-            <TreeGraphIcon />
-            <span className="truncate">{uiText(language, "openTree")}</span>
-          </button>
           <button
             type="button"
             onClick={() => {
