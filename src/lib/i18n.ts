@@ -87,6 +87,7 @@ type TranslationKey =
   | "onboardingPrivacyTitle"
   | "onboardingPrivacyText"
   | "newChat"
+  | "recent"
   | "latestFirst"
   | "noChats"
   | "messages";
@@ -165,6 +166,7 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     onboardingPrivacyTitle: "Keep local data private",
     onboardingPrivacyText: "Chats, memory, command history, paths, and API keys stay in the local SQLite database.",
     newChat: "New chat",
+    recent: "Recent",
     latestFirst: "Latest first",
     noChats: "No chats",
     messages: "messages",
@@ -242,6 +244,7 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     onboardingPrivacyTitle: "Храните данные локально",
     onboardingPrivacyText: "Чаты, память, история команд, пути и API-ключи остаются в локальной SQLite-базе.",
     newChat: "Новый чат",
+    recent: "Недавние",
     latestFirst: "Сначала новые",
     noChats: "Чатов нет",
     messages: "сообщений",
@@ -319,6 +322,7 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     onboardingPrivacyTitle: "Mantén los datos locales",
     onboardingPrivacyText: "Chats, memoria, historial de comandos, rutas y claves API quedan en la base SQLite local.",
     newChat: "Nuevo chat",
+    recent: "Recientes",
     latestFirst: "Más recientes primero",
     noChats: "Sin chats",
     messages: "mensajes",
@@ -396,6 +400,7 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     onboardingPrivacyTitle: "Захоўвайце даныя лакальна",
     onboardingPrivacyText: "Чаты, памяць, гісторыя каманд, шляхі і API-ключы застаюцца ў лакальнай SQLite-базе.",
     newChat: "Новы чат",
+    recent: "Нядаўнія",
     latestFirst: "Спачатку новыя",
     noChats: "Чатаў няма",
     messages: "паведамленняў",

@@ -582,6 +582,15 @@ export default function App() {
     }
   }, [askText, loadCanvas]);
 
+  const handleNewChat = useCallback(() => {
+    setActiveAuxPanel(null);
+    setChatHomeVisible(true);
+    setTreeVisible(false);
+    setTargetMessageId("");
+    setChatError("");
+    setMessages([]);
+  }, []);
+
   const handleSelectTree = useCallback(
     async (treeId: string) => {
       const tree = trees.find((item) => item.id === treeId);
@@ -1190,22 +1199,31 @@ export default function App() {
   );
 
   return (
-    <main className="no-drag relative flex h-screen flex-col overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)]">
+    <main className="no-drag relative flex h-screen overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)]">
       <div className="drag-region absolute left-0 right-0 top-0 z-20 h-2" />
-      <header
-        className={`no-drag relative z-40 flex h-12 shrink-0 items-center bg-[color:var(--app-bg)] px-3 ${
-          chatHomeVisible ? "" : "border-b border-[color:var(--border)]"
-        }`}
-      >
-        <div
-          className={`absolute left-3 top-2 flex min-w-0 items-center justify-start gap-2 ${
-            titlebarNeedsTrafficSpace ? "pl-0 sm:pl-[72px]" : "pl-0"
+      <MainSidebar
+        trees={trees}
+        activeTreeId={activeTreeId}
+        language={language}
+        onNewChat={handleNewChat}
+        onSelectTree={handleSelectTree}
+        onOpenSearch={() => void openAuxPanelWindow("search")}
+        onOpenSettings={() => void openAuxPanelWindow("settings")}
+      />
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header
+          className={`no-drag relative z-40 flex h-12 shrink-0 items-center bg-[color:var(--app-bg)] px-3 ${
+            chatHomeVisible ? "" : "border-b border-[color:var(--border)]"
           }`}
         >
-          {titlebarNeedsTrafficSpace && (
-            <div className="drag-region mr-1 hidden h-8 w-2 shrink-0 sm:flex" />
-          )}
-          <div className="relative">
+          <div
+            className={`absolute left-3 top-2 flex min-w-0 items-center justify-start gap-2 md:hidden ${
+              titlebarNeedsTrafficSpace ? "pl-0 sm:pl-[72px]" : "pl-0"
+            }`}
+          >
+            {titlebarNeedsTrafficSpace && (
+              <div className="drag-region mr-1 hidden h-8 w-2 shrink-0 sm:flex" />
+            )}
             <TopBarButton
               label={uiText(language, "chats")}
               active={activeAuxPanel === "chats"}
@@ -1213,128 +1231,130 @@ export default function App() {
             >
               <ChatsIcon />
             </TopBarButton>
-          </div>
-          <TopBarButton
-            label={uiText(language, "search")}
-            active={activeAuxPanel === "search"}
-            onClick={() => void openAuxPanelWindow("search")}
-          >
-            <SearchIcon />
-          </TopBarButton>
-          {!chatHomeVisible && (
             <TopBarButton
-              label={treeVisible ? uiText(language, "focus") : uiText(language, "tree")}
-              onClick={() => {
-                setActiveAuxPanel(null);
-                setTreeVisible((value) => {
-                  const nextVisible = !value;
-                  if (nextVisible) {
-                    setChatHomeVisible(false);
-                  }
-                  return nextVisible;
-                });
-              }}
+              label={uiText(language, "search")}
+              active={activeAuxPanel === "search"}
+              onClick={() => void openAuxPanelWindow("search")}
             >
-              <PanelIcon />
+              <SearchIcon />
             </TopBarButton>
-          )}
-        </div>
-        {!chatHomeVisible && (
-          <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(560px,42vw)] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center leading-tight">
-            <div className="max-w-full truncate text-sm font-semibold text-[color:var(--text)]">
-              {titlebarTitle}
+          </div>
+          {!chatHomeVisible && (
+            <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(560px,42vw)] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center leading-tight">
+              <div className="max-w-full truncate text-sm font-semibold text-[color:var(--text)]">
+                {titlebarTitle}
+              </div>
+              {titlebarSubtitle && (
+                <div className="mt-0.5 max-w-full truncate text-[11px] text-[color:var(--muted)]">
+                  {titlebarSubtitle}
+                </div>
+              )}
             </div>
-            {titlebarSubtitle && (
-              <div className="mt-0.5 max-w-full truncate text-[11px] text-[color:var(--muted)]">
-                {titlebarSubtitle}
+          )}
+          <div className="absolute right-3 top-2 flex min-w-0 items-center justify-end gap-2">
+            {!chatHomeVisible && (
+              <TopBarButton
+                label={treeVisible ? uiText(language, "focus") : uiText(language, "tree")}
+                onClick={() => {
+                  setActiveAuxPanel(null);
+                  setTreeVisible((value) => {
+                    const nextVisible = !value;
+                    if (nextVisible) {
+                      setChatHomeVisible(false);
+                    }
+                    return nextVisible;
+                  });
+                }}
+              >
+                <PanelIcon />
+              </TopBarButton>
+            )}
+            <div className="md:hidden">
+              <TopBarButton
+                label={uiText(language, "settings")}
+                active={activeAuxPanel === "settings"}
+                tooltipAlign="right"
+                onClick={() => void openAuxPanelWindow("settings")}
+              >
+                <SettingsIcon />
+              </TopBarButton>
+            </div>
+          </div>
+        </header>
+        <div className="min-h-0 flex flex-1 flex-col overflow-hidden md:flex-row">
+          <Suspense
+            fallback={
+              <div className="flex flex-1 items-center justify-center text-sm text-[color:var(--muted)]">
+                Loading
+              </div>
+            }
+          >
+            {treeVisible && (
+              <section className="min-h-[240px] min-w-0 shrink-0 overflow-hidden border-b border-[color:var(--border)] md:min-h-0 md:flex-1 md:border-b-0">
+                <TreeCanvas
+                  nodes={nodes}
+                  loading={loading}
+                  statusText={statusText}
+                  onCreateRoot={handleCreateRoot}
+                  onSelectNode={handleSelectNode}
+                  onRenameNode={handleRenameNode}
+                  onCreateChild={handleCreateChild}
+                  onSetNodeColor={handleSetNodeColor}
+                  onDeleteNode={handleDeleteNode}
+                />
+              </section>
+            )}
+            {treeVisible && !compactLayout && (
+              <div
+                role="separator"
+                aria-label="Resize tree and chat panels"
+                aria-orientation="vertical"
+                tabIndex={0}
+                onPointerDown={beginDividerDrag}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowLeft") {
+                    event.preventDefault();
+                    setChatWidth((width) => clampChatWidth(width + 24));
+                  }
+                  if (event.key === "ArrowRight") {
+                    event.preventDefault();
+                    setChatWidth((width) => clampChatWidth(width - 24));
+                  }
+                }}
+                className={`no-drag group relative z-30 w-2 shrink-0 cursor-col-resize outline-none ${
+                  dividerDragging ? "bg-[color:var(--selected)]" : "bg-transparent"
+                }`}
+              >
+                <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--border)] transition-colors group-hover:bg-[color:var(--selected)] group-focus-visible:bg-[color:var(--selected)]" />
               </div>
             )}
-          </div>
-        )}
-        <div className="absolute right-3 top-2 flex min-w-0 items-center justify-end gap-2">
-          <TopBarButton
-            label={uiText(language, "settings")}
-            active={activeAuxPanel === "settings"}
-            tooltipAlign="right"
-            onClick={() => void openAuxPanelWindow("settings")}
-          >
-            <SettingsIcon />
-          </TopBarButton>
+            <ChatPanel
+              selectedNode={chatHomeVisible ? null : selectedNode}
+              messages={chatHomeVisible ? [] : messages}
+              loading={chatHomeVisible ? false : messagesLoading}
+              sending={startingChat || (!chatHomeVisible && selectedNodeIsSending)}
+              streamingText={chatHomeVisible ? "" : selectedStreamingText}
+              agentToolEvents={chatHomeVisible ? [] : selectedAgentToolEvents}
+              canWrite={Boolean(!chatHomeVisible && selectedNode?.is_leaf)}
+              canStartChat={chatHomeVisible}
+              fullWidth={!treeVisible || compactLayout}
+              error={chatError}
+              targetMessageId={targetMessageId}
+              panelWidth={treeVisible && !compactLayout ? chatWidth : undefined}
+              language={language}
+              onSend={handleSendMessage}
+              onStartChat={handleStartChat}
+              onStartBranchSplit={handleStartBranchSplit}
+              onStartConnector={handleStartConnector}
+              onEditMessage={handleEditMessage}
+              onRegenerateMessage={handleRegenerateMessage}
+              onConfirmBranches={handleConfirmBranches}
+              onForceBranchSplit={handleForceBranchSplit}
+              onProposeConnector={handleProposeConnector}
+              onOpenTarget={handleOpenTarget}
+            />
+          </Suspense>
         </div>
-      </header>
-      <div className="min-h-0 flex flex-1 flex-col overflow-hidden md:flex-row">
-        <Suspense
-          fallback={
-            <div className="flex flex-1 items-center justify-center text-sm text-[color:var(--muted)]">
-              Loading
-            </div>
-          }
-        >
-          {treeVisible && (
-            <section className="min-h-[240px] min-w-0 shrink-0 overflow-hidden border-b border-[color:var(--border)] md:min-h-0 md:flex-1 md:border-b-0">
-              <TreeCanvas
-                nodes={nodes}
-                loading={loading}
-                statusText={statusText}
-                onCreateRoot={handleCreateRoot}
-                onSelectNode={handleSelectNode}
-                onRenameNode={handleRenameNode}
-                onCreateChild={handleCreateChild}
-                onSetNodeColor={handleSetNodeColor}
-                onDeleteNode={handleDeleteNode}
-              />
-            </section>
-          )}
-          {treeVisible && !compactLayout && (
-            <div
-              role="separator"
-              aria-label="Resize tree and chat panels"
-              aria-orientation="vertical"
-              tabIndex={0}
-              onPointerDown={beginDividerDrag}
-              onKeyDown={(event) => {
-                if (event.key === "ArrowLeft") {
-                  event.preventDefault();
-                  setChatWidth((width) => clampChatWidth(width + 24));
-                }
-                if (event.key === "ArrowRight") {
-                  event.preventDefault();
-                  setChatWidth((width) => clampChatWidth(width - 24));
-                }
-              }}
-              className={`no-drag group relative z-30 w-2 shrink-0 cursor-col-resize outline-none ${
-                dividerDragging ? "bg-[color:var(--selected)]" : "bg-transparent"
-              }`}
-            >
-              <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--border)] transition-colors group-hover:bg-[color:var(--selected)] group-focus-visible:bg-[color:var(--selected)]" />
-            </div>
-          )}
-          <ChatPanel
-            selectedNode={chatHomeVisible ? null : selectedNode}
-            messages={chatHomeVisible ? [] : messages}
-            loading={chatHomeVisible ? false : messagesLoading}
-            sending={startingChat || (!chatHomeVisible && selectedNodeIsSending)}
-            streamingText={chatHomeVisible ? "" : selectedStreamingText}
-            agentToolEvents={chatHomeVisible ? [] : selectedAgentToolEvents}
-            canWrite={Boolean(!chatHomeVisible && selectedNode?.is_leaf)}
-            canStartChat={chatHomeVisible}
-            fullWidth={!treeVisible || compactLayout}
-            error={chatError}
-            targetMessageId={targetMessageId}
-            panelWidth={treeVisible && !compactLayout ? chatWidth : undefined}
-            language={language}
-            onSend={handleSendMessage}
-            onStartChat={handleStartChat}
-            onStartBranchSplit={handleStartBranchSplit}
-            onStartConnector={handleStartConnector}
-            onEditMessage={handleEditMessage}
-            onRegenerateMessage={handleRegenerateMessage}
-            onConfirmBranches={handleConfirmBranches}
-            onForceBranchSplit={handleForceBranchSplit}
-            onProposeConnector={handleProposeConnector}
-            onOpenTarget={handleOpenTarget}
-          />
-        </Suspense>
       </div>
       {onboardingOpen && (
         <OnboardingPanel
@@ -1775,6 +1795,110 @@ function TopBarButton({
         {label}
       </span>
     </button>
+  );
+}
+
+function MainSidebar({
+  trees,
+  activeTreeId,
+  language,
+  onNewChat,
+  onSelectTree,
+  onOpenSearch,
+  onOpenSettings,
+}: {
+  trees: TreeSummary[];
+  activeTreeId: string | null;
+  language: InterfaceLanguage;
+  onNewChat: () => void;
+  onSelectTree: (treeId: string) => void;
+  onOpenSearch: () => void;
+  onOpenSettings: () => void;
+}) {
+  const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
+
+  return (
+    <aside className="no-drag hidden h-screen w-[292px] shrink-0 flex-col border-r border-[#e5e5e5] bg-[#f9f9f9] text-[#171717] md:flex">
+      <div className="drag-region h-10 shrink-0" />
+      <div className="flex h-12 shrink-0 items-center justify-between px-4">
+        <div className="truncate text-xl font-semibold tracking-normal">ino-agent</div>
+        <button
+          type="button"
+          onClick={onOpenSearch}
+          aria-label={uiText(language, "search")}
+          title={uiText(language, "search")}
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+        >
+          <SearchIcon />
+        </button>
+      </div>
+      <nav className="shrink-0 space-y-1 px-3 py-2">
+        <button
+          type="button"
+          onClick={onNewChat}
+          className="flex h-11 w-full items-center gap-3 rounded-xl bg-[#ececec] px-3 text-left text-[15px] font-medium text-[#171717] transition-colors hover:bg-[#e7e7e7] focus-visible:bg-[#e7e7e7] focus-visible:outline-none"
+        >
+          <NewChatIcon />
+          <span className="truncate">{uiText(language, "newChat")}</span>
+        </button>
+        <button
+          type="button"
+          onClick={onOpenSearch}
+          className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] text-[#171717] transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
+        >
+          <SearchIcon />
+          <span className="truncate">{uiText(language, "search")}</span>
+        </button>
+      </nav>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+        <div className="mb-2 px-3 text-sm font-semibold text-[#171717]">
+          {uiText(language, "recent")}
+        </div>
+        {orderedTrees.length === 0 ? (
+          <div className="px-3 py-2 text-sm text-[#6b6b6b]">{uiText(language, "noChats")}</div>
+        ) : (
+          <div className="space-y-0.5">
+            {orderedTrees.map((tree) => {
+              const active = tree.id === activeTreeId;
+              return (
+                <button
+                  key={tree.id}
+                  type="button"
+                  onClick={() => onSelectTree(tree.id)}
+                  className={`flex h-10 w-full min-w-0 items-center rounded-xl px-3 text-left text-[15px] transition-colors focus-visible:outline-none ${
+                    active
+                      ? "bg-[#ececec] text-[#171717]"
+                      : "text-[#171717] hover:bg-[#ececec] focus-visible:bg-[#ececec]"
+                  }`}
+                >
+                  <span className="truncate">{tree.title}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div className="shrink-0 border-t border-[#e5e5e5] p-3">
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
+        >
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-xs font-semibold text-white">
+            IA
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[15px] font-medium text-[#171717]">
+              ino-agent
+            </span>
+            <span className="block truncate text-xs text-[#6b6b6b]">
+              {uiText(language, "settings")}
+            </span>
+          </span>
+          <SettingsIcon />
+        </button>
+      </div>
+    </aside>
   );
 }
 
@@ -2230,6 +2354,24 @@ function ChatsIcon() {
       <path d="M7 8h10" />
       <path d="M7 12h7" />
       <path d="M5 19a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-8l-4 3v-3Z" />
+    </svg>
+  );
+}
+
+function NewChatIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-5 w-5 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
     </svg>
   );
 }
