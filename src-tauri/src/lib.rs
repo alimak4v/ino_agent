@@ -9,6 +9,7 @@ mod retrieval_context;
 mod store;
 mod terminal;
 
+use encoding_rs::WINDOWS_1251;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{hash_map::DefaultHasher, HashSet};
@@ -2741,12 +2742,45 @@ fn strip_agent_mode_marker(value: &str) -> String {
 }
 
 fn clean_extracted_text(value: &str) -> String {
-    value
+    repair_extracted_text_mojibake(value)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn repair_extracted_text_mojibake(value: &str) -> String {
+    let bytes = value
+        .chars()
+        .map(|ch| {
+            let code = ch as u32;
+            if code <= 0xff {
+                Some(code as u8)
+            } else if ch.is_whitespace() {
+                Some(b' ')
+            } else {
+                None
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(bytes) = bytes else {
+        return value.to_string();
+    };
+    let (decoded, _, _) = WINDOWS_1251.decode(&bytes);
+    let decoded = decoded.into_owned();
+    if extracted_cyrillic_score(&decoded) > extracted_cyrillic_score(value) + 20 {
+        decoded
+    } else {
+        value.to_string()
+    }
+}
+
+fn extracted_cyrillic_score(value: &str) -> usize {
+    value
+        .chars()
+        .filter(|ch| ('А'..='я').contains(ch) || matches!(ch, 'Ё' | 'ё' | 'І' | 'і'))
+        .count()
 }
 
 fn parse_revised_content(answer: &str) -> Result<String, String> {

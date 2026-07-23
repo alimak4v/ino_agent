@@ -1782,7 +1782,13 @@ function titleFromPrompt(content: string, language: InterfaceLanguage) {
     content
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .find((line) => line && !line.startsWith("[Attached file:")) ?? uiText(language, "newChat");
+      .find(
+        (line) =>
+          line &&
+          !line.startsWith("[Attached file:") &&
+          !line.startsWith("Note:") &&
+          !line.startsWith("```"),
+      ) ?? uiText(language, "newChat");
   const normalized = firstLine.replace(/\s+/g, " ");
   return normalized.length > 56 ? `${normalized.slice(0, 53).trim()}...` : normalized;
 }

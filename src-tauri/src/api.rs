@@ -440,7 +440,8 @@ fn parse_direct_attachment(payload: &str) -> Option<DirectAttachment> {
 
 fn attachment_text_fallback(attachment: &DirectAttachment) -> Option<String> {
     if let Some(extracted_text) = attachment.extracted_text.as_deref() {
-        let extracted_text = extracted_text.trim();
+        let repaired = clean_pdf_text(extracted_text);
+        let extracted_text = repaired.trim();
         if !extracted_text.is_empty() {
             return Some(extracted_text.to_string());
         }
@@ -774,6 +775,18 @@ mod tests {
         assert_eq!(
             parts[1]["file"]["file_data"],
             "data:application/pdf;base64,JVBERi0="
+        );
+    }
+
+    #[test]
+    fn repairs_saved_pdf_extracted_text_before_prompting() {
+        let content = "Разбери этот файл\n\n[Attached file: exam.pdf (application/pdf, 12 B)]\n\n```ino-agent-attachment\n{\"kind\":\"file\",\"filename\":\"exam.pdf\",\"mime\":\"application/pdf\",\"size\":12,\"data\":\"JVBERi0=\",\"extractedText\":\"ÝÊÇÀÌÅÍÀÖÈÎÍÍÀß ÏÐÎÃÐÀÌÌÀ\"}\n```";
+        let parts = content_parts_with_direct_attachments(content).expect("content parts");
+
+        assert!(
+            parts[0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("ЭКЗАМЕНАЦИОННАЯ ПРОГРАММА"))
         );
     }
 
