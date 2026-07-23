@@ -1067,15 +1067,29 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
   }
 
   if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
-    const directFileData = arrayBufferToBase64(await file.arrayBuffer());
+    const buffer = await file.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(buffer));
+    let extractedText = "";
+    try {
+      extractedText = await api.extractPdfText(bytes);
+    } catch {
+      extractedText = "";
+    }
+    const clipped =
+      extractedText.length > MAX_TEXT_CHARS
+        ? `${extractedText.slice(0, MAX_TEXT_CHARS)}\n\n[PDF text clipped]`
+        : extractedText;
+    const directFileData = arrayBufferToBase64(buffer);
     return {
       id: crypto.randomUUID(),
       name: file.name,
       size: file.size,
       type: "application/pdf",
-      content: "",
+      content: clipped,
       directFileData,
-      warning: "PDF sent directly to model",
+      warning: clipped.trim()
+        ? "PDF sent directly; extracted text fallback included"
+        : "PDF sent directly; no text layer extracted",
     };
   }
 
@@ -1928,6 +1942,7 @@ function buildMessageContent(draft: string, attachments: AttachmentDraft[], agen
         mime: file.type || "application/octet-stream",
         size: file.size,
         data: file.directFileData,
+        extractedText: file.content,
       })}\n\`\`\``;
     }
     const fence = file.content.includes("```") ? "~~~~" : "```";

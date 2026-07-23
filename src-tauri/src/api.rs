@@ -313,6 +313,21 @@ fn content_parts_with_direct_attachments(content: &str) -> Option<Vec<Value>> {
     }
 
     let mut parts = Vec::new();
+    let mut text = text.trim().to_string();
+    for attachment in &attachments {
+        if let Some(extracted_text) = attachment.extracted_text.as_deref() {
+            let extracted_text = extracted_text.trim();
+            if extracted_text.is_empty() {
+                continue;
+            }
+            text.push_str("\n\nPDF text fallback extracted locally from \"");
+            text.push_str(&attachment.filename);
+            text.push_str(
+                "\". Use this text if the model/provider cannot read the attached PDF file directly. Do not infer the file contents from the filename alone.\n\n",
+            );
+            text.push_str(extracted_text);
+        }
+    }
     let text = text.trim();
     parts.push(json!({
         "type": "text",
@@ -344,6 +359,7 @@ struct DirectAttachment {
     filename: String,
     mime: String,
     data: String,
+    extracted_text: Option<String>,
 }
 
 fn split_direct_attachment_payloads(content: &str) -> (String, Vec<DirectAttachment>) {
@@ -410,10 +426,17 @@ fn parse_direct_attachment(payload: &str) -> Option<DirectAttachment> {
     if data.is_empty() {
         return None;
     }
+    let extracted_text = parsed
+        .get("extractedText")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     Some(DirectAttachment {
         filename,
         mime,
         data,
+        extracted_text,
     })
 }
 
@@ -657,7 +680,7 @@ mod tests {
 
     #[test]
     fn builds_file_content_part_from_direct_attachment() {
-        let content = "Разбери этот файл\n\n[Attached file: lecture.pdf (application/pdf, 12 B)\nNote: PDF sent directly to model]\n\n```ino-agent-attachment\n{\"kind\":\"file\",\"filename\":\"lecture.pdf\",\"mime\":\"application/pdf\",\"size\":12,\"data\":\"JVBERi0=\"}\n```";
+        let content = "Разбери этот файл\n\n[Attached file: lecture.pdf (application/pdf, 12 B)\nNote: PDF sent directly to model]\n\n```ino-agent-attachment\n{\"kind\":\"file\",\"filename\":\"lecture.pdf\",\"mime\":\"application/pdf\",\"size\":12,\"data\":\"JVBERi0=\",\"extractedText\":\"Билет 1. Алгоритмы.\"}\n```";
         let parts = content_parts_with_direct_attachments(content).expect("content parts");
 
         assert_eq!(parts.len(), 2);
@@ -665,6 +688,9 @@ mod tests {
         assert!(parts[0]["text"]
             .as_str()
             .is_some_and(|text| text.contains("Разбери этот файл")));
+        assert!(parts[0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Билет 1. Алгоритмы.")));
         assert_eq!(parts[1]["type"], "file");
         assert_eq!(parts[1]["file"]["filename"], "lecture.pdf");
         assert_eq!(
