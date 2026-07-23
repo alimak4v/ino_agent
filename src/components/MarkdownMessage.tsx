@@ -139,11 +139,22 @@ export function MarkdownMessage({ content, renderQuiz }: MarkdownMessageProps) {
 
 function normalizeMathDelimiters(content: string) {
   return mapOutsideCodeFences(content, (segment) => {
-    const withStandardDelimiters = segment
+    const withRepairedDelimiters = repairMalformedMathDelimiters(segment);
+    const withStandardDelimiters = withRepairedDelimiters
       .replace(/\\\[([\s\S]*?)\\\]/g, (_match, math: string) => `\n\n$$\n${math.trim()}\n$$\n\n`)
       .replace(/\\\(([^()\n]*(?:\n(?!\n)[^()\n]*)*)\\\)/g, (_match, math: string) => `$${math.trim()}$`);
     return mapOutsideDollarMath(withStandardDelimiters, normalizeBareLatexFragments);
   });
+}
+
+function repairMalformedMathDelimiters(segment: string) {
+  return segment
+    .replace(/\$([^$\n]*?)\\\)/g, (_match, math: string) => `$${normalizeMathSource(math.trim())}$`)
+    .replace(
+      /(^|[\s,;:])\\?([A-Z])\s*\\in\s*T\^\{\(([^}\n]+)\}\(V\)\)?/g,
+      (_match, prefix: string, symbol: string, indices: string) =>
+        `${prefix}$${normalizeMathSource(`${symbol} \\in T^{(${indices}}(V)`)}$`,
+    );
 }
 
 function mapOutsideCodeFences(content: string, mapSegment: (segment: string) => string) {
@@ -230,7 +241,8 @@ function mapOutsideDollarMath(content: string, mapSegment: (segment: string) => 
       break;
     }
 
-    result += content.slice(start.index, end + start.marker.length);
+    const math = content.slice(start.index + start.marker.length, end);
+    result += `${start.marker}${normalizeMathSource(math)}${start.marker}`;
     cursor = end + start.marker.length;
   }
 
@@ -401,6 +413,7 @@ function normalizeMathSource(source: string) {
   return source
     .replace(/…/g, "\\ldots")
     .replace(/\.\.\./g, "\\ldots ")
+    .replace(/\^\{\(([^}\n)]*)\$?\}/g, "^{($1)}")
     .replace(/(?<![\\A-Za-z])([A-Za-z])\{([A-Za-z]_\d[^}\n]*)\}/g, "$1_{$2}")
     .replace(/([)\]])\{([A-Za-z]_\d[^}\n]*)\}/g, "$1_{$2}");
 }
