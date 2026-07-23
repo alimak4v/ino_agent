@@ -591,6 +591,13 @@ export default function App() {
     setMessages([]);
   }, []);
 
+  const handleShowTree = useCallback(() => {
+    if (!activeTreeIdRef.current) return;
+    setActiveAuxPanel(null);
+    setChatHomeVisible(false);
+    setTreeVisible(true);
+  }, []);
+
   const handleSelectTree = useCallback(
     async (treeId: string) => {
       const tree = trees.find((item) => item.id === treeId);
@@ -600,6 +607,38 @@ export default function App() {
       await loadCanvas(tree?.last_node_id ?? null, treeId);
     },
     [loadCanvas, trees],
+  );
+
+  const handleDeleteTreeFromSidebar = useCallback(
+    async (tree: TreeSummary) => {
+      const confirmed = await askConfirm({
+        title: uiText(language, "deleteChat"),
+        message: `${uiText(language, "deleteChatConfirm")} "${tree.title}"?`,
+        confirmText: uiText(language, "delete"),
+        destructive: true,
+      });
+      if (!confirmed) return;
+
+      try {
+        const deletingActive = tree.id === activeTreeIdRef.current;
+        await api.deleteTree(tree.id);
+        const remainingCount = trees.filter((item) => item.id !== tree.id).length;
+        if (deletingActive) {
+          activeTreeIdRef.current = null;
+          selectedNodeIdRef.current = null;
+          setMessages([]);
+          setTargetMessageId("");
+          setChatHomeVisible(remainingCount === 0);
+          if (remainingCount === 0) {
+            setTreeVisible(false);
+          }
+        }
+        await loadCanvas(null, deletingActive ? null : activeTreeIdRef.current);
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [askConfirm, language, loadCanvas, trees],
   );
 
   useEffect(() => {
@@ -1207,7 +1246,9 @@ export default function App() {
         language={language}
         onNewChat={handleNewChat}
         onSelectTree={handleSelectTree}
+        onDeleteTree={handleDeleteTreeFromSidebar}
         onOpenSearch={() => void openAuxPanelWindow("search")}
+        onShowTree={handleShowTree}
         onOpenSettings={() => void openAuxPanelWindow("settings")}
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -1804,7 +1845,9 @@ function MainSidebar({
   language,
   onNewChat,
   onSelectTree,
+  onDeleteTree,
   onOpenSearch,
+  onShowTree,
   onOpenSettings,
 }: {
   trees: TreeSummary[];
@@ -1812,7 +1855,9 @@ function MainSidebar({
   language: InterfaceLanguage;
   onNewChat: () => void;
   onSelectTree: (treeId: string) => void;
+  onDeleteTree: (tree: TreeSummary) => void;
   onOpenSearch: () => void;
+  onShowTree: () => void;
   onOpenSettings: () => void;
 }) {
   const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
@@ -1849,6 +1894,15 @@ function MainSidebar({
           <SearchIcon />
           <span className="truncate">{uiText(language, "search")}</span>
         </button>
+        <button
+          type="button"
+          onClick={onShowTree}
+          disabled={!activeTreeId}
+          className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] text-[#171717] transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none disabled:cursor-default disabled:text-[#a8a8a8] disabled:hover:bg-transparent"
+        >
+          <PanelIcon />
+          <span className="truncate">{uiText(language, "tree")}</span>
+        </button>
       </nav>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         <div className="mb-2 px-3 text-sm font-semibold text-[#171717]">
@@ -1861,18 +1915,36 @@ function MainSidebar({
             {orderedTrees.map((tree) => {
               const active = tree.id === activeTreeId;
               return (
-                <button
+                <div
                   key={tree.id}
-                  type="button"
-                  onClick={() => onSelectTree(tree.id)}
-                  className={`flex h-10 w-full min-w-0 items-center rounded-xl px-3 text-left text-[15px] transition-colors focus-visible:outline-none ${
+                  className={`group flex h-10 w-full min-w-0 items-center gap-2 rounded-xl pl-3 pr-1.5 text-left text-[15px] transition-colors focus-visible:outline-none ${
                     active
                       ? "bg-[#ececec] text-[#171717]"
                       : "text-[#171717] hover:bg-[#ececec] focus-visible:bg-[#ececec]"
                   }`}
                 >
-                  <span className="truncate">{tree.title}</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectTree(tree.id)}
+                    className="min-w-0 flex-1 truncate text-left outline-none"
+                  >
+                    {tree.title}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`${uiText(language, "deleteChat")}: ${tree.title}`}
+                    title={uiText(language, "deleteChat")}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteTree(tree);
+                    }}
+                    className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[#6b6b6b] transition-colors hover:bg-[#dedede] hover:text-[#d93025] focus-visible:bg-[#dedede] focus-visible:text-[#d93025] focus-visible:outline-none ${
+                      active ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                    }`}
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -2372,6 +2444,26 @@ function NewChatIcon() {
     >
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v5M14 11v5" />
     </svg>
   );
 }

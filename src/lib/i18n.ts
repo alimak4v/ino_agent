@@ -42,6 +42,9 @@ type TranslationKey =
   | "pending"
   | "files"
   | "cancel"
+  | "delete"
+  | "deleteChat"
+  | "deleteChatConfirm"
   | "save"
   | "saving"
   | "chats"
@@ -121,6 +124,9 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     pending: "pending",
     files: "Files",
     cancel: "Cancel",
+    delete: "Delete",
+    deleteChat: "Delete chat",
+    deleteChatConfirm: "Delete chat",
     save: "Save",
     saving: "Saving",
     chats: "Chats",
@@ -199,6 +205,9 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     pending: "черновик",
     files: "Файлы",
     cancel: "Отмена",
+    delete: "Удалить",
+    deleteChat: "Удалить чат",
+    deleteChatConfirm: "Удалить чат",
     save: "Сохранить",
     saving: "Сохранение",
     chats: "Чаты",
@@ -277,6 +286,9 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     pending: "pendiente",
     files: "Archivos",
     cancel: "Cancelar",
+    delete: "Eliminar",
+    deleteChat: "Eliminar chat",
+    deleteChatConfirm: "Eliminar chat",
     save: "Guardar",
     saving: "Guardando",
     chats: "Chats",
@@ -355,6 +367,9 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     pending: "чарнавік",
     files: "Файлы",
     cancel: "Адмена",
+    delete: "Выдаліць",
+    deleteChat: "Выдаліць чат",
+    deleteChatConfirm: "Выдаліць чат",
     save: "Захаваць",
     saving: "Захаванне",
     chats: "Чаты",
