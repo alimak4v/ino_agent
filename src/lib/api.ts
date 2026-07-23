@@ -555,6 +555,8 @@ export const api = {
     isTauriRuntime() ? invoke<TreeSummary[]>("list_trees") : Promise.resolve([]),
   createTree: (title?: string) => invokeDesktop<TreeCreated>("create_tree", { title }),
   deleteTree: (treeId: string) => invokeDesktop<void>("delete_tree", { treeId }),
+  renameTree: (treeId: string, title: string) =>
+    invokeDesktop<void>("rename_tree", { treeId, title }),
   setCurrentNode: (treeId: string, nodeId: string) =>
     invokeDesktop<void>("set_current_node", { treeId, nodeId }),
   createChildNode: (treeId: string, parentId: string, title?: string) =>

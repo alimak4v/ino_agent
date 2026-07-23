@@ -115,6 +115,11 @@ fn delete_tree(state: State<AppState>, tree_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn rename_tree(state: State<AppState>, tree_id: String, title: String) -> Result<(), String> {
+    lock_store(&state.store)?.rename_tree(&tree_id, &title)
+}
+
+#[tauri::command]
 fn set_current_node(
     state: State<AppState>,
     tree_id: String,
@@ -2904,6 +2909,7 @@ pub fn run() {
             list_trees,
             create_tree,
             delete_tree,
+            rename_tree,
             set_current_node,
             create_child_node,
             rename_node,

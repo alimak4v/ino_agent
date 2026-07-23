@@ -68,6 +68,7 @@ const MIN_CHAT_WIDTH = 420;
 const TARGET_CHAT_WIDTH = 760;
 const DIVIDER_WIDTH = 8;
 const ONBOARDING_STORAGE_KEY = "ino-agent:onboarding:v1";
+const SIDEBAR_PROFILE_STORAGE_KEY = "ino-agent:sidebar-profile:v1";
 
 interface KnowledgeWatchEvent {
   ok: boolean;
@@ -86,6 +87,11 @@ interface PanelOpenTargetEvent {
 
 interface PanelStartChatEvent {
   content: string;
+}
+
+interface SidebarProfile {
+  name: string;
+  avatarDataUrl: string;
 }
 
 const AUX_PANEL_CONFIG: Record<
@@ -115,6 +121,58 @@ function getViewportWidth() {
 function getMinChatWidth(viewportWidth: number) {
   const available = viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH;
   return Math.min(TARGET_CHAT_WIDTH, Math.max(MIN_CHAT_WIDTH, available));
+}
+
+function loadSidebarProfile(): SidebarProfile {
+  if (typeof window === "undefined") return { name: "ino-agent", avatarDataUrl: "" };
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_PROFILE_STORAGE_KEY);
+    if (!raw) return { name: "ino-agent", avatarDataUrl: "" };
+    const parsed = JSON.parse(raw) as Partial<SidebarProfile>;
+    return {
+      name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name : "ino-agent",
+      avatarDataUrl: typeof parsed.avatarDataUrl === "string" ? parsed.avatarDataUrl : "",
+    };
+  } catch {
+    return { name: "ino-agent", avatarDataUrl: "" };
+  }
+}
+
+function saveSidebarProfile(profile: SidebarProfile) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SIDEBAR_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  } catch {
+    // Local UI preference only; ignore storage failures.
+  }
+}
+
+function squareCropImageFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read image."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("Could not load image."));
+      image.onload = () => {
+        const side = Math.min(image.naturalWidth, image.naturalHeight);
+        const sourceX = Math.max(0, (image.naturalWidth - side) / 2);
+        const sourceY = Math.max(0, (image.naturalHeight - side) / 2);
+        const canvas = document.createElement("canvas");
+        canvas.width = 256;
+        canvas.height = 256;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("Could not crop image."));
+          return;
+        }
+        context.drawImage(image, sourceX, sourceY, side, side, 0, 0, 256, 256);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      image.src = String(reader.result ?? "");
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function App() {
@@ -600,6 +658,44 @@ export default function App() {
       await loadCanvas(tree?.last_node_id ?? null, treeId);
     },
     [loadCanvas, trees],
+  );
+
+  const handleOpenTreeFromSidebar = useCallback(
+    async (tree: TreeSummary) => {
+      activeTreeIdRef.current = tree.id;
+      setActiveTreeId(tree.id);
+      setActiveAuxPanel(null);
+      setChatHomeVisible(false);
+      setTreeVisible(true);
+      await loadCanvas(tree.last_node_id ?? null, tree.id);
+    },
+    [loadCanvas],
+  );
+
+  const handleRenameTreeFromSidebar = useCallback(
+    async (tree: TreeSummary) => {
+      const title = await askText({
+        title: uiText(language, "renameChat"),
+        label: uiText(language, "renameChat"),
+        value: tree.title,
+        placeholder: tree.title,
+        confirmText: uiText(language, "save"),
+      });
+      if (title === null) return;
+      const nextTitle = title.trim();
+      if (!nextTitle || nextTitle === tree.title) return;
+
+      try {
+        await api.renameTree(tree.id, nextTitle);
+        await loadCanvas(
+          tree.id === activeTreeIdRef.current ? selectedNodeIdRef.current : null,
+          activeTreeIdRef.current,
+        );
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [askText, language, loadCanvas],
   );
 
   const handleDeleteTreeFromSidebar = useCallback(
@@ -1240,8 +1336,11 @@ export default function App() {
         onNewChat={handleNewChat}
         onSelectTree={handleSelectTree}
         onDeleteTree={handleDeleteTreeFromSidebar}
+        onRenameTree={handleRenameTreeFromSidebar}
+        onOpenTree={handleOpenTreeFromSidebar}
         onOpenSearch={() => void openAuxPanelWindow("search")}
         onOpenSettings={() => void openAuxPanelWindow("settings")}
+        compactTopInset={!titlebarNeedsTrafficSpace}
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header
@@ -1838,8 +1937,11 @@ function MainSidebar({
   onNewChat,
   onSelectTree,
   onDeleteTree,
+  onRenameTree,
+  onOpenTree,
   onOpenSearch,
   onOpenSettings,
+  compactTopInset,
 }: {
   trees: TreeSummary[];
   activeTreeId: string | null;
@@ -1847,10 +1949,16 @@ function MainSidebar({
   onNewChat: () => void;
   onSelectTree: (treeId: string) => void;
   onDeleteTree: (tree: TreeSummary) => void;
+  onRenameTree: (tree: TreeSummary) => void;
+  onOpenTree: (tree: TreeSummary) => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
+  compactTopInset: boolean;
 }) {
   const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+  const [profile, setProfile] = useState<SidebarProfile>(() => loadSidebarProfile());
+  const [profileOpen, setProfileOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
     tree: TreeSummary;
     x: number;
@@ -1873,9 +1981,34 @@ function MainSidebar({
     };
   }, [contextMenu]);
 
+  const updateProfile = useCallback((next: SidebarProfile) => {
+    setProfile(next);
+    saveSidebarProfile(next);
+  }, []);
+
+  const handleAvatarFile = useCallback(
+    async (file: File | undefined) => {
+      if (!file) return;
+      try {
+        const avatarDataUrl = await squareCropImageFile(file);
+        updateProfile({ ...profile, avatarDataUrl });
+      } catch {
+        // Ignore invalid images; the input stays available for another attempt.
+      }
+    },
+    [profile, updateProfile],
+  );
+
+  const initials = profile.name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "IA";
+
   return (
     <aside className="no-drag hidden h-screen w-[292px] shrink-0 flex-col border-r border-[#e5e5e5] bg-[#f9f9f9] text-[#171717] md:flex">
-      <div className="drag-region h-10 shrink-0" />
+      <div className={`drag-region shrink-0 ${compactTopInset ? "h-0" : "h-10"}`} />
       <div className="flex h-12 shrink-0 items-center justify-between px-4">
         <div className="truncate text-xl font-semibold tracking-normal">ino-agent</div>
         <button
@@ -1897,14 +2030,6 @@ function MainSidebar({
           <NewChatIcon />
           <span className="truncate">{uiText(language, "newChat")}</span>
         </button>
-        <button
-          type="button"
-          onClick={onOpenSearch}
-          className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] text-[#171717] transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
-        >
-          <SearchIcon />
-          <span className="truncate">{uiText(language, "search")}</span>
-        </button>
       </nav>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         <div className="mb-2 px-3 text-sm font-semibold text-[#171717]">
@@ -1924,7 +2049,7 @@ function MainSidebar({
                     setContextMenu({
                       tree,
                       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)),
-                      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 72)),
+                      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 132)),
                     });
                   }}
                   className={`group flex h-10 w-full min-w-0 items-center gap-2 rounded-xl pl-3 pr-1.5 text-left text-[15px] transition-colors focus-visible:outline-none ${
@@ -1946,32 +2071,36 @@ function MainSidebar({
           </div>
         )}
       </div>
-      <div className="shrink-0 border-t border-[#e5e5e5] p-3">
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
-        >
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-xs font-semibold text-white">
-            IA
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[15px] font-medium text-[#171717]">
-              ino-agent
-            </span>
-            <span className="block truncate text-xs text-[#6b6b6b]">
-              {uiText(language, "settings")}
-            </span>
-          </span>
-          <SettingsIcon />
-        </button>
-      </div>
       {contextMenu && (
         <div
           className="fixed z-[120] min-w-[188px] rounded-xl border border-[#dedede] bg-white p-1.5 text-[#171717] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={(event) => event.stopPropagation()}
         >
+          <button
+            type="button"
+            onClick={() => {
+              const tree = contextMenu.tree;
+              setContextMenu(null);
+              onOpenTree(tree);
+            }}
+            className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm text-[#171717] transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
+          >
+            <PanelIcon />
+            <span className="truncate">{uiText(language, "openTree")}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const tree = contextMenu.tree;
+              setContextMenu(null);
+              onRenameTree(tree);
+            }}
+            className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm text-[#171717] transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
+          >
+            <RenameIcon />
+            <span className="truncate">{uiText(language, "renameChat")}</span>
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -1986,6 +2115,105 @@ function MainSidebar({
           </button>
         </div>
       )}
+      <div
+        className="relative shrink-0 border-t border-[#e5e5e5] p-3"
+        onMouseLeave={() => setProfileOpen(false)}
+      >
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onMouseEnter={() => setProfileOpen(true)}
+            onFocus={() => setProfileOpen(true)}
+            className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-xl px-3 text-left transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
+          >
+            {profile.avatarDataUrl ? (
+              <img
+                src={profile.avatarDataUrl}
+                alt=""
+                className="h-8 w-8 shrink-0 rounded-lg object-cover"
+              />
+            ) : (
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#10a37f] text-xs font-semibold text-white">
+                {initials}
+              </span>
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[15px] font-medium text-[#171717]">
+                {profile.name}
+              </span>
+              <span className="block truncate text-xs text-[#6b6b6b]">
+                {uiText(language, "profile")}
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label={uiText(language, "settings")}
+            title={uiText(language, "settings")}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+          >
+            <SettingsIcon />
+          </button>
+        </div>
+        {profileOpen && (
+          <div
+            className="absolute bottom-[68px] left-3 right-3 z-[120] rounded-2xl border border-[#dedede] bg-white p-3 text-[#171717] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
+            onMouseEnter={() => setProfileOpen(true)}
+          >
+            <div className="mb-3 text-sm font-semibold">{uiText(language, "profile")}</div>
+            <div className="flex items-center gap-3">
+              {profile.avatarDataUrl ? (
+                <img
+                  src={profile.avatarDataUrl}
+                  alt=""
+                  className="h-14 w-14 shrink-0 rounded-xl object-cover"
+                />
+              ) : (
+                <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[#10a37f] text-sm font-semibold text-white">
+                  {initials}
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <button
+                  type="button"
+                  onClick={() => avatarInputRef.current?.click()}
+                  className="h-8 rounded-lg border border-[#dedede] px-2.5 text-xs font-medium transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
+                >
+                  {uiText(language, "chooseAvatar")}
+                </button>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(event) => {
+                    void handleAvatarFile(event.target.files?.[0]);
+                    event.target.value = "";
+                  }}
+                />
+              </div>
+            </div>
+            <label className="mt-3 block text-xs text-[#6b6b6b]">
+              {uiText(language, "displayName")}
+              <input
+                type="text"
+                value={profile.name}
+                onChange={(event) => {
+                  const name = event.target.value;
+                  updateProfile({ ...profile, name });
+                }}
+                onBlur={() => {
+                  if (!profile.name.trim()) {
+                    updateProfile({ ...profile, name: "ino-agent" });
+                  }
+                }}
+                className="mt-1 h-9 w-full rounded-lg border border-[#dedede] bg-white px-2.5 text-sm text-[#171717] outline-none focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
+              />
+            </label>
+          </div>
+        )}
+      </div>
     </aside>
   );
 }
@@ -2480,6 +2708,24 @@ function TrashIcon() {
       <path d="M8 6V4h8v2" />
       <path d="M19 6l-1 14H6L5 6" />
       <path d="M10 11v5M14 11v5" />
+    </svg>
+  );
+}
+
+function RenameIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17z" />
+      <path d="m14 7 3 3" />
     </svg>
   );
 }

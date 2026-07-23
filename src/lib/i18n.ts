@@ -45,6 +45,11 @@ type TranslationKey =
   | "delete"
   | "deleteChat"
   | "deleteChatConfirm"
+  | "renameChat"
+  | "openTree"
+  | "profile"
+  | "displayName"
+  | "chooseAvatar"
   | "save"
   | "saving"
   | "chats"
@@ -127,6 +132,11 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     delete: "Delete",
     deleteChat: "Delete chat",
     deleteChatConfirm: "Delete chat",
+    renameChat: "Rename chat",
+    openTree: "Open tree",
+    profile: "Profile",
+    displayName: "Name",
+    chooseAvatar: "Choose avatar",
     save: "Save",
     saving: "Saving",
     chats: "Chats",
@@ -208,6 +218,11 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     delete: "Удалить",
     deleteChat: "Удалить чат",
     deleteChatConfirm: "Удалить чат",
+    renameChat: "Переименовать чат",
+    openTree: "Открыть дерево",
+    profile: "Профиль",
+    displayName: "Имя",
+    chooseAvatar: "Выбрать аватарку",
     save: "Сохранить",
     saving: "Сохранение",
     chats: "Чаты",
@@ -289,6 +304,11 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     delete: "Eliminar",
     deleteChat: "Eliminar chat",
     deleteChatConfirm: "Eliminar chat",
+    renameChat: "Renombrar chat",
+    openTree: "Abrir árbol",
+    profile: "Perfil",
+    displayName: "Nombre",
+    chooseAvatar: "Elegir avatar",
     save: "Guardar",
     saving: "Guardando",
     chats: "Chats",
@@ -370,6 +390,11 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     delete: "Выдаліць",
     deleteChat: "Выдаліць чат",
     deleteChatConfirm: "Выдаліць чат",
+    renameChat: "Перайменаваць чат",
+    openTree: "Адкрыць дрэва",
+    profile: "Профіль",
+    displayName: "Імя",
+    chooseAvatar: "Выбраць аватар",
     save: "Захаваць",
     saving: "Захаванне",
     chats: "Чаты",

@@ -1220,6 +1220,25 @@ impl Store {
         Ok(())
     }
 
+    pub fn rename_tree(&self, tree_id: &str, title: &str) -> Result<(), String> {
+        let title = clean_title_or(title.to_string(), "Root");
+        let ts = Self::now();
+        self.conn
+            .execute(
+                "UPDATE trees SET title = ?1, updated_at = ?2 WHERE id = ?3",
+                params![&title, ts, tree_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "UPDATE nodes SET title = ?1, updated_at = ?2
+                 WHERE tree_id = ?3 AND parent_id IS NULL",
+                params![&title, ts, tree_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn get_nodes(&self, tree_id: &str) -> Result<Vec<Node>, String> {
         let mut stmt = self
             .conn
