@@ -12,14 +12,17 @@ npm run tauri:dev
 ## macOS Build
 
 ```bash
-npm run build
-npm run tauri:build
+./build_macos.sh
 ```
 
-If the repository build helper is available, use:
+The helper builds the Tauri `.app` bundle first, then creates the `.dmg` with `hdiutil`.
+This avoids the Finder-based DMG customization step in Tauri's default macOS bundler, which can
+leave the temporary image busy on some local machines.
+
+For development-only bundle checks, you can build just the `.app`:
 
 ```bash
-./build_macos.sh
+npm run tauri -- build --bundles app
 ```
 
 Expected release artifacts are a macOS `.app`, a `.dmg`, and a checksum file. Do not publish local

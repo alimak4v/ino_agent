@@ -1,22 +1,20 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const overlayButtons = ["Projects", "Tasks", "Terminal", "Search", "Memory", "Knowledge"] as const;
-
 test.use({ viewport: { width: 1440, height: 900 } });
 
-test("top-bar overlays stay inside the viewport", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "desktop overlay regression");
+test("main sidebar starts closed and stays inside the viewport", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop sidebar regression");
   await page.addInitScript(() => {
     window.localStorage.setItem("ino-agent:onboarding:v1", "done");
   });
   await page.goto("/");
 
-  for (const name of overlayButtons) {
-    await page.locator(`button[aria-label="${name}"]`).click();
-    await expect(page.locator("aside").first()).toBeVisible();
-    await expectOverlayInsideViewport(page);
-    await page.getByRole("button", { name: "Close" }).first().click();
-  }
+  await expect(page.locator("aside")).toHaveCount(0);
+  await page.getByRole("button", { name: "Open sidebar" }).click();
+  await expect(page.locator("aside").first()).toBeVisible();
+  await expectOverlayInsideViewport(page);
+  await expect(page.getByRole("button", { name: "Search" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close sidebar" })).toBeVisible();
 });
 
 async function expectOverlayInsideViewport(page: Page) {
