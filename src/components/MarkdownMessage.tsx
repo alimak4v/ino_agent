@@ -184,6 +184,33 @@ function mapOutsideCodeFences(content: string, mapSegment: (segment: string) => 
 
 type MathDelimiter = "$" | "$$";
 
+const LATEX_COMMAND_WORDS = new Set([
+  "sqrt",
+  "frac",
+  "log",
+  "sum",
+  "prod",
+  "min",
+  "max",
+  "left",
+  "right",
+  "cdot",
+  "times",
+  "otimes",
+  "ldots",
+  "dots",
+  "cdots",
+  "alpha",
+  "beta",
+  "gamma",
+  "delta",
+  "theta",
+  "lambda",
+  "sigma",
+  "Omega",
+  "Theta",
+]);
+
 function mapOutsideDollarMath(content: string, mapSegment: (segment: string) => string) {
   let result = "";
   let cursor = 0;
@@ -249,12 +276,62 @@ function normalizeBareLatexFragments(segment: string) {
     },
   );
 
-  return withProtectedComplexities
+  const withProtectedDisplayLines = protectBareDisplayMathLines(
+    withProtectedComplexities,
+    protectedMath,
+  );
+
+  return withProtectedDisplayLines
     .replace(
-      /((?:[A-Za-z0-9]+[_^]?(?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]+)?[+\-*/=<>., ]*)?\\(?:sqrt|frac|log|ln|sum|prod|min|max|le|ge|neq|approx|cdot|times|ldots|dots|cdots|vdots|ddots|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|Omega|omega|Theta)\b(?:\{[^}\n]*\})?(?:\{[^}\n]*\})?)/g,
+      /((?:[A-Za-z0-9]+[_^]?(?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]+)?[+\-*/=<>., ]*)?\\(?:sqrt|frac|log|ln|sum|prod|min|max|le|ge|neq|approx|cdot|times|otimes|ldots|dots|cdots|vdots|ddots|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|Omega|omega|Theta)\b(?:\{[^}\n]*\})?(?:\{[^}\n]*\})?)/g,
       (_match, expression: string) => `$${expression.trim()}$`,
     )
     .replace(/@@TREEAI_MATH_(\d+)@@/g, (_match, index: string) => protectedMath[Number(index)] ?? "");
+}
+
+function protectBareDisplayMathLines(segment: string, protectedMath: string[]) {
+  return segment
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!looksLikeBareDisplayMathLine(trimmed)) return line;
+
+      const token = `@@TREEAI_MATH_${protectedMath.length}@@`;
+      protectedMath.push(`$$\n${normalizeMathSource(trimmed)}\n$$`);
+      return token;
+    })
+    .join("\n");
+}
+
+function looksLikeBareDisplayMathLine(line: string) {
+  if (line.length < 8 || line.includes("@@TREEAI_MATH_")) return false;
+  if (/[$`]/.test(line)) return false;
+  if (/[А-Яа-яЁё]/.test(line)) return false;
+
+  const hasEquationShape = /[=<>≈≤≥]/.test(line);
+  const hasLatexCommand = /\\[a-zA-Z]+/.test(line);
+  const hasIndices = /[_^](?:\{[^}\n]+\}|[A-Za-z0-9]+)/.test(line);
+  const hasManyMathMarks = (line.match(/[{}_^=\\]/g) ?? []).length >= 3;
+  const textWords = line.match(/[A-Za-z]{3,}/g) ?? [];
+  const nonCommandWords = textWords.filter((word) => !isLatexCommandWord(word));
+
+  return (
+    hasEquationShape &&
+    (hasLatexCommand || hasIndices || hasManyMathMarks) &&
+    nonCommandWords.length <= 2
+  );
+}
+
+function isLatexCommandWord(word: string) {
+  return LATEX_COMMAND_WORDS.has(word);
+}
+
+function normalizeMathSource(source: string) {
+  return source
+    .replace(/…/g, "\\ldots")
+    .replace(/\.\.\./g, "\\ldots ")
+    .replace(/(?<![\\A-Za-z])([A-Za-z])\{([A-Za-z]_\d[^}\n]*)\}/g, "$1_{$2}")
+    .replace(/([)\]])\{([A-Za-z]_\d[^}\n]*)\}/g, "$1_{$2}");
 }
 
 function isMermaidClass(className?: string) {

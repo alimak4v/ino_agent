@@ -1941,7 +1941,7 @@ function TopBarButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className={`group relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sm transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:text-[#202123] focus-visible:outline-none ${
+      className={`group relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:text-[#202123] focus-visible:outline-none ${
         active ? "bg-[#e7e7e7] text-[#202123]" : "text-[#5f6368]"
       }`}
     >
@@ -2044,7 +2044,7 @@ function MainSidebar({
             onClick={onOpenSearch}
             aria-label={uiText(language, "search")}
             title={uiText(language, "search")}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
           >
             <SearchIcon />
           </button>
@@ -2053,7 +2053,7 @@ function MainSidebar({
             onClick={onCloseSidebar}
             aria-label={uiText(language, "closeSidebar")}
             title={uiText(language, "closeSidebar")}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
           >
             <SidebarToggleIcon />
           </button>
@@ -2063,7 +2063,7 @@ function MainSidebar({
         <button
           type="button"
           onClick={onNewChat}
-          className="flex h-11 w-full items-center gap-3 rounded-xl bg-[#ececec] px-3 text-left text-[15px] font-medium text-[#171717] transition-colors hover:bg-[#e7e7e7] focus-visible:bg-[#e7e7e7] focus-visible:outline-none"
+          className="flex h-11 w-full items-center gap-3 rounded-2xl bg-[#ececec] px-3 text-left text-[15px] font-medium text-[#171717] transition-colors hover:bg-[#e7e7e7] focus-visible:bg-[#e7e7e7] focus-visible:outline-none"
         >
           <NewChatIcon />
           <span className="truncate">{uiText(language, "newChat")}</span>
@@ -2090,7 +2090,7 @@ function MainSidebar({
                       y: Math.max(8, Math.min(event.clientY, window.innerHeight - 132)),
                     });
                   }}
-                  className={`group flex h-10 w-full min-w-0 items-center gap-2 rounded-xl pl-3 pr-1.5 text-left text-[15px] transition-colors focus-visible:outline-none ${
+                  className={`group flex h-10 w-full min-w-0 items-center gap-2 rounded-2xl pl-3 pr-1.5 text-left text-[15px] transition-colors focus-visible:outline-none ${
                     active
                       ? "bg-[#ececec] text-[#171717]"
                       : "text-[#171717] hover:bg-[#ececec] focus-visible:bg-[#ececec]"
@@ -2111,7 +2111,7 @@ function MainSidebar({
       </div>
       {contextMenu && (
         <div
-          className="fixed z-[120] min-w-[188px] rounded-xl border border-[#dedede] bg-white p-1.5 text-[#171717] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
+          className="fixed z-[120] min-w-[188px] rounded-2xl border border-[#dedede] bg-white p-1.5 text-[#171717] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={(event) => event.stopPropagation()}
         >
@@ -2122,7 +2122,7 @@ function MainSidebar({
               setContextMenu(null);
               onOpenTree(tree);
             }}
-            className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm text-[#171717] transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
+            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[#171717] transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
           >
             <TreeGraphIcon />
             <span className="truncate">{uiText(language, "openTree")}</span>
@@ -2134,7 +2134,7 @@ function MainSidebar({
               setContextMenu(null);
               onRenameTree(tree);
             }}
-            className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm text-[#171717] transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
+            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[#171717] transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
           >
             <RenameIcon />
             <span className="truncate">{uiText(language, "renameChat")}</span>
@@ -2146,7 +2146,7 @@ function MainSidebar({
               setContextMenu(null);
               onDeleteTree(tree);
             }}
-            className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm text-[#d93025] transition-colors hover:bg-[#f6eeee] focus-visible:bg-[#f6eeee] focus-visible:outline-none"
+            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[#d93025] transition-colors hover:bg-[#f6eeee] focus-visible:bg-[#f6eeee] focus-visible:outline-none"
           >
             <TrashIcon />
             <span className="truncate">{uiText(language, "deleteChat")}</span>
@@ -2162,16 +2162,16 @@ function MainSidebar({
             type="button"
             onMouseEnter={() => setProfileOpen(true)}
             onFocus={() => setProfileOpen(true)}
-            className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-xl px-3 text-left transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
+            className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-2xl px-3 text-left transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
           >
             {profile.avatarDataUrl ? (
               <img
                 src={profile.avatarDataUrl}
                 alt=""
-                className="h-8 w-8 shrink-0 rounded-lg object-cover"
+                className="h-8 w-8 shrink-0 rounded-full object-cover"
               />
             ) : (
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#10a37f] text-xs font-semibold text-white">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-xs font-semibold text-white">
                 {initials}
               </span>
             )}
@@ -2189,7 +2189,7 @@ function MainSidebar({
             onClick={onOpenSettings}
             aria-label={uiText(language, "settings")}
             title={uiText(language, "settings")}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
           >
             <SettingsIcon />
           </button>
@@ -2205,10 +2205,10 @@ function MainSidebar({
                 <img
                   src={profile.avatarDataUrl}
                   alt=""
-                  className="h-14 w-14 shrink-0 rounded-xl object-cover"
+                  className="h-14 w-14 shrink-0 rounded-full object-cover"
                 />
               ) : (
-                <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[#10a37f] text-sm font-semibold text-white">
+                <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-sm font-semibold text-white">
                   {initials}
                 </span>
               )}
@@ -2216,7 +2216,7 @@ function MainSidebar({
                 <button
                   type="button"
                   onClick={() => avatarInputRef.current?.click()}
-                  className="h-8 rounded-lg border border-[#dedede] px-2.5 text-xs font-medium transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
+                  className="h-8 rounded-full bg-[#f4f4f4] px-3 text-xs font-medium transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
                 >
                   {uiText(language, "chooseAvatar")}
                 </button>
@@ -2246,7 +2246,7 @@ function MainSidebar({
                     updateProfile({ ...profile, name: "ino-agent" });
                   }
                 }}
-                className="mt-1 h-9 w-full rounded-lg border border-[#dedede] bg-white px-2.5 text-sm text-[#171717] outline-none focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
+                className="mt-1 h-9 w-full rounded-2xl border border-transparent bg-[#f4f4f4] px-3 text-sm text-[#171717] outline-none focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
               />
             </label>
           </div>
