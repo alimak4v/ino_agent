@@ -154,6 +154,11 @@ function repairMalformedMathDelimiters(segment: string) {
       /(^|[\s,;:])\\?([A-Z])\s*\\in\s*T\^\{\(([^}\n]+)\}\(V\)\)?/g,
       (_match, prefix: string, symbol: string, indices: string) =>
         `${prefix}$${normalizeMathSource(`${symbol} \\in T^{(${indices}}(V)`)}$`,
+    )
+    .replace(
+      /(^|[\s,;:]|\n)\\?([A-Z])\s*\\otimes\s*\$?\\?([A-Z])\s*\\in\s*T\^\{\(([^}\n]+)\}\(V\)\)?\$?/g,
+      (_match, prefix: string, left: string, right: string, indices: string) =>
+        `${prefix}$${normalizeMathSource(`${left} \\otimes ${right} \\in T^{(${indices}}(V)`)}$`,
     );
 }
 
@@ -413,6 +418,8 @@ function normalizeMathSource(source: string) {
   return source
     .replace(/…/g, "\\ldots")
     .replace(/\.\.\./g, "\\ldots ")
+    .replace(/\$/g, "")
+    .replace(/\\([A-Z])(?=\s*(?:\\in|\\notin|=|\\otimes|\\times|\\cdot|\^|_|$))/g, "$1")
     .replace(/\^\{\(([^}\n)]*)\$?\}/g, "^{($1)}")
     .replace(/(?<![\\A-Za-z])([A-Za-z])\{([A-Za-z]_\d[^}\n]*)\}/g, "$1_{$2}")
     .replace(/([)\]])\{([A-Za-z]_\d[^}\n]*)\}/g, "$1_{$2}");

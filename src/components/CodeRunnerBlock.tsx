@@ -52,17 +52,15 @@ export function CodeRunnerBlock({ language, code }: CodeRunnerBlockProps) {
   };
 
   return (
-    <section className="my-4 overflow-hidden rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] text-[13px] leading-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 py-2">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--muted)]">
-          {title}
-        </span>
-        <div className="flex items-center gap-2">
+    <section className="my-4 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--code-bg)] text-[13px] leading-5 shadow-[0_8px_24px_rgba(0,0,0,0.06)]">
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-[color:var(--border)] px-4 py-2">
+        <span className="text-[12px] font-medium text-[color:var(--muted)]">{title}</span>
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
             disabled={running}
             onClick={() => void run()}
-            className="inline-flex h-8 items-center justify-center rounded-lg bg-[color:var(--button)] px-3 text-xs font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-8 items-center justify-center rounded-full bg-[color:var(--button)] px-4 text-xs font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {running ? "Running" : "Run"}
           </button>
@@ -70,7 +68,7 @@ export function CodeRunnerBlock({ language, code }: CodeRunnerBlockProps) {
             type="button"
             disabled={running}
             onClick={() => setEditing((current) => !current)}
-            className="inline-flex h-8 items-center justify-center rounded-lg border border-[color:var(--border)] px-3 text-xs font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-8 items-center justify-center rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {editing ? "Done" : "Edit"}
           </button>
@@ -82,28 +80,28 @@ export function CodeRunnerBlock({ language, code }: CodeRunnerBlockProps) {
               setResult(null);
               setError("");
             }}
-            className="inline-flex h-8 items-center justify-center rounded-lg border border-[color:var(--border)] px-3 text-xs font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-8 items-center justify-center rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             Reset
           </button>
           <button
             type="button"
             onClick={() => void navigator.clipboard?.writeText(value)}
-            className="inline-flex h-8 items-center justify-center rounded-lg border border-[color:var(--border)] px-3 text-xs font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
+            className="inline-flex h-8 items-center justify-center rounded-full px-3 text-xs font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
           >
             Copy
           </button>
         </div>
       </div>
 
-      <div className="space-y-3 p-3">
+      <div className="space-y-3 p-4">
         {editing ? (
           <textarea
             ref={codeRef}
             value={value}
             onChange={(event) => setValue(event.target.value)}
             spellCheck={false}
-            className="min-h-[180px] w-full resize-y rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3 font-mono text-[12px] leading-5 text-[color:var(--text)] outline-none transition-shadow focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
+            className="min-h-[180px] w-full resize-y rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 font-mono text-[12px] leading-5 text-[color:var(--text)] outline-none transition-shadow focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
           />
         ) : (
           <HighlightedCode language={language} code={value} />
@@ -113,7 +111,7 @@ export function CodeRunnerBlock({ language, code }: CodeRunnerBlockProps) {
           onChange={(event) => setStdin(event.target.value)}
           spellCheck={false}
           placeholder="stdin"
-          className="min-h-[58px] w-full resize-y rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] p-2 font-mono text-[12px] leading-5 text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
+          className="min-h-[58px] w-full resize-y rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 font-mono text-[12px] leading-5 text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
         />
         {language !== "cpp" && (
           <input
@@ -121,12 +119,12 @@ export function CodeRunnerBlock({ language, code }: CodeRunnerBlockProps) {
             onChange={(event) => setDependencies(event.target.value)}
             spellCheck={false}
             placeholder={dependencyPlaceholder(language)}
-            className="h-9 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] px-2 font-mono text-[12px] text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
+            className="h-10 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] px-3 font-mono text-[12px] text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
           />
         )}
 
         {result && (
-          <div className="space-y-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
+          <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3">
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[color:var(--muted)]">
               <span className={result.success ? "text-emerald-600" : "text-rose-600"}>
                 {result.success ? "success" : result.timedOut ? "timed out" : "failed"}
@@ -151,7 +149,7 @@ function OutputPanel({ label, value }: { label: string; value: string }) {
       <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--muted)]">
         {label}
       </div>
-      <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-2 font-mono text-[12px] leading-5 text-[color:var(--text)]">
+      <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-words rounded-xl border border-[color:var(--border)] bg-[color:var(--code-bg)] p-3 font-mono text-[12px] leading-5 text-[color:var(--code-text)]">
         {value || " "}
       </pre>
     </div>
@@ -177,7 +175,7 @@ function HighlightedCode({ language, code }: { language: CodeLanguage; code: str
   return (
     <pre
       style={{ maxHeight }}
-      className="m-0 min-h-[180px] overflow-auto rounded-lg border border-[color:var(--border)] bg-[color:var(--code-bg)] p-3 font-mono text-[12px] leading-5 text-[color:var(--code-text)]"
+      className="m-0 min-h-[180px] overflow-auto rounded-xl bg-transparent p-0 font-mono text-[13px] leading-6 text-[color:var(--code-text)]"
     >
       <code>{highlightCode(code, language)}</code>
     </pre>
