@@ -1941,8 +1941,8 @@ function TopBarButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className={`group relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:text-[#202123] focus-visible:outline-none ${
-        active ? "bg-[#e7e7e7] text-[#202123]" : "text-[#5f6368]"
+      className={`group relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:text-[color:var(--text)] focus-visible:outline-none ${
+        active ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
       }`}
     >
       {children}
@@ -2034,7 +2034,7 @@ function MainSidebar({
     .join("") || "IA";
 
   return (
-    <aside className="no-drag hidden h-screen w-[292px] shrink-0 flex-col border-r border-[#e5e5e5] bg-[#f9f9f9] text-[#171717] md:flex">
+    <aside className="no-drag hidden h-screen w-[292px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--sidebar)] text-[color:var(--text)] md:flex">
       <div className={`drag-region shrink-0 ${compactTopInset ? "h-0" : "h-10"}`} />
       <div className="flex h-12 shrink-0 items-center justify-between px-4">
         <div className="truncate text-xl font-semibold tracking-normal">ino-agent</div>
@@ -2044,7 +2044,7 @@ function MainSidebar({
             onClick={onOpenSearch}
             aria-label={uiText(language, "search")}
             title={uiText(language, "search")}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             <SearchIcon />
           </button>
@@ -2053,7 +2053,7 @@ function MainSidebar({
             onClick={onCloseSidebar}
             aria-label={uiText(language, "closeSidebar")}
             title={uiText(language, "closeSidebar")}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             <SidebarToggleIcon />
           </button>
@@ -2063,18 +2063,18 @@ function MainSidebar({
         <button
           type="button"
           onClick={onNewChat}
-          className="flex h-11 w-full items-center gap-3 rounded-2xl bg-[#ececec] px-3 text-left text-[15px] font-medium text-[#171717] transition-colors hover:bg-[#e7e7e7] focus-visible:bg-[#e7e7e7] focus-visible:outline-none"
+          className="flex h-11 w-full items-center gap-3 rounded-2xl bg-[color:var(--selected)] px-3 text-left text-[15px] font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--panel-soft)] focus-visible:bg-[color:var(--panel-soft)] focus-visible:outline-none"
         >
           <NewChatIcon />
           <span className="truncate">{uiText(language, "newChat")}</span>
         </button>
       </nav>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
-        <div className="mb-2 px-3 text-sm font-semibold text-[#171717]">
+        <div className="mb-2 px-3 text-sm font-semibold text-[color:var(--text)]">
           {uiText(language, "recent")}
         </div>
         {orderedTrees.length === 0 ? (
-          <div className="px-3 py-2 text-sm text-[#6b6b6b]">{uiText(language, "noChats")}</div>
+          <div className="px-3 py-2 text-sm text-[color:var(--muted)]">{uiText(language, "noChats")}</div>
         ) : (
           <div className="space-y-0.5">
             {orderedTrees.map((tree) => {
@@ -2092,8 +2092,8 @@ function MainSidebar({
                   }}
                   className={`group flex h-10 w-full min-w-0 items-center gap-2 rounded-2xl pl-3 pr-1.5 text-left text-[15px] transition-colors focus-visible:outline-none ${
                     active
-                      ? "bg-[#ececec] text-[#171717]"
-                      : "text-[#171717] hover:bg-[#ececec] focus-visible:bg-[#ececec]"
+                      ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                      : "text-[color:var(--text)] hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)]"
                   }`}
                 >
                   <button
@@ -2111,7 +2111,7 @@ function MainSidebar({
       </div>
       {contextMenu && (
         <div
-          className="fixed z-[120] min-w-[188px] rounded-2xl border border-[#dedede] bg-white p-1.5 text-[#171717] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
+          className="fixed z-[120] min-w-[188px] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-1.5 text-[color:var(--text)] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={(event) => event.stopPropagation()}
         >
@@ -2122,7 +2122,7 @@ function MainSidebar({
               setContextMenu(null);
               onOpenTree(tree);
             }}
-            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[#171717] transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
+            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             <TreeGraphIcon />
             <span className="truncate">{uiText(language, "openTree")}</span>
@@ -2134,7 +2134,7 @@ function MainSidebar({
               setContextMenu(null);
               onRenameTree(tree);
             }}
-            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[#171717] transition-colors hover:bg-[#f4f4f4] focus-visible:bg-[#f4f4f4] focus-visible:outline-none"
+            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             <RenameIcon />
             <span className="truncate">{uiText(language, "renameChat")}</span>
@@ -2146,7 +2146,7 @@ function MainSidebar({
               setContextMenu(null);
               onDeleteTree(tree);
             }}
-            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[#d93025] transition-colors hover:bg-[#f6eeee] focus-visible:bg-[#f6eeee] focus-visible:outline-none"
+            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[#d93025] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             <TrashIcon />
             <span className="truncate">{uiText(language, "deleteChat")}</span>
@@ -2154,7 +2154,7 @@ function MainSidebar({
         </div>
       )}
       <div
-        className="relative shrink-0 border-t border-[#e5e5e5] p-3"
+        className="relative shrink-0 border-t border-[color:var(--border)] p-3"
         onMouseLeave={() => setProfileOpen(false)}
       >
         <div className="flex items-center gap-2">
@@ -2162,7 +2162,7 @@ function MainSidebar({
             type="button"
             onMouseEnter={() => setProfileOpen(true)}
             onFocus={() => setProfileOpen(true)}
-            className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-2xl px-3 text-left transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
+            className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-2xl px-3 text-left transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             {profile.avatarDataUrl ? (
               <img
@@ -2176,10 +2176,10 @@ function MainSidebar({
               </span>
             )}
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[15px] font-medium text-[#171717]">
+              <span className="block truncate text-[15px] font-medium text-[color:var(--text)]">
                 {profile.name}
               </span>
-              <span className="block truncate text-xs text-[#6b6b6b]">
+              <span className="block truncate text-xs text-[color:var(--muted)]">
                 {uiText(language, "profile")}
               </span>
             </span>
@@ -2189,14 +2189,14 @@ function MainSidebar({
             onClick={onOpenSettings}
             aria-label={uiText(language, "settings")}
             title={uiText(language, "settings")}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#5f6368] transition-colors hover:bg-[#ececec] hover:text-[#202123] focus-visible:bg-[#ececec] focus-visible:outline-none"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             <SettingsIcon />
           </button>
         </div>
         {profileOpen && (
           <div
-            className="absolute bottom-[68px] left-3 right-3 z-[120] rounded-2xl border border-[#dedede] bg-white p-3 text-[#171717] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
+            className="absolute bottom-[68px] left-3 right-3 z-[120] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 text-[color:var(--text)] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
             onMouseEnter={() => setProfileOpen(true)}
           >
             <div className="mb-3 text-sm font-semibold">{uiText(language, "profile")}</div>
@@ -2216,7 +2216,7 @@ function MainSidebar({
                 <button
                   type="button"
                   onClick={() => avatarInputRef.current?.click()}
-                  className="h-8 rounded-full bg-[#f4f4f4] px-3 text-xs font-medium transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none"
+                  className="h-8 rounded-full bg-[color:var(--panel-soft)] px-3 text-xs font-medium transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
                 >
                   {uiText(language, "chooseAvatar")}
                 </button>
@@ -2232,7 +2232,7 @@ function MainSidebar({
                 />
               </div>
             </div>
-            <label className="mt-3 block text-xs text-[#6b6b6b]">
+            <label className="mt-3 block text-xs text-[color:var(--muted)]">
               {uiText(language, "displayName")}
               <input
                 type="text"
@@ -2246,7 +2246,7 @@ function MainSidebar({
                     updateProfile({ ...profile, name: "ino-agent" });
                   }
                 }}
-                className="mt-1 h-9 w-full rounded-2xl border border-transparent bg-[#f4f4f4] px-3 text-sm text-[#171717] outline-none focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
+                className="mt-1 h-9 w-full rounded-2xl border border-transparent bg-[color:var(--panel-soft)] px-3 text-sm text-[color:var(--text)] outline-none focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
               />
             </label>
           </div>
