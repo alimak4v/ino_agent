@@ -45,6 +45,10 @@ fn normalize_language(language: &str) -> &'static str {
 fn default_language() -> String {
     DEFAULT_LANGUAGE.to_string()
 }
+
+fn default_system_prompt() -> String {
+    String::new()
+}
 const NODE_COLORS: [&str; 6] = ["slate", "sky", "mint", "amber", "rose", "violet"];
 
 fn normalize_watched_path(path: &str) -> Result<String, String> {
@@ -118,6 +122,8 @@ pub struct ChatSettings {
     pub theme: String,
     #[serde(default = "default_language")]
     pub language: String,
+    #[serde(default = "default_system_prompt")]
+    pub system_prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +134,8 @@ pub struct SettingsInput {
     pub theme: String,
     #[serde(default = "default_language")]
     pub language: String,
+    #[serde(default = "default_system_prompt")]
+    pub system_prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3855,6 +3863,7 @@ impl Store {
             api_key: self.get_setting("api_key", "")?,
             theme: normalize_theme(&theme).to_string(),
             language: normalize_language(&language).to_string(),
+            system_prompt: self.get_setting("system_prompt", "")?,
         })
     }
 
@@ -3876,6 +3885,7 @@ impl Store {
         self.set_setting("api_key", input.api_key.trim())?;
         self.set_setting("theme", theme)?;
         self.set_setting("language", language)?;
+        self.set_setting("system_prompt", input.system_prompt.trim())?;
         self.get_settings()
     }
 

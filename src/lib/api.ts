@@ -70,6 +70,7 @@ export interface ChatSettings {
   api_key: string;
   theme: ThemeName;
   language: InterfaceLanguage;
+  system_prompt: string;
 }
 
 export interface AiBranchCreated {
@@ -533,6 +534,7 @@ const FALLBACK_SETTINGS: ChatSettings = {
   api_key: "",
   theme: "Minimal Light",
   language: "English",
+  system_prompt: "",
 };
 
 const DESKTOP_ONLY_ERROR = "Open the desktop app window to use this action.";

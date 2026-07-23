@@ -24,6 +24,8 @@ type TranslationKey =
   | "model"
   | "apiKey"
   | "endpoint"
+  | "systemPrompt"
+  | "systemPromptPlaceholder"
   | "tools"
   | "toolsDescription"
   | "projects"
@@ -100,6 +102,8 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     model: "Model",
     apiKey: "API key",
     endpoint: "Endpoint",
+    systemPrompt: "System prompt",
+    systemPromptPlaceholder: "Optional instructions applied before every model request.",
     tools: "Tools",
     toolsDescription: "Open secondary windows from here",
     projects: "Projects",
@@ -175,6 +179,8 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     model: "Модель",
     apiKey: "API-ключ",
     endpoint: "Endpoint",
+    systemPrompt: "Системный промпт",
+    systemPromptPlaceholder: "Необязательные инструкции, которые применяются перед каждым запросом к модели.",
     tools: "Инструменты",
     toolsDescription: "Вторичные окна открываются отсюда",
     projects: "Проекты",
@@ -250,6 +256,8 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     model: "Modelo",
     apiKey: "Clave API",
     endpoint: "Endpoint",
+    systemPrompt: "Prompt del sistema",
+    systemPromptPlaceholder: "Instrucciones opcionales aplicadas antes de cada solicitud al modelo.",
     tools: "Herramientas",
     toolsDescription: "Abre ventanas secundarias desde aquí",
     projects: "Proyectos",
@@ -325,6 +333,8 @@ const STRINGS: Record<InterfaceLanguage, Record<TranslationKey, string>> = {
     model: "Мадэль",
     apiKey: "API-ключ",
     endpoint: "Endpoint",
+    systemPrompt: "Сістэмны промпт",
+    systemPromptPlaceholder: "Неабавязковыя інструкцыі, якія прымяняюцца перад кожным запытам да мадэлі.",
     tools: "Інструменты",
     toolsDescription: "Другасныя вокны адкрываюцца адсюль",
     projects: "Праекты",

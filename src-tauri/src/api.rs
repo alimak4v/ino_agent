@@ -280,7 +280,11 @@ fn request_payload(
     stream: bool,
     temperature: f32,
 ) -> String {
-    let api_messages = messages.iter().map(message_to_api_json).collect::<Vec<_>>();
+    let mut api_messages = Vec::new();
+    if !settings.system_prompt.trim().is_empty() {
+        api_messages.push(json!({ "role": "system", "content": settings.system_prompt.trim() }));
+    }
+    api_messages.extend(messages.iter().map(message_to_api_json));
     let mut payload = json!({
         "model": settings.model,
         "messages": api_messages,
@@ -540,6 +544,11 @@ fn prompt_cache_retention(model: &str) -> Option<&'static str> {
 
 fn prompt_cache_key(settings: &ChatSettings, messages: &[ChatContextMessage]) -> String {
     let mut prefix = format!("model:{}\n", settings.model.trim());
+    if !settings.system_prompt.trim().is_empty() {
+        prefix.push_str("system\n");
+        prefix.push_str(settings.system_prompt.trim());
+        prefix.push('\n');
+    }
     for message in messages
         .iter()
         .take_while(|message| message.role == "system")
@@ -726,9 +735,12 @@ fn json_candidates(answer: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::store::{ChatContextMessage, ChatSettings};
+    use serde_json::Value;
+
     use super::{
         clean_pdf_text, content_parts_with_direct_attachments, decode_base64_file_data,
-        normalize_stream_delta,
+        normalize_stream_delta, request_payload,
     };
 
     #[test]
@@ -806,6 +818,29 @@ mod tests {
     fn repairs_cp1251_pdf_mojibake() {
         let repaired = clean_pdf_text("ÝÊÇÀÌÅÍÀÖÈÎÍÍÀß ÏÐÎÃÐÀÌÌÀ");
         assert_eq!(repaired, "ЭКЗАМЕНАЦИОННАЯ ПРОГРАММА");
+    }
+
+    #[test]
+    fn prepends_configured_system_prompt_to_payload() {
+        let settings = ChatSettings {
+            endpoint: "https://api.openai.com/v1/chat/completions".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+            api_key: "sk-test".to_string(),
+            theme: "Minimal Light".to_string(),
+            language: "English".to_string(),
+            system_prompt: "Always answer briefly.".to_string(),
+        };
+        let messages = vec![ChatContextMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+        }];
+        let payload: Value =
+            serde_json::from_str(&request_payload(&settings, &messages, false, 0.7))
+                .expect("payload json");
+
+        assert_eq!(payload["messages"][0]["role"], "system");
+        assert_eq!(payload["messages"][0]["content"], "Always answer briefly.");
+        assert_eq!(payload["messages"][1]["role"], "user");
     }
 }
 

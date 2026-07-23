@@ -59,6 +59,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
   api_key: "",
   theme: "Minimal Light",
   language: "English",
+  system_prompt: "",
 };
 const THEME_NAMES = Object.keys(THEMES) as ThemeName[];
 const COMPACT_LAYOUT_WIDTH = 860;
@@ -1908,6 +1909,8 @@ function SettingsPanel({
   const language = settingsDraft.language ?? settings.language ?? DEFAULT_SETTINGS.language;
   const inputClass =
     "mt-1 h-9 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
+  const textareaClass =
+    "mt-1 min-h-24 w-full resize-y rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2 text-sm leading-5 text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
   const toolButtonClass =
     "flex h-9 min-w-0 items-center gap-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-left text-xs text-[color:var(--text)] transition-colors hover:bg-[color:var(--panel-soft)]";
 
@@ -1990,6 +1993,17 @@ function SettingsPanel({
             onChange={(event) => onChange({ ...settingsDraft, endpoint: event.target.value })}
             className={inputClass}
             placeholder={DEFAULT_SETTINGS.endpoint}
+          />
+        </label>
+        <label className="block text-xs text-[color:var(--muted)]">
+          {uiText(language, "systemPrompt")}
+          <textarea
+            value={settingsDraft.system_prompt ?? ""}
+            onChange={(event) =>
+              onChange({ ...settingsDraft, system_prompt: event.target.value })
+            }
+            className={textareaClass}
+            placeholder={uiText(language, "systemPromptPlaceholder")}
           />
         </label>
       </div>
