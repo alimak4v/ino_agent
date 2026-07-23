@@ -190,6 +190,7 @@ const LATEX_COMMAND_WORDS = new Set([
   "log",
   "sum",
   "prod",
+  "in",
   "min",
   "max",
   "left",
@@ -276,17 +277,87 @@ function normalizeBareLatexFragments(segment: string) {
     },
   );
 
-  const withProtectedDisplayLines = protectBareDisplayMathLines(
+  const withProtectedInlineMath = protectParenthesizedInlineMath(
     withProtectedComplexities,
+    protectedMath,
+  );
+  const withProtectedDisplayLines = protectBareDisplayMathLines(
+    withProtectedInlineMath,
     protectedMath,
   );
 
   return withProtectedDisplayLines
     .replace(
-      /((?:[A-Za-z0-9]+[_^]?(?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]+)?[+\-*/=<>., ]*)?\\(?:sqrt|frac|log|ln|sum|prod|min|max|le|ge|neq|approx|cdot|times|otimes|ldots|dots|cdots|vdots|ddots|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|Omega|omega|Theta)\b(?:\{[^}\n]*\})?(?:\{[^}\n]*\})?)/g,
+      /((?:[A-Za-z0-9]+[_^]?(?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]+)?[+\-*/=<>., ]*)?\\(?:sqrt|frac|log|ln|sum|prod|in|min|max|le|ge|neq|approx|cdot|times|otimes|ldots|dots|cdots|vdots|ddots|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|Omega|omega|Theta)\b(?:\{[^}\n]*\})?(?:\{[^}\n]*\})?)/g,
       (_match, expression: string) => `$${expression.trim()}$`,
     )
     .replace(/@@TREEAI_MATH_(\d+)@@/g, (_match, index: string) => protectedMath[Number(index)] ?? "");
+}
+
+function protectParenthesizedInlineMath(segment: string, protectedMath: string[]) {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < segment.length) {
+    const open = segment.indexOf("(", cursor);
+    if (open < 0) {
+      result += segment.slice(cursor);
+      break;
+    }
+
+    result += segment.slice(cursor, open);
+    const close = findMatchingParen(segment, open);
+    if (close < 0) {
+      result += segment.slice(open);
+      break;
+    }
+
+    const inner = segment.slice(open + 1, close).trim();
+    if (looksLikeBareInlineMath(inner)) {
+      const token = `@@TREEAI_MATH_${protectedMath.length}@@`;
+      protectedMath.push(`$${normalizeMathSource(inner)}$`);
+      result += token;
+    } else {
+      result += segment.slice(open, close + 1);
+    }
+    cursor = close + 1;
+  }
+
+  return result;
+}
+
+function findMatchingParen(content: string, open: number) {
+  let depth = 0;
+  for (let index = open; index < content.length; index += 1) {
+    const char = content[index];
+    if ((char === "(" || char === ")") && isEscaped(content, index)) continue;
+    if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function looksLikeBareInlineMath(source: string) {
+  if (source.length < 3 || source.includes("@@TREEAI_MATH_")) return false;
+  if (/[$`\n]/.test(source)) return false;
+  if (/[А-Яа-яЁё]/.test(source)) return false;
+
+  const hasLatexCommand = /\\[a-zA-Z]+/.test(source);
+  const hasIndices = /[_^](?:\{[^}\n]+\}|[A-Za-z0-9]+)/.test(source);
+  const hasRelation = /(?:=|<|>|≈|≤|≥|\\(?:in|le|ge|neq|approx)\b)/.test(source);
+  const hasManyMathMarks = (source.match(/[{}_^=\\]/g) ?? []).length >= 3;
+  const textWords = source.match(/[A-Za-z]{3,}/g) ?? [];
+  const nonCommandWords = textWords.filter((word) => !isLatexCommandWord(word));
+
+  return (
+    (hasLatexCommand || hasIndices || hasManyMathMarks) &&
+    hasRelation &&
+    nonCommandWords.length <= 3
+  );
 }
 
 function protectBareDisplayMathLines(segment: string, protectedMath: string[]) {
