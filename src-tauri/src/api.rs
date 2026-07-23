@@ -1,5 +1,6 @@
 use crate::store::{BranchPlan, BranchPlanItem, ChatContextMessage, ChatSettings};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use encoding_rs::WINDOWS_1251;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -471,7 +472,7 @@ fn decode_base64_file_data(data: &str) -> Option<Vec<u8>> {
 }
 
 fn clean_pdf_text(value: &str) -> String {
-    value
+    repair_pdf_mojibake(value)
         .replace('\0', "")
         .lines()
         .map(str::trim_end)
@@ -479,6 +480,39 @@ fn clean_pdf_text(value: &str) -> String {
         .join("\n")
         .trim()
         .to_string()
+}
+
+fn repair_pdf_mojibake(value: &str) -> String {
+    let bytes = value
+        .chars()
+        .map(|ch| {
+            let code = ch as u32;
+            if code <= 0xff {
+                Some(code as u8)
+            } else if ch.is_whitespace() {
+                Some(b' ')
+            } else {
+                None
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(bytes) = bytes else {
+        return value.to_string();
+    };
+    let (decoded, _, _) = WINDOWS_1251.decode(&bytes);
+    let decoded = decoded.into_owned();
+    if cyrillic_score(&decoded) > cyrillic_score(value) + 20 {
+        decoded
+    } else {
+        value.to_string()
+    }
+}
+
+fn cyrillic_score(value: &str) -> usize {
+    value
+        .chars()
+        .filter(|ch| ('А'..='я').contains(ch) || matches!(ch, 'Ё' | 'ё' | 'І' | 'і'))
+        .count()
 }
 
 fn should_use_openai_prompt_cache_hints(endpoint: &str) -> bool {
@@ -692,7 +726,8 @@ fn json_candidates(answer: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        content_parts_with_direct_attachments, decode_base64_file_data, normalize_stream_delta,
+        clean_pdf_text, content_parts_with_direct_attachments, decode_base64_file_data,
+        normalize_stream_delta,
     };
 
     #[test]
@@ -752,6 +787,12 @@ mod tests {
             decode_base64_file_data("data:application/pdf;base64,JVBERi0=").as_deref(),
             Some(&b"%PDF-"[..])
         );
+    }
+
+    #[test]
+    fn repairs_cp1251_pdf_mojibake() {
+        let repaired = clean_pdf_text("ÝÊÇÀÌÅÍÀÖÈÎÍÍÀß ÏÐÎÃÐÀÌÌÀ");
+        assert_eq!(repaired, "ЭКЗАМЕНАЦИОННАЯ ПРОГРАММА");
     }
 }
 
