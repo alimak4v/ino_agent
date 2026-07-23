@@ -591,13 +591,6 @@ export default function App() {
     setMessages([]);
   }, []);
 
-  const handleShowTree = useCallback(() => {
-    if (!activeTreeIdRef.current) return;
-    setActiveAuxPanel(null);
-    setChatHomeVisible(false);
-    setTreeVisible(true);
-  }, []);
-
   const handleSelectTree = useCallback(
     async (treeId: string) => {
       const tree = trees.find((item) => item.id === treeId);
@@ -1248,7 +1241,6 @@ export default function App() {
         onSelectTree={handleSelectTree}
         onDeleteTree={handleDeleteTreeFromSidebar}
         onOpenSearch={() => void openAuxPanelWindow("search")}
-        onShowTree={handleShowTree}
         onOpenSettings={() => void openAuxPanelWindow("settings")}
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -1847,7 +1839,6 @@ function MainSidebar({
   onSelectTree,
   onDeleteTree,
   onOpenSearch,
-  onShowTree,
   onOpenSettings,
 }: {
   trees: TreeSummary[];
@@ -1857,10 +1848,30 @@ function MainSidebar({
   onSelectTree: (treeId: string) => void;
   onDeleteTree: (tree: TreeSummary) => void;
   onOpenSearch: () => void;
-  onShowTree: () => void;
   onOpenSettings: () => void;
 }) {
   const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
+  const [contextMenu, setContextMenu] = useState<{
+    tree: TreeSummary;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [contextMenu]);
 
   return (
     <aside className="no-drag hidden h-screen w-[292px] shrink-0 flex-col border-r border-[#e5e5e5] bg-[#f9f9f9] text-[#171717] md:flex">
@@ -1894,15 +1905,6 @@ function MainSidebar({
           <SearchIcon />
           <span className="truncate">{uiText(language, "search")}</span>
         </button>
-        <button
-          type="button"
-          onClick={onShowTree}
-          disabled={!activeTreeId}
-          className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] text-[#171717] transition-colors hover:bg-[#ececec] focus-visible:bg-[#ececec] focus-visible:outline-none disabled:cursor-default disabled:text-[#a8a8a8] disabled:hover:bg-transparent"
-        >
-          <PanelIcon />
-          <span className="truncate">{uiText(language, "tree")}</span>
-        </button>
       </nav>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         <div className="mb-2 px-3 text-sm font-semibold text-[#171717]">
@@ -1917,6 +1919,14 @@ function MainSidebar({
               return (
                 <div
                   key={tree.id}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setContextMenu({
+                      tree,
+                      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)),
+                      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 72)),
+                    });
+                  }}
                   className={`group flex h-10 w-full min-w-0 items-center gap-2 rounded-xl pl-3 pr-1.5 text-left text-[15px] transition-colors focus-visible:outline-none ${
                     active
                       ? "bg-[#ececec] text-[#171717]"
@@ -1929,20 +1939,6 @@ function MainSidebar({
                     className="min-w-0 flex-1 truncate text-left outline-none"
                   >
                     {tree.title}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`${uiText(language, "deleteChat")}: ${tree.title}`}
-                    title={uiText(language, "deleteChat")}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDeleteTree(tree);
-                    }}
-                    className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[#6b6b6b] transition-colors hover:bg-[#dedede] hover:text-[#d93025] focus-visible:bg-[#dedede] focus-visible:text-[#d93025] focus-visible:outline-none ${
-                      active ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                    }`}
-                  >
-                    <TrashIcon />
                   </button>
                 </div>
               );
@@ -1970,6 +1966,26 @@ function MainSidebar({
           <SettingsIcon />
         </button>
       </div>
+      {contextMenu && (
+        <div
+          className="fixed z-[120] min-w-[188px] rounded-xl border border-[#dedede] bg-white p-1.5 text-[#171717] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              const tree = contextMenu.tree;
+              setContextMenu(null);
+              onDeleteTree(tree);
+            }}
+            className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm text-[#d93025] transition-colors hover:bg-[#f6eeee] focus-visible:bg-[#f6eeee] focus-visible:outline-none"
+          >
+            <TrashIcon />
+            <span className="truncate">{uiText(language, "deleteChat")}</span>
+          </button>
+        </div>
+      )}
     </aside>
   );
 }
