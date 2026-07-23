@@ -1,4 +1,5 @@
 use crate::store::{BranchPlan, BranchPlanItem, ChatContextMessage, ChatSettings};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -315,17 +316,13 @@ fn content_parts_with_direct_attachments(content: &str) -> Option<Vec<Value>> {
     let mut parts = Vec::new();
     let mut text = text.trim().to_string();
     for attachment in &attachments {
-        if let Some(extracted_text) = attachment.extracted_text.as_deref() {
-            let extracted_text = extracted_text.trim();
-            if extracted_text.is_empty() {
-                continue;
-            }
+        if let Some(extracted_text) = attachment_text_fallback(attachment) {
             text.push_str("\n\nPDF text fallback extracted locally from \"");
             text.push_str(&attachment.filename);
             text.push_str(
                 "\". Use this text if the model/provider cannot read the attached PDF file directly. Do not infer the file contents from the filename alone.\n\n",
             );
-            text.push_str(extracted_text);
+            text.push_str(&extracted_text);
         }
     }
     let text = text.trim();
@@ -438,6 +435,50 @@ fn parse_direct_attachment(payload: &str) -> Option<DirectAttachment> {
         data,
         extracted_text,
     })
+}
+
+fn attachment_text_fallback(attachment: &DirectAttachment) -> Option<String> {
+    if let Some(extracted_text) = attachment.extracted_text.as_deref() {
+        let extracted_text = extracted_text.trim();
+        if !extracted_text.is_empty() {
+            return Some(extracted_text.to_string());
+        }
+    }
+    if !attachment.mime.eq_ignore_ascii_case("application/pdf")
+        && !attachment.filename.to_lowercase().ends_with(".pdf")
+    {
+        return None;
+    }
+    let bytes = decode_base64_file_data(&attachment.data)?;
+    pdf_extract::extract_text_from_mem(&bytes)
+        .ok()
+        .map(|text| clean_pdf_text(&text))
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+fn decode_base64_file_data(data: &str) -> Option<Vec<u8>> {
+    let payload = data
+        .trim()
+        .split_once(',')
+        .map(|(_, payload)| payload)
+        .unwrap_or(data);
+    let compact = payload
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    BASE64_STANDARD.decode(compact).ok()
+}
+
+fn clean_pdf_text(value: &str) -> String {
+    value
+        .replace('\0', "")
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn should_use_openai_prompt_cache_hints(endpoint: &str) -> bool {
@@ -650,7 +691,9 @@ fn json_candidates(answer: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{content_parts_with_direct_attachments, normalize_stream_delta};
+    use super::{
+        content_parts_with_direct_attachments, decode_base64_file_data, normalize_stream_delta,
+    };
 
     #[test]
     fn keeps_plain_stream_delta() {
@@ -696,6 +739,18 @@ mod tests {
         assert_eq!(
             parts[1]["file"]["file_data"],
             "data:application/pdf;base64,JVBERi0="
+        );
+    }
+
+    #[test]
+    fn decodes_raw_and_data_url_file_data() {
+        assert_eq!(
+            decode_base64_file_data("JVBERi0=").as_deref(),
+            Some(&b"%PDF-"[..])
+        );
+        assert_eq!(
+            decode_base64_file_data("data:application/pdf;base64,JVBERi0=").as_deref(),
+            Some(&b"%PDF-"[..])
         );
     }
 }
