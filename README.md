@@ -1,3 +1,7 @@
+
+
+<img width="1092" height="792" alt="Снимок экрана — 2026-07-24 в 20 06 26" src="https://github.com/user-attachments/assets/863d830c-9f67-4f35-b057-7357e9c11622" />
+
 <p align="center">
   <h1 align="center">ino-agent</h1>
 </p>
