@@ -1,4 +1,11 @@
-import { type FormEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   api,
   type FeedbackSummary,
@@ -37,6 +44,7 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
   const [editingMemoryId, setEditingMemoryId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const springFrameRef = useRef<number | null>(null);
   const [draft, setDraft] = useState<MemoryInput>({
     title: "",
     description: "",
@@ -100,7 +108,11 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
   }, [query]);
 
   const visibleItems = query.trim() ? results.map((result) => result.item) : recent;
-  const graphLayout = useMemo(() => applyGraphPositions(layoutGraph(graph), graphPositions), [graph, graphPositions]);
+  const baseGraphLayout = useMemo(() => layoutGraph(graph), [graph]);
+  const graphLayout = useMemo(
+    () => applyGraphPositions(baseGraphLayout, graphPositions),
+    [baseGraphLayout, graphPositions],
+  );
   const selectedMemory = graph.nodes.find((node) => node.id === selectedMemoryId) ?? null;
 
   useEffect(() => {
@@ -109,6 +121,14 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
       setSelectedMemoryId("");
     }
   }, [graph.nodes, selectedMemoryId]);
+
+  useEffect(() => {
+    return () => {
+      if (springFrameRef.current !== null) {
+        window.cancelAnimationFrame(springFrameRef.current);
+      }
+    };
+  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -248,8 +268,75 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
     setGraphPositions((current) => ({ ...current, [draggedMemoryId]: point }));
   };
 
+  const settleGraphNode = (nodeId: string) => {
+    if (springFrameRef.current !== null) {
+      window.cancelAnimationFrame(springFrameRef.current);
+      springFrameRef.current = null;
+    }
+
+    const target = baseGraphLayout.nodes.find((node) => node.item.id === nodeId);
+    if (!target) {
+      setGraphPositions((current) => {
+        if (!(nodeId in current)) return current;
+        const next = { ...current };
+        delete next[nodeId];
+        return next;
+      });
+      return;
+    }
+
+    const currentPosition = graphPositions[nodeId] ?? { x: target.x, y: target.y };
+    const state = {
+      x: currentPosition.x,
+      y: currentPosition.y,
+      vx: 0,
+      vy: 0,
+      targetX: target.x,
+      targetY: target.y,
+    };
+
+    const step = () => {
+      const dx = state.targetX - state.x;
+      const dy = state.targetY - state.y;
+      state.vx = (state.vx + dx * 0.18) * 0.78;
+      state.vy = (state.vy + dy * 0.18) * 0.78;
+      state.x += state.vx;
+      state.y += state.vy;
+
+      const settled =
+        Math.abs(dx) < 0.35 &&
+        Math.abs(dy) < 0.35 &&
+        Math.abs(state.vx) < 0.25 &&
+        Math.abs(state.vy) < 0.25;
+
+      setGraphPositions((current) => {
+        if (settled) {
+          if (!(nodeId in current)) return current;
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        }
+        return {
+          ...current,
+          [nodeId]: { x: state.x, y: state.y },
+        };
+      });
+
+      if (settled) {
+        springFrameRef.current = null;
+        return;
+      }
+      springFrameRef.current = window.requestAnimationFrame(step);
+    };
+
+    springFrameRef.current = window.requestAnimationFrame(step);
+  };
+
   const stopGraphDrag = () => {
+    if (!draggedMemoryId) return;
+    const nodeId = draggedMemoryId;
     setDraggedMemoryId("");
+    settleGraphNode(nodeId);
   };
 
   return (
@@ -523,6 +610,10 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
                   onPointerDown={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
+                    if (springFrameRef.current !== null) {
+                      window.cancelAnimationFrame(springFrameRef.current);
+                      springFrameRef.current = null;
+                    }
                     event.currentTarget.setPointerCapture(event.pointerId);
                     setDraggedMemoryId(node.item.id);
                     setSelectedMemoryId(node.item.id);
