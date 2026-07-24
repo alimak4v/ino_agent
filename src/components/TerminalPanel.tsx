@@ -125,7 +125,7 @@ export function TerminalPanel({ onClose, windowed = false }: TerminalPanelProps)
     <aside
       className={
         windowed
-          ? "no-drag flex h-screen min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          ? "no-drag flex h-full min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
           : "no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[860px]"
       }
     >

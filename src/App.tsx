@@ -108,6 +108,17 @@ function panelFromLocation(): AuxPanel | null {
   return value && value in AUX_PANEL_CONFIG ? (value as AuxPanel) : null;
 }
 
+function panelTitle(panel: AuxPanel, language: InterfaceLanguage) {
+  if (panel === "chats") return uiText(language, "chats");
+  if (panel === "projects") return uiText(language, "projects");
+  if (panel === "tasks") return uiText(language, "tasks");
+  if (panel === "terminal") return uiText(language, "terminal");
+  if (panel === "search") return uiText(language, "search");
+  if (panel === "memory") return uiText(language, "memory");
+  if (panel === "knowledge") return uiText(language, "knowledge");
+  return uiText(language, "settings");
+}
+
 function loadSidebarProfile(): SidebarProfile {
   if (typeof window === "undefined") return { name: "ino-agent", avatarDataUrl: "" };
   try {
@@ -191,6 +202,10 @@ export default function App() {
   const [agentToolEvents, setAgentToolEvents] = useState<Record<string, AgentToolEvent[]>>({});
   const [chatError, setChatError] = useState("");
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
+  const [connectorsLoading, setConnectorsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [statusText, setStatusText] = useState("");
   const [treeVisible, setTreeVisible] = useState(false);
@@ -231,6 +246,7 @@ export default function App() {
       .getSettings()
       .then((loaded) => {
         setSettings(loaded);
+        setSettingsDraft(loaded);
       })
       .catch((e) => setChatError(String(e)));
   }, []);
@@ -558,7 +574,9 @@ export default function App() {
     try {
       const created = await api.createTree(nextTitle);
       await api.setCurrentNode(created.tree_id, created.root_node_id);
+      setActiveAuxPanel(null);
       setChatHomeVisible(false);
+      setTreeVisible(false);
       await loadCanvas(created.root_node_id, created.tree_id);
     } catch (e) {
       setStatusText(String(e));
@@ -579,12 +597,23 @@ export default function App() {
       const tree = trees.find((item) => item.id === treeId);
       activeTreeIdRef.current = treeId;
       setActiveTreeId(treeId);
+      setActiveAuxPanel(null);
       setChatHomeVisible(false);
       setTreeVisible(false);
       await loadCanvas(tree?.last_node_id ?? null, treeId);
     },
     [loadCanvas, trees],
   );
+
+  const closeEmbeddedPanel = useCallback(() => {
+    setActiveAuxPanel(null);
+  }, []);
+
+  const openEmbeddedPanel = useCallback((panel: AuxPanel) => {
+    setActiveAuxPanel(panel);
+    setTreeVisible(false);
+    setChatHomeVisible(false);
+  }, []);
 
   const handleRenameTreeFromSidebar = useCallback(
     async (tree: TreeSummary) => {
@@ -672,6 +701,7 @@ export default function App() {
   const handleSelectNode = useCallback(
     async (treeId: string, nodeId: string) => {
       setChatHomeVisible(false);
+      setActiveAuxPanel(null);
       setTreeVisible(false);
       setTargetMessageId("");
       selectLocally(nodeId);
@@ -894,6 +924,7 @@ export default function App() {
 
   const handleStartChat = useCallback(
     async (content: string) => {
+      setActiveAuxPanel(null);
       setStartingChat(true);
       setChatError("");
       try {
@@ -906,6 +937,96 @@ export default function App() {
       }
     },
     [createInitialTree, sendMessageToNode],
+  );
+
+  const loadConnectors = useCallback(async () => {
+    setConnectorsLoading(true);
+    try {
+      setConnectors(await api.listConnectors());
+      setStatusText("");
+    } catch (e) {
+      setStatusText(String(e));
+    } finally {
+      setConnectorsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeAuxPanel === "settings") {
+      void loadConnectors();
+    }
+  }, [activeAuxPanel, loadConnectors]);
+
+  const saveSettings = useCallback(async (input: SettingsInput) => {
+    const saved = await api.saveSettings(input);
+    setSettings(saved);
+    setSettingsDraft(saved);
+    await emit("panel-settings-saved");
+  }, []);
+
+  const handleSubmitSettings = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      setSavingSettings(true);
+      try {
+        await saveSettings(settingsDraft);
+        setStatusText("");
+      } catch (e) {
+        setStatusText(String(e));
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleThemeChange = useCallback(
+    (theme: ThemeName) => {
+      const next = { ...settingsDraft, theme };
+      setSettingsDraft(next);
+      void saveSettings(next).catch((e) => setStatusText(String(e)));
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleLanguageChange = useCallback(
+    (language: InterfaceLanguage) => {
+      const next = { ...settingsDraft, language };
+      setSettingsDraft(next);
+      void saveSettings(next).catch((e) => setStatusText(String(e)));
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleToggleConnector = useCallback(
+    async (id: string, enabled: boolean) => {
+      try {
+        await api.setConnectorEnabled(id, enabled);
+        await loadConnectors();
+        await emit("panel-settings-saved");
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [loadConnectors],
+  );
+
+  const handleOpenFolder = useCallback(async (path: string) => {
+    try {
+      await openShell(path);
+    } catch (e) {
+      setStatusText(String(e));
+    }
+  }, []);
+
+  const handleAskAgentFromPanel = useCallback(
+    async (content: string) => {
+      setActiveAuxPanel(null);
+      setTreeVisible(false);
+      setChatHomeVisible(true);
+      await handleStartChat(content);
+    },
+    [handleStartChat],
   );
 
   useEffect(() => {
@@ -1190,56 +1311,54 @@ export default function App() {
     [selectedNode],
   );
 
-  const clearAuxPanelState = useCallback(() => {
-    setActiveAuxPanel(null);
-  }, []);
-
-  const markAuxPanelOpen = useCallback(
-    (panel: AuxPanel) => {
-      setActiveAuxPanel(panel);
-    },
-    [],
-  );
-
-  const openAuxPanelWindow = useCallback(
-    async (panel: AuxPanel) => {
-      markAuxPanelOpen(panel);
-      if (!isTauriRuntime()) return;
-      const config = AUX_PANEL_CONFIG[panel];
-      const existing = await WebviewWindow.getByLabel(config.label);
-      if (existing) {
-        await existing.show();
-        await existing.setFocus();
-        return;
-      }
-      const params = new URLSearchParams({ panel });
-      if (panel === "tasks") {
-        if (selectedTreeId) params.set("treeId", selectedTreeId);
-        if (selectedCanvasNodeId) params.set("nodeId", selectedCanvasNodeId);
-      }
-      const window = new WebviewWindow(config.label, {
-        url: `/?${params.toString()}`,
-        title: config.title,
-        width: config.width,
-        height: config.height,
-        minWidth: config.minWidth,
-        minHeight: config.minHeight,
-        center: true,
-        resizable: true,
-        decorations: true,
-        hiddenTitle: false,
-        preventOverflow: true,
-      });
-      void window.once("tauri://destroyed", () => {
-        clearAuxPanelState();
-      });
-      void window.once("tauri://error", (event) => {
-        clearAuxPanelState();
-        setStatusText(String(event.payload));
-      });
-    },
-    [clearAuxPanelState, markAuxPanelOpen, selectedCanvasNodeId, selectedTreeId],
-  );
+  const embeddedPanelNode =
+    activeAuxPanel === "chats" ? (
+      <ChatsPanel
+        windowed
+        trees={trees}
+        activeTreeId={activeTreeId}
+        language={language}
+        onCreateRoot={handleCreateRoot}
+        onSelectTree={handleSelectTree}
+      />
+    ) : activeAuxPanel === "projects" ? (
+      <ProjectWizardPanel
+        windowed
+        onClose={closeEmbeddedPanel}
+        onOpenFolder={handleOpenFolder}
+        onAskAgent={handleAskAgentFromPanel}
+      />
+    ) : activeAuxPanel === "tasks" ? (
+      <AgentTasksPanel
+        windowed
+        treeId={selectedTreeId}
+        nodeId={selectedCanvasNodeId}
+        onClose={closeEmbeddedPanel}
+      />
+    ) : activeAuxPanel === "terminal" ? (
+      <TerminalPanel windowed onClose={closeEmbeddedPanel} />
+    ) : activeAuxPanel === "search" ? (
+      <SearchPanel windowed onClose={closeEmbeddedPanel} onOpenTarget={handleOpenTarget} />
+    ) : activeAuxPanel === "memory" ? (
+      <MemoryPanel windowed onClose={closeEmbeddedPanel} onOpenTarget={handleOpenTarget} />
+    ) : activeAuxPanel === "knowledge" ? (
+      <KnowledgePanel windowed onClose={closeEmbeddedPanel} onOpenTarget={handleOpenTarget} />
+    ) : activeAuxPanel === "settings" ? (
+      <SettingsPanel
+        windowed
+        settings={settings}
+        settingsDraft={settingsDraft}
+        saving={savingSettings}
+        connectors={connectors}
+        connectorsLoading={connectorsLoading}
+        onChange={setSettingsDraft}
+        onThemeChange={handleThemeChange}
+        onLanguageChange={handleLanguageChange}
+        onToggleConnector={handleToggleConnector}
+        onCancel={closeEmbeddedPanel}
+        onSubmit={handleSubmitSettings}
+      />
+    ) : null;
 
   return (
     <main className="no-drag relative flex h-screen overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)]">
@@ -1247,14 +1366,16 @@ export default function App() {
       {sidebarOpen && (
         <MainSidebar
           trees={trees}
-          activeTreeId={chatHomeVisible ? null : activeTreeId}
+          activeTreeId={activeAuxPanel || chatHomeVisible ? null : activeTreeId}
+          activePanel={activeAuxPanel}
           language={language}
           onNewChat={handleNewChat}
           onSelectTree={handleSelectTree}
           onDeleteTree={handleDeleteTreeFromSidebar}
           onRenameTree={handleRenameTreeFromSidebar}
-          onOpenSearch={() => void openAuxPanelWindow("search")}
-          onOpenSettings={() => void openAuxPanelWindow("settings")}
+          onOpenPanel={openEmbeddedPanel}
+          onOpenSearch={() => openEmbeddedPanel("search")}
+          onOpenSettings={() => openEmbeddedPanel("settings")}
           onCloseSidebar={() => setSidebarOpen(false)}
           compactTopInset={!titlebarNeedsTrafficSpace}
         />
@@ -1276,14 +1397,14 @@ export default function App() {
             <TopBarButton
               label={uiText(language, "chats")}
               active={activeAuxPanel === "chats"}
-              onClick={() => void openAuxPanelWindow("chats")}
+              onClick={() => openEmbeddedPanel("chats")}
             >
               <ChatsIcon />
             </TopBarButton>
             <TopBarButton
               label={uiText(language, "search")}
               active={activeAuxPanel === "search"}
-              onClick={() => void openAuxPanelWindow("search")}
+              onClick={() => openEmbeddedPanel("search")}
             >
               <SearchIcon />
             </TopBarButton>
@@ -1297,7 +1418,7 @@ export default function App() {
               <TopBarButton
                 label={uiText(language, "search")}
                 active={activeAuxPanel === "search"}
-                onClick={() => void openAuxPanelWindow("search")}
+                onClick={() => openEmbeddedPanel("search")}
               >
                 <SearchIcon />
               </TopBarButton>
@@ -1309,12 +1430,12 @@ export default function App() {
               </TopBarButton>
             </div>
           )}
-          {!chatHomeVisible && (
+          {(!chatHomeVisible || activeAuxPanel) && (
             <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(560px,42vw)] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center leading-tight">
               <div className="max-w-full truncate text-sm font-semibold text-[color:var(--text)]">
-                {titlebarTitle}
+                {activeAuxPanel ? panelTitle(activeAuxPanel, language) : titlebarTitle}
               </div>
-              {titlebarSubtitle && (
+              {!activeAuxPanel && titlebarSubtitle && (
                 <div className="mt-0.5 max-w-full truncate text-[11px] text-[color:var(--muted)]">
                   {titlebarSubtitle}
                 </div>
@@ -1322,7 +1443,7 @@ export default function App() {
             </div>
           )}
           <div className="absolute right-3 top-2 flex min-w-0 items-center justify-end gap-2">
-            {!chatHomeVisible && (
+            {!chatHomeVisible && !activeAuxPanel && (
               <TopBarButton
                 label={treeVisible ? uiText(language, "focus") : uiText(language, "tree")}
                 onClick={() => {
@@ -1344,7 +1465,7 @@ export default function App() {
                 label={uiText(language, "settings")}
                 active={activeAuxPanel === "settings"}
                 tooltipAlign="right"
-                onClick={() => void openAuxPanelWindow("settings")}
+                onClick={() => openEmbeddedPanel("settings")}
               >
                 <SettingsIcon />
               </TopBarButton>
@@ -1359,7 +1480,8 @@ export default function App() {
               </div>
             }
           >
-            {treeVisible && (
+            {embeddedPanelNode}
+            {!embeddedPanelNode && treeVisible && (
               <section className="min-h-[240px] min-w-0 shrink-0 overflow-hidden border-b border-[color:var(--border)] md:min-h-0 md:flex-1 md:border-b-0">
                 <TreeCanvas
                   nodes={nodes}
@@ -1374,7 +1496,7 @@ export default function App() {
                 />
               </section>
             )}
-            {!treeVisible && (
+            {!embeddedPanelNode && !treeVisible && (
               <ChatPanel
                 selectedNode={chatHomeVisible ? null : selectedNode}
                 messages={chatHomeVisible ? [] : messages}
@@ -1409,11 +1531,11 @@ export default function App() {
           onClose={dismissOnboarding}
           onOpenSettings={() => {
             dismissOnboarding();
-            void openAuxPanelWindow("settings");
+            openEmbeddedPanel("settings");
           }}
           onOpenProjects={() => {
             dismissOnboarding();
-            void openAuxPanelWindow("projects");
+            openEmbeddedPanel("projects");
           }}
         />
       )}
@@ -1624,43 +1746,6 @@ function PanelWindowApp({ panel }: { panel: AuxPanel }) {
     [closeWindow, focusMainWindow],
   );
 
-  const handleOpenPanel = useCallback(
-    async (nextPanel: AuxPanel) => {
-      if (nextPanel === panel) return;
-      try {
-        const config = AUX_PANEL_CONFIG[nextPanel];
-        const existing = await WebviewWindow.getByLabel(config.label);
-        if (existing) {
-          await existing.show();
-          await existing.setFocus();
-          await closeWindow();
-          return;
-        }
-        const params = new URLSearchParams({ panel: nextPanel });
-        const nextWindow = new WebviewWindow(config.label, {
-          url: `/?${params.toString()}`,
-          title: config.title,
-          width: config.width,
-          height: config.height,
-          minWidth: config.minWidth,
-          minHeight: config.minHeight,
-          center: true,
-          resizable: true,
-          decorations: true,
-          hiddenTitle: false,
-          preventOverflow: true,
-        });
-        void nextWindow.once("tauri://error", (event) => {
-          setStatusText(String(event.payload));
-        });
-        await closeWindow();
-      } catch (e) {
-        setStatusText(String(e));
-      }
-    },
-    [closeWindow, panel],
-  );
-
   const panelNode =
     panel === "chats" ? (
       <ChatsPanel
@@ -1705,7 +1790,6 @@ function PanelWindowApp({ panel }: { panel: AuxPanel }) {
         onThemeChange={handleThemeChange}
         onLanguageChange={handleLanguageChange}
         onToggleConnector={handleToggleConnector}
-        onOpenPanel={handleOpenPanel}
         onCancel={() => void closeWindow()}
         onSubmit={handleSubmitSettings}
       />
@@ -1848,11 +1932,13 @@ function TopBarButton({
 function MainSidebar({
   trees,
   activeTreeId,
+  activePanel,
   language,
   onNewChat,
   onSelectTree,
   onDeleteTree,
   onRenameTree,
+  onOpenPanel,
   onOpenSearch,
   onOpenSettings,
   onCloseSidebar,
@@ -1860,17 +1946,26 @@ function MainSidebar({
 }: {
   trees: TreeSummary[];
   activeTreeId: string | null;
+  activePanel: AuxPanel | null;
   language: InterfaceLanguage;
   onNewChat: () => void;
   onSelectTree: (treeId: string) => void;
   onDeleteTree: (tree: TreeSummary) => void;
   onRenameTree: (tree: TreeSummary) => void;
+  onOpenPanel: (panel: AuxPanel) => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
   onCloseSidebar: () => void;
   compactTopInset: boolean;
 }) {
   const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
+  const toolItems: Array<{ panel: AuxPanel; label: string; icon: ReactNode }> = [
+    { panel: "projects", label: uiText(language, "projects"), icon: <ProjectIcon /> },
+    { panel: "tasks", label: uiText(language, "tasks"), icon: <TasksIcon /> },
+    { panel: "terminal", label: uiText(language, "terminal"), icon: <TerminalIcon /> },
+    { panel: "memory", label: uiText(language, "memory"), icon: <MemoryIcon /> },
+    { panel: "knowledge", label: uiText(language, "knowledge"), icon: <KnowledgeIcon /> },
+  ];
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const profileRootRef = useRef<HTMLDivElement | null>(null);
   const [profile, setProfile] = useState<SidebarProfile>(() => loadSidebarProfile());
@@ -1944,7 +2039,7 @@ function MainSidebar({
     <aside className="no-drag hidden h-screen w-[260px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--sidebar)] text-[color:var(--text)] md:flex">
       <div className={`drag-region shrink-0 ${compactTopInset ? "h-0" : "h-10"}`} />
       <div className="flex h-12 shrink-0 items-center justify-between px-3">
-        <div className="truncate text-xl font-semibold tracking-normal">ino-agent</div>
+        <div className="truncate text-[23px] font-semibold tracking-normal">ino-agent</div>
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
@@ -1970,11 +2065,29 @@ function MainSidebar({
         <button
           type="button"
           onClick={onNewChat}
-          className="flex h-9 w-full items-center gap-2 rounded-2xl bg-[color:var(--selected)] px-3 text-left text-sm font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--panel-soft)] focus-visible:bg-[color:var(--panel-soft)] focus-visible:outline-none"
+          className="flex h-9 w-full items-center gap-2 rounded-2xl px-3 text-left text-[13px] font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
         >
           <NewChatIcon />
           <span className="truncate">{uiText(language, "newChat")}</span>
         </button>
+        {toolItems.map((item) => {
+          const active = activePanel === item.panel;
+          return (
+            <button
+              key={item.panel}
+              type="button"
+              onClick={() => onOpenPanel(item.panel)}
+              className={`flex h-9 w-full items-center gap-2 rounded-2xl px-3 text-left text-[13px] font-medium transition-colors focus-visible:outline-none ${
+                active
+                  ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                  : "text-[color:var(--text)] hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)]"
+              }`}
+            >
+              {item.icon}
+              <span className="truncate">{item.label}</span>
+            </button>
+          );
+        })}
       </nav>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         <div className="mb-2 px-3 text-[13px] font-semibold text-[color:var(--text)]">
@@ -1997,7 +2110,7 @@ function MainSidebar({
                       y: Math.max(8, Math.min(event.clientY, window.innerHeight - 96)),
                     });
                   }}
-                  className={`group flex h-9 w-full min-w-0 items-center gap-2 rounded-2xl pl-3 pr-1.5 text-left text-sm transition-colors focus-visible:outline-none ${
+                  className={`group flex h-9 w-full min-w-0 items-center gap-2 rounded-2xl pl-3 pr-1.5 text-left text-[13px] transition-colors focus-visible:outline-none ${
                     active
                       ? "bg-[color:var(--selected)] text-[color:var(--text)]"
                       : "text-[color:var(--text)] hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)]"
@@ -2187,7 +2300,7 @@ function ChatsPanel({
     <div
       className={
         windowed
-          ? "no-drag flex h-screen min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          ? "no-drag flex h-full min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
           : "no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-0 sm:right-auto sm:top-10 sm:w-[300px]"
       }
     >
@@ -2259,7 +2372,6 @@ function SettingsPanel({
   onThemeChange,
   onLanguageChange,
   onToggleConnector,
-  onOpenPanel,
   onCancel,
   onSubmit,
   windowed = false,
@@ -2273,7 +2385,6 @@ function SettingsPanel({
   onThemeChange: (theme: ThemeName) => void;
   onLanguageChange: (language: InterfaceLanguage) => void;
   onToggleConnector: (id: string, enabled: boolean) => void;
-  onOpenPanel: (panel: AuxPanel) => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent) => void;
   windowed?: boolean;
@@ -2283,15 +2394,12 @@ function SettingsPanel({
     "mt-1 h-9 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
   const textareaClass =
     "mt-1 min-h-24 w-full resize-y rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2 text-sm leading-5 text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
-  const toolButtonClass =
-    "flex h-9 min-w-0 items-center gap-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-left text-xs text-[color:var(--text)] transition-colors hover:bg-[color:var(--panel-soft)]";
-
   return (
     <form
       onSubmit={onSubmit}
       className={
         windowed
-          ? "no-drag flex h-screen min-h-0 flex-col overflow-y-auto bg-[color:var(--panel)] p-4"
+          ? "no-drag flex h-full min-h-0 flex-col overflow-y-auto bg-[color:var(--panel)] p-4"
           : "no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:w-[420px]"
       }
     >
@@ -2378,38 +2486,6 @@ function SettingsPanel({
             placeholder={uiText(language, "systemPromptPlaceholder")}
           />
         </label>
-      </div>
-      <div className="mt-4 border-t border-[color:var(--border)] pt-3">
-        <div className="mb-2">
-          <div className="text-sm font-medium text-[color:var(--text)]">
-            {uiText(language, "tools")}
-          </div>
-          <div className="text-xs text-[color:var(--muted)]">
-            {uiText(language, "toolsDescription")}
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <button type="button" onClick={() => onOpenPanel("projects")} className={toolButtonClass}>
-            <ProjectIcon />
-            <span className="truncate">{uiText(language, "projects")}</span>
-          </button>
-          <button type="button" onClick={() => onOpenPanel("tasks")} className={toolButtonClass}>
-            <TasksIcon />
-            <span className="truncate">{uiText(language, "tasks")}</span>
-          </button>
-          <button type="button" onClick={() => onOpenPanel("terminal")} className={toolButtonClass}>
-            <TerminalIcon />
-            <span className="truncate">{uiText(language, "terminal")}</span>
-          </button>
-          <button type="button" onClick={() => onOpenPanel("memory")} className={toolButtonClass}>
-            <MemoryIcon />
-            <span className="truncate">{uiText(language, "memory")}</span>
-          </button>
-          <button type="button" onClick={() => onOpenPanel("knowledge")} className={toolButtonClass}>
-            <KnowledgeIcon />
-            <span className="truncate">{uiText(language, "knowledge")}</span>
-          </button>
-        </div>
       </div>
       <div className="mt-4 border-t border-[color:var(--border)] pt-3">
         <div className="mb-2 flex items-center justify-between gap-3">
