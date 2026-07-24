@@ -698,7 +698,20 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [handleCreateRoot]);
 
-  const handleSelectNode = useCallback(
+  const handleActivateNode = useCallback(
+    async (treeId: string, nodeId: string) => {
+      setTargetMessageId("");
+      selectLocally(nodeId);
+      try {
+        await api.setCurrentNode(treeId, nodeId);
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [selectLocally],
+  );
+
+  const handleOpenDialogPoint = useCallback(
     async (treeId: string, nodeId: string) => {
       setChatHomeVisible(false);
       setActiveAuxPanel(null);
@@ -1484,15 +1497,16 @@ export default function App() {
             {!embeddedPanelNode && treeVisible && (
               <section className="min-h-[240px] min-w-0 shrink-0 overflow-hidden border-b border-[color:var(--border)] md:min-h-0 md:flex-1 md:border-b-0">
                 <TreeCanvas
-                  nodes={nodes}
-                  loading={loading}
-                  statusText={statusText}
-                  onCreateRoot={handleCreateRoot}
-                  onSelectNode={handleSelectNode}
-                  onRenameNode={handleRenameNode}
-                  onCreateChild={handleCreateChild}
-                  onSetNodeColor={handleSetNodeColor}
-                  onDeleteNode={handleDeleteNode}
+                nodes={nodes}
+                loading={loading}
+                statusText={statusText}
+                onCreateRoot={handleCreateRoot}
+                onActivateNode={handleActivateNode}
+                onOpenDialogPoint={handleOpenDialogPoint}
+                onRenameNode={handleRenameNode}
+                onCreateChild={handleCreateChild}
+                onSetNodeColor={handleSetNodeColor}
+                onDeleteNode={handleDeleteNode}
                 />
               </section>
             )}

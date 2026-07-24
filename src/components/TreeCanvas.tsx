@@ -20,7 +20,8 @@ interface TreeCanvasProps {
   loading: boolean;
   statusText: string;
   onCreateRoot: () => void;
-  onSelectNode: (treeId: string, nodeId: string) => void;
+  onActivateNode: (treeId: string, nodeId: string) => void;
+  onOpenDialogPoint: (treeId: string, nodeId: string) => void;
   onRenameNode: (node: CanvasLayoutNode) => void;
   onCreateChild: (node: CanvasLayoutNode) => void;
   onSetNodeColor: (node: CanvasLayoutNode, color: string | null, includeDescendants: boolean) => void;
@@ -221,7 +222,8 @@ export function TreeCanvas({
   loading,
   statusText,
   onCreateRoot,
-  onSelectNode,
+  onActivateNode,
+  onOpenDialogPoint,
   onRenameNode,
   onCreateChild,
   onSetNodeColor,
@@ -539,23 +541,22 @@ export function TreeCanvas({
     (node: CanvasLayoutNode) => {
       const canvasNode = getCanvasNode(node.id) ?? node;
       closeMenu();
-      void onSelectNode(canvasNode.treeId, canvasNode.id);
+      void onActivateNode(canvasNode.treeId, canvasNode.id);
     },
-    [closeMenu, getCanvasNode, onSelectNode],
+    [closeMenu, getCanvasNode, onActivateNode],
   );
 
   const handleNodeContextMenu = useCallback(
     (event: ContextMenuEvent, node: CanvasLayoutNode) => {
       event.preventDefault();
       const canvasNode = getCanvasNode(node.id) ?? node;
-      void onSelectNode(canvasNode.treeId, canvasNode.id);
       setMenu({
         x: event.clientX,
         y: event.clientY,
         node: canvasNode,
       });
     },
-    [getCanvasNode, onSelectNode],
+    [getCanvasNode],
   );
 
   const handlePaneContextMenu = useCallback(
@@ -1070,6 +1071,14 @@ export function TreeCanvas({
             <>
               <button
                 type="button"
+                onClick={() => runMenuAction(() => onOpenDialogPoint(menu.node!.treeId, menu.node!.id))}
+                className="no-drag flex h-[34px] w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm hover:bg-[color:var(--selected)]"
+              >
+                <DialogPointIcon />
+                <span>Go to dialog point</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => runMenuAction(() => onRenameNode(menu.node!))}
                 className="no-drag flex h-[34px] w-full items-center rounded-lg px-2.5 text-left text-sm hover:bg-[color:var(--selected)]"
               >
@@ -1249,6 +1258,25 @@ function RadialModeIcon() {
       <path d="M12 21a9 9 0 0 1-9-9" />
       <path d="M4.6 7a9 9 0 0 1 4.6-3.4" />
       <path d="M19.4 17a9 9 0 0 1-4.6 3.4" />
+    </svg>
+  );
+}
+
+function DialogPointIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="block h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M5 12h9" />
+      <path d="m11 6 6 6-6 6" />
+      <path d="M19 5v14" />
     </svg>
   );
 }
