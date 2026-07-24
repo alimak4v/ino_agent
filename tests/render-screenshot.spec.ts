@@ -7,6 +7,10 @@ test("render smoke fixture captures stable screenshots", async ({ page }, testIn
   await expect(page.getByTestId("render-smoke")).toBeVisible();
 
   await expect(page.getByRole("heading", { name: "Render smoke" })).toBeVisible();
+  await expect(page.locator(".katex").first()).toBeVisible();
+  await expect(page.locator(".katex-error")).toHaveCount(0);
+  await expect(page.getByText("C++")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run" })).toBeVisible();
   await expect(page.getByText("A row highlighted")).toBeVisible();
   await expect(page.getByText("B column")).toBeVisible();
   await expect(page.getByText("Loss by iteration")).toBeVisible();

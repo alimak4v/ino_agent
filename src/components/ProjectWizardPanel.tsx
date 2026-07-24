@@ -10,9 +10,15 @@ interface ProjectWizardPanelProps {
   onClose: () => void;
   onOpenFolder: (path: string) => Promise<void>;
   onAskAgent: (prompt: string) => Promise<void>;
+  windowed?: boolean;
 }
 
-export function ProjectWizardPanel({ onClose, onOpenFolder, onAskAgent }: ProjectWizardPanelProps) {
+export function ProjectWizardPanel({
+  onClose,
+  onOpenFolder,
+  onAskAgent,
+  windowed = false,
+}: ProjectWizardPanelProps) {
   const [stacks, setStacks] = useState<ProjectStackSummary[]>([]);
   const [stackId, setStackId] = useState("");
   const [name, setName] = useState("my-project");
@@ -103,24 +109,22 @@ export function ProjectWizardPanel({ onClose, onOpenFolder, onAskAgent }: Projec
   };
 
   return (
-    <aside className="no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)]/95 shadow-[0_12px_40px_rgba(0,0,0,0.14)] backdrop-blur-xl lg:left-auto lg:right-3 lg:w-[780px]">
-      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-[color:var(--text)]">Project wizard</div>
-          <div className="truncate text-xs text-[color:var(--muted)]">
-            Generate a starter workspace and run safe project commands
-          </div>
+    <aside
+      className={
+        windowed
+          ? "no-drag flex h-full w-full min-h-0 flex-1 flex-col overflow-hidden bg-[color:var(--panel)]"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[780px]"
+      }
+    >
+      <div
+        className={`overflow-y-auto p-6 ${
+          windowed ? "min-h-0 flex-1" : "max-h-[calc(100vh-122px)]"
+        }`}
+      >
+        <div className="mx-auto grid w-full max-w-[980px] gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="lg:col-span-2 text-sm text-[color:var(--muted)]">
+          Generate a starter workspace and run safe project commands
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-8 rounded-full px-3 text-xs text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
-        >
-          Close
-        </button>
-      </div>
-
-      <div className="grid max-h-[calc(100vh-122px)] gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <form onSubmit={submit} className="min-w-0 space-y-4">
           <section className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
             <div className="grid gap-2 sm:grid-cols-2">
@@ -304,6 +308,7 @@ export function ProjectWizardPanel({ onClose, onOpenFolder, onAskAgent }: Projec
               </pre>
             </section>
           )}
+        </div>
         </div>
       </div>
     </aside>

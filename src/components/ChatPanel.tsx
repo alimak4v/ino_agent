@@ -9,13 +9,13 @@ import {
 } from "react";
 import {
   api,
-  isTauriRuntime,
   type AgentToolEvent,
   type AgentToolResult,
   type AgentTrace,
   type Message,
   type QuizAttempt,
 } from "../lib/api";
+import { uiText, type InterfaceLanguage } from "../lib/i18n";
 import type { CanvasLayoutNode } from "./TreeCanvas";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { QuizBlock } from "./QuizBlock";
@@ -33,13 +33,14 @@ interface ChatPanelProps {
   error: string;
   targetMessageId?: string;
   panelWidth?: number;
+  language: InterfaceLanguage;
   onSend: (content: string) => Promise<void>;
   onStartChat?: (content: string) => Promise<void>;
   onStartBranchSplit?: (content: string) => Promise<void>;
   onStartConnector?: (content: string) => Promise<void>;
   onEditMessage: (message: Message, content: string) => Promise<void>;
   onRegenerateMessage: (message: Message) => Promise<void>;
-  onConfirmBranches: (message: Message) => Promise<void>;
+  onConfirmBranches: (message: Message, titles?: string[]) => Promise<void>;
   onForceBranchSplit: (content: string) => Promise<void>;
   onProposeConnector: (content: string) => Promise<void>;
   onOpenTarget: (target: string) => Promise<void>;
@@ -51,6 +52,7 @@ interface AttachmentDraft {
   size: number;
   type: string;
   content: string;
+  directFileData?: string;
   warning?: string;
 }
 
@@ -60,13 +62,8 @@ const MAX_ATTACHMENTS = 8;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_CHARS = 180_000;
 const BRANCH_PLAN_ACTION_MARKER = "<!-- treeai:branch-plan -->";
-const AGENT_MODE_LABELS: Array<{ mode: AgentMode; label: string; title: string }> = [
-  { mode: "auto", label: "Auto", title: "Infer tool permissions from the request" },
-  { mode: "read", label: "Read", title: "Search memory and inspect files only" },
-  { mode: "memory", label: "Memory", title: "Allow memory and knowledge indexing" },
-  { mode: "command", label: "Cmd", title: "Allow safe local commands" },
-  { mode: "workspace", label: "Work", title: "Allow memory/indexing and safe commands" },
-];
+const BRANCH_PLAN_PAYLOAD_FENCE = "ino-agent-branch-plan";
+const AGENT_MODES: AgentMode[] = ["auto", "read", "memory", "command", "workspace"];
 const HOME_INSTITUTIONS = ["MIPT", "MSU", "HSE", "MEPhI", "ITMO", "NSU"] as const;
 const TYPE_SPEED_MS = 72;
 const DELETE_SPEED_MS = 42;
@@ -86,6 +83,7 @@ export function ChatPanel({
   error,
   targetMessageId = "",
   panelWidth,
+  language,
   onSend,
   onStartChat,
   onStartBranchSplit,
@@ -181,6 +179,20 @@ export function ChatPanel({
   );
   const canToggleBranchMode = canUseActionModes;
   const canToggleConnectorMode = canUseActionModes;
+  const modeLabelKey: Record<AgentMode, Parameters<typeof uiText>[1]> = {
+    auto: "modeAuto",
+    read: "modeRead",
+    memory: "modeMemory",
+    command: "modeCommand",
+    workspace: "modeWorkspace",
+  };
+  const modeTitleKey: Record<AgentMode, Parameters<typeof uiText>[1]> = {
+    auto: "modeAutoTitle",
+    read: "modeReadTitle",
+    memory: "modeMemoryTitle",
+    command: "modeCommandTitle",
+    workspace: "modeWorkspaceTitle",
+  };
 
   const attachFiles = async (files: FileList | null) => {
     if (!files?.length || !composerWritable || sending) return;
@@ -345,18 +357,18 @@ export function ChatPanel({
       <div className={composerShell} style={composerShellStyle}>
         {!canWrite && selectedNode && (
           <div className="mb-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] px-4 py-2 text-xs text-[color:var(--muted)]">
-            Select or create a leaf branch to write.
+            {uiText(language, "selectLeafBranch")}
           </div>
         )}
         {editingMessage && (
           <div className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] px-4 py-2 text-xs text-[color:var(--muted)]">
-            <span className="truncate">Editing your message</span>
+            <span className="truncate">{uiText(language, "editingYourMessage")}</span>
             <button
               type="button"
               onClick={cancelEditing}
               className="shrink-0 rounded-full px-2 py-1 text-[color:var(--text)] hover:bg-[color:var(--selected)]"
             >
-              Cancel
+              {uiText(language, "cancel")}
             </button>
           </div>
         )}
@@ -381,7 +393,7 @@ export function ChatPanel({
                     type="button"
                     onClick={() => removeAttachment(file.id)}
                     className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
-                    aria-label={`Remove ${file.name}`}
+                    aria-label={`${uiText(language, "removeFile")} ${file.name}`}
                   >
                     <CloseIcon />
                   </button>
@@ -389,7 +401,7 @@ export function ChatPanel({
               ))}
               {attachmentBusy && (
                 <div className="inline-flex h-8 shrink-0 items-center rounded-full border border-[color:var(--border)] bg-[color:var(--panel-soft)] px-3 text-xs text-[color:var(--muted)]">
-                  Loading files
+                  {uiText(language, "loadingFiles")}
                 </div>
               )}
             </div>
@@ -407,10 +419,10 @@ export function ChatPanel({
                 selectedNode
                   ? canWrite
                     ? editingMessage
-                      ? "Edit your prompt"
-                      : "Ask anything"
-                    : "Parent branches are read-only"
-                  : "Ask anything"
+                      ? uiText(language, "editYourPrompt")
+                      : uiText(language, "askAnything")
+                    : uiText(language, "parentBranchesReadonly")
+                  : uiText(language, "askAnything")
               }
             />
           </div>
@@ -428,7 +440,7 @@ export function ChatPanel({
                 disabled={!composerWritable || sending || attachmentBusy}
                 onClick={() => fileInputRef.current?.click()}
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] bg-transparent p-0 text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label={attachmentBusy ? "Loading files" : "Attach files"}
+                aria-label={attachmentBusy ? uiText(language, "loadingFiles") : uiText(language, "attachFiles")}
               >
                 {attachmentBusy ? (
                   <span className="text-xs leading-none">...</span>
@@ -448,9 +460,9 @@ export function ChatPanel({
                     ? "border-[color:var(--button)] bg-[color:var(--button)] text-[color:var(--button-text)]"
                     : "border-[color:var(--border)] bg-transparent text-[color:var(--text)] hover:bg-[color:var(--selected)]"
                 }`}
-                aria-label={branchMode ? "Cancel branch split after sending" : "Split into branches after sending"}
+                aria-label={branchMode ? uiText(language, "cancelBranchSplit") : uiText(language, "branchSplit")}
                 aria-pressed={branchMode}
-                title={branchMode ? "Split into branches after sending" : "Split into branches after sending"}
+                title={branchMode ? uiText(language, "cancelBranchSplit") : uiText(language, "branchSplit")}
               >
                 <BranchSplitIcon />
               </button>
@@ -466,31 +478,31 @@ export function ChatPanel({
                     ? "border-[color:var(--button)] bg-[color:var(--button)] text-[color:var(--button-text)]"
                     : "border-[color:var(--border)] bg-transparent text-[color:var(--text)] hover:bg-[color:var(--selected)]"
                 }`}
-                aria-label={connectorMode ? "Cancel connector draft" : "Create connector draft"}
+                aria-label={connectorMode ? uiText(language, "cancelConnectorDraft") : uiText(language, "connectorDraft")}
                 aria-pressed={connectorMode}
-                title={connectorMode ? "Create connector draft" : "Create connector draft"}
+                title={connectorMode ? uiText(language, "cancelConnectorDraft") : uiText(language, "connectorDraft")}
               >
                 <ConnectorIcon />
               </button>
               <div
                 className="hidden h-8 items-center rounded-full border border-[color:var(--border)] bg-[color:var(--panel-soft)] p-0.5 sm:inline-flex"
-                aria-label="Agent mode"
+                aria-label={uiText(language, "agentMode")}
               >
-                {AGENT_MODE_LABELS.map((item) => (
+                {AGENT_MODES.map((mode) => (
                   <button
-                    key={item.mode}
+                    key={mode}
                     type="button"
                     disabled={!composerWritable || sending || Boolean(editingMessage)}
-                    onClick={() => setAgentMode(item.mode)}
-                    title={item.title}
+                    onClick={() => setAgentMode(mode)}
+                    title={uiText(language, modeTitleKey[mode])}
                     className={`h-7 rounded-full px-2 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                      agentMode === item.mode
+                      agentMode === mode
                         ? "bg-[color:var(--button)] text-[color:var(--button-text)]"
                         : "text-[color:var(--muted)] hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
                     }`}
-                    aria-pressed={agentMode === item.mode}
+                    aria-pressed={agentMode === mode}
                   >
-                    {item.label}
+                    {uiText(language, modeLabelKey[mode])}
                   </button>
                 ))}
               </div>
@@ -499,7 +511,7 @@ export function ChatPanel({
               type="submit"
               disabled={!canSend}
               className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 bg-[color:var(--button)] p-0 text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label="Send"
+              aria-label={uiText(language, "send")}
             >
               <SendIcon />
             </button>
@@ -520,7 +532,7 @@ export function ChatPanel({
     >
       {showEmptyState ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 pb-16 pt-10">
-          <HomeHeroTitle />
+          <HomeHeroTitle language={language} />
           <div className="w-full space-y-3">
             {errorBlock}
             {composerForm}
@@ -594,26 +606,19 @@ export function ChatPanel({
                     }}
                   />
                   {message.role === "assistant" && hasBranchPlanAction(message.content) && (
-                    <div className="mt-4 flex items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={sending || branchActionBusy === message.id}
-                        onClick={async () => {
-                          setBranchActionBusy(message.id);
-                          try {
-                            await onConfirmBranches(message);
-                          } finally {
-                            setBranchActionBusy("");
-                          }
-                        }}
-                        className="inline-flex h-9 items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--panel)] px-3 text-sm font-medium text-[color:var(--text)] shadow-[0_1px_3px_rgba(0,0,0,0.08)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-45"
-                        aria-label="Split into branches"
-                        title="Split into branches"
-                      >
-                        <CheckIcon />
-                        <span>Split into branches</span>
-                      </button>
-                    </div>
+                    <BranchPlanEditor
+                      message={message}
+                      language={language}
+                      busy={sending || branchActionBusy === message.id}
+                      onConfirm={async (titles) => {
+                        setBranchActionBusy(message.id);
+                        try {
+                          await onConfirmBranches(message, titles);
+                        } finally {
+                          setBranchActionBusy("");
+                        }
+                      }}
+                    />
                   )}
                   <MessageActions
                     message={message}
@@ -671,12 +676,15 @@ export function ChatPanel({
   );
 }
 
-function HomeHeroTitle() {
+function HomeHeroTitle({ language }: { language: InterfaceLanguage }) {
   const [institutionIndex, setInstitutionIndex] = useState(0);
   const [characterCount, setCharacterCount] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const institution = HOME_INSTITUTIONS[institutionIndex];
   const typedInstitution = institution.slice(0, characterCount);
+  const localizedInstitution = getInstitutionLabel(institution, language);
+  const typedLocalizedInstitution =
+    characterCount === institution.length ? localizedInstitution : typedInstitution;
 
   useEffect(() => {
     const complete = characterCount === institution.length;
@@ -708,11 +716,11 @@ function HomeHeroTitle() {
   return (
     <div
       className="mb-7 max-w-full text-center text-[26px] font-semibold leading-tight text-[color:var(--text)] sm:text-[30px]"
-      aria-label={`ino-agent for ${institution}`}
+      aria-label={`ino-agent ${uiText(language, "homeFor")} ${localizedInstitution}`}
     >
-      <span>ino-agent for </span>
+      <span>ino-agent {uiText(language, "homeFor")} </span>
       <span className="inline-block min-w-[5ch] text-left">
-        <span>{typedInstitution}</span>
+        <span>{typedLocalizedInstitution}</span>
         <span
           aria-hidden="true"
           className="ml-0.5 inline-block h-[0.9em] w-[2px] translate-y-[2px] animate-pulse rounded-full bg-[color:var(--text)]"
@@ -720,6 +728,118 @@ function HomeHeroTitle() {
       </span>
     </div>
   );
+}
+
+function BranchPlanEditor({
+  message,
+  language,
+  busy,
+  onConfirm,
+}: {
+  message: Message;
+  language: InterfaceLanguage;
+  busy: boolean;
+  onConfirm: (titles: string[]) => Promise<void>;
+}) {
+  const initialTitles = branchPlanTitlesFromMessage(message.content);
+  const [titles, setTitles] = useState<string[]>(
+    initialTitles.length > 0 ? initialTitles : [""],
+  );
+
+  useEffect(() => {
+    const nextTitles = branchPlanTitlesFromMessage(message.content);
+    setTitles(nextTitles.length > 0 ? nextTitles : [""]);
+  }, [message.id, message.content]);
+
+  const cleanTitles = () => uniqueNonEmptyTitles(titles);
+  const canCreate = cleanTitles().length > 0 && !busy;
+
+  return (
+    <div className="mt-4 max-w-[520px] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+      <div className="mb-2 text-xs font-medium text-[color:var(--muted)]">
+        {uiText(language, "branchTopics")}
+      </div>
+      <div className="space-y-2">
+        {titles.map((title, index) => (
+          <div key={index} className="flex items-center gap-2">
+            <input
+              type="text"
+              value={title}
+              disabled={busy}
+              onChange={(event) => {
+                const next = [...titles];
+                next[index] = event.target.value;
+                setTitles(next);
+              }}
+              className="h-9 min-w-0 flex-1 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-colors placeholder:text-[color:var(--muted)] focus:border-[color:var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
+              placeholder={uiText(language, "branchTopicPlaceholder")}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setTitles((current) =>
+                  current.length <= 1 ? [""] : current.filter((_, itemIndex) => itemIndex !== index),
+                )
+              }
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label={uiText(language, "removeBranchTopic")}
+              title={uiText(language, "removeBranchTopic")}
+            >
+              <CloseIcon />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setTitles((current) => [...current, ""])}
+          className="inline-flex h-9 items-center gap-2 rounded-full border border-[color:var(--border)] bg-transparent px-3 text-sm font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          <PlusIcon />
+          <span>{uiText(language, "addBranchTopic")}</span>
+        </button>
+        <button
+          type="button"
+          disabled={!canCreate}
+          onClick={() => void onConfirm(cleanTitles())}
+          className="inline-flex h-9 items-center gap-2 rounded-full border border-[color:var(--button)] bg-[color:var(--button)] px-3 text-sm font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+        >
+          <CheckIcon />
+          <span>{uiText(language, "createBranches")}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function getInstitutionLabel(
+  institution: (typeof HOME_INSTITUTIONS)[number],
+  language: InterfaceLanguage,
+) {
+  const localized: Partial<
+    Record<InterfaceLanguage, Partial<Record<(typeof HOME_INSTITUTIONS)[number], string>>>
+  > = {
+    Russian: {
+      MIPT: "МФТИ",
+      MSU: "МГУ",
+      HSE: "ВШЭ",
+      MEPhI: "МИФИ",
+      ITMO: "ИТМО",
+      NSU: "НГУ",
+    },
+    Belarusian: {
+      MIPT: "МФТІ",
+      MSU: "БДУ",
+      HSE: "ВШЭ",
+      MEPhI: "МІФІ",
+      ITMO: "ІТМА",
+      NSU: "НДУ",
+    },
+  };
+  return localized[language]?.[institution] ?? institution;
 }
 
 function PlusIcon() {
@@ -947,18 +1067,29 @@ async function readFileAsAttachment(file: File): Promise<AttachmentDraft> {
   }
 
   if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
-    const text = isTauriRuntime()
-      ? await api.extractPdfText(Array.from(new Uint8Array(await file.arrayBuffer())))
-      : await extractPdfTextFallback(file);
+    const buffer = await file.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(buffer));
+    let extractedText = "";
+    try {
+      extractedText = await api.extractPdfText(bytes);
+    } catch {
+      extractedText = "";
+    }
+    const clipped =
+      extractedText.length > MAX_TEXT_CHARS
+        ? `${extractedText.slice(0, MAX_TEXT_CHARS)}\n\n[PDF text clipped]`
+        : extractedText;
+    const directFileData = arrayBufferToBase64(buffer);
     return {
       id: crypto.randomUUID(),
       name: file.name,
       size: file.size,
       type: "application/pdf",
-      content: text.trim() || "[PDF text extraction returned no readable text.]",
-      warning: text
-        ? "PDF text extracted"
-        : "Could not extract PDF text",
+      content: clipped,
+      directFileData,
+      warning: clipped.trim()
+        ? "PDF sent directly; extracted text fallback included"
+        : "PDF sent directly; no text layer extracted",
     };
   }
 
@@ -1374,12 +1505,51 @@ function stripBranchPlanAction(content: string) {
   return content.replace(BRANCH_PLAN_ACTION_MARKER, "").trim();
 }
 
+function branchPlanPayloadPattern(flags = "") {
+  return new RegExp("```" + BRANCH_PLAN_PAYLOAD_FENCE + "\\n([\\s\\S]*?)\\n```\\s*", flags);
+}
+
+function stripBranchPlanPayload(content: string) {
+  return content.replace(branchPlanPayloadPattern("g"), "").trim();
+}
+
+function branchPlanTitlesFromMessage(content: string) {
+  const match = content.match(branchPlanPayloadPattern());
+  if (!match?.[1]) return [];
+  try {
+    const payload = JSON.parse(match[1]) as {
+      branches?: Array<{ title?: unknown }>;
+    };
+    return uniqueNonEmptyTitles(
+      (payload.branches ?? [])
+        .map((branch) => (typeof branch.title === "string" ? branch.title : ""))
+        .filter(Boolean),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function uniqueNonEmptyTitles(titles: string[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of titles) {
+    const title = value.trim();
+    if (!title) continue;
+    const key = title.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(title);
+  }
+  return result;
+}
+
 function stripAgentModeMarker(content: string) {
   return content.replace(/<!--\s*ino-agent:mode=(read|memory|command|workspace)\s*-->\s*/g, "").trim();
 }
 
 function stripMessageControlMarkers(content: string) {
-  return stripAgentModeMarker(stripBranchPlanAction(content));
+  return stripAgentModeMarker(stripBranchPlanPayload(stripBranchPlanAction(content)));
 }
 
 function StreamingMessage({ content }: { content: string }) {
@@ -1470,7 +1640,7 @@ function splitAttachmentPayload(content: string) {
   let index = 0;
   const visibleText = content
     .replace(
-      /\[Attached file: ([\s\S]*?)\]\n\n(```|~~~~)text\n[\s\S]*?\n\2/g,
+      /\[Attached file: ([\s\S]*?)\]\n\n(```|~~~~)(?:text|ino-agent-attachment)\n[\s\S]*?\n\2/g,
       (_match, descriptor: string) => {
         const parsed = descriptor.match(/^(.+?) \((.+)\)(?:\nNote: (.+))?$/);
         attachments.push({
@@ -1758,51 +1928,39 @@ function latestQuizAttempts(attempts: QuizAttempt[]) {
   );
 }
 
-async function extractPdfTextFallback(file: File) {
-  const buffer = await file.arrayBuffer();
-  const raw = new TextDecoder("latin1").decode(buffer);
-  const chunks = new Set<string>();
-
-  for (const match of raw.matchAll(/\((?:\\.|[^\\)]){6,}\)/g)) {
-    const value = match[0]
-      .slice(1, -1)
-      .replace(/\\n/g, "\n")
-      .replace(/\\r/g, "\n")
-      .replace(/\\t/g, " ")
-      .replace(/\\([()\\])/g, "$1")
-      .trim();
-    if (looksReadable(value)) {
-      chunks.add(value);
-    }
-  }
-
-  for (const match of raw.matchAll(/[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9 ,.;:!?()\-\n]{24,}/g)) {
-    const value = match[0].replace(/\s+/g, " ").trim();
-    if (looksReadable(value)) {
-      chunks.add(value);
-    }
-  }
-
-  return Array.from(chunks).join("\n").slice(0, MAX_TEXT_CHARS).trim();
-}
-
-function looksReadable(value: string) {
-  if (value.length < 12) return false;
-  const letters = Array.from(value).filter((ch) => /[A-Za-zА-Яа-яЁё]/.test(ch)).length;
-  return letters / value.length > 0.25;
-}
-
 function buildMessageContent(draft: string, attachments: AttachmentDraft[], agentMode: AgentMode) {
   const text = draft.trim();
   const modeMarker = agentMode === "auto" ? "" : `<!-- ino-agent:mode=${agentMode} -->`;
   const files = attachments.map((file) => {
     const warning = file.warning ? `\nNote: ${file.warning}` : "";
+    if (file.directFileData) {
+      return `[Attached file: ${file.name} (${file.type || "unknown"}, ${formatBytes(
+        file.size,
+      )})${warning}]\n\n\`\`\`ino-agent-attachment\n${JSON.stringify({
+        kind: "file",
+        filename: file.name,
+        mime: file.type || "application/octet-stream",
+        size: file.size,
+        data: file.directFileData,
+        extractedText: file.content,
+      })}\n\`\`\``;
+    }
     const fence = file.content.includes("```") ? "~~~~" : "```";
     return `[Attached file: ${file.name} (${file.type || "unknown"}, ${formatBytes(
       file.size,
     )})${warning}]\n\n${fence}text\n${file.content}\n${fence}`;
   });
   return [modeMarker, text, ...files].filter(Boolean).join("\n\n").trim();
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
 
 async function readFileText(file: File) {

@@ -9,8 +9,9 @@ mod retrieval_context;
 mod store;
 mod terminal;
 
+use encoding_rs::WINDOWS_1251;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -89,6 +90,7 @@ struct VerifiedAgentAnswer {
 }
 
 const BRANCH_PLAN_ACTION_MARKER: &str = "<!-- treeai:branch-plan -->";
+const BRANCH_PLAN_PAYLOAD_FENCE: &str = "ino-agent-branch-plan";
 
 fn lock_store(store: &Arc<Mutex<store::Store>>) -> Result<MutexGuard<'_, store::Store>, String> {
     store.lock().map_err(|e| e.to_string())
@@ -110,6 +112,11 @@ fn create_tree(
 #[tauri::command]
 fn delete_tree(state: State<AppState>, tree_id: String) -> Result<(), String> {
     lock_store(&state.store)?.delete_tree(&tree_id)
+}
+
+#[tauri::command]
+fn rename_tree(state: State<AppState>, tree_id: String, title: String) -> Result<(), String> {
+    lock_store(&state.store)?.rename_tree(&tree_id, &title)
 }
 
 #[tauri::command]
@@ -314,12 +321,17 @@ fn confirm_pending_branches(
     state: State<AppState>,
     tree_id: String,
     node_id: String,
+    titles: Option<Vec<String>>,
 ) -> Result<store::AssistantReplyResult, String> {
     let store = &mut *lock_store(&state.store)?;
     let plan = store
         .get_pending_branch_plan(&tree_id, &node_id)?
         .ok_or_else(|| "No branch plan is waiting for confirmation.".to_string())?;
     let parent = store.get_node(&tree_id, &node_id)?;
+    let plan = match titles {
+        Some(titles) => branch_plan_from_titles(&parent.title, &plan.question, titles)?,
+        None => plan,
+    };
     create_branches_from_plan(store, &tree_id, &node_id, &parent.title, &plan)
 }
 
@@ -923,7 +935,7 @@ fn force_branch_split_blocking(
     };
 
     let store = &mut *lock_store(&store)?;
-    create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan)
+    save_branch_plan_question(store, &tree_id, &node_id, &plan)
 }
 
 fn generate_assistant_reply_blocking(
@@ -938,80 +950,22 @@ fn generate_assistant_reply_blocking(
         let rows = store.get_messages_for_node(&tree_id, &node_id)?;
         let mut latest_user = String::new();
         let mut latest_user_id = String::new();
-        let mut latest_assistant = String::new();
         for row in rows.iter().rev() {
             if latest_user.is_empty() && row.role == "user" {
                 latest_user = row.content.clone();
                 latest_user_id = row.id.clone();
             }
-            if latest_assistant.is_empty() && row.role == "assistant" {
-                latest_assistant = row.content.clone();
-            }
-            if !latest_user.is_empty() && !latest_assistant.is_empty() {
+            if !latest_user.is_empty() {
                 break;
             }
         }
-        let parent = store.get_node(&tree_id, &node_id)?;
         let settings = store.get_settings()?;
         let messages = store.build_api_messages_for_node(&tree_id, &node_id)?;
-        let pending_plan = store.get_pending_branch_plan(&tree_id, &node_id)?;
-        (
-            latest_user,
-            latest_user_id,
-            latest_assistant,
-            parent.title,
-            settings,
-            messages,
-            pending_plan,
-        )
+        (latest_user, latest_user_id, settings, messages)
     };
 
-    let (
-        latest_user_raw,
-        latest_user_id,
-        latest_assistant,
-        parent_title,
-        settings,
-        messages,
-        pending_plan,
-    ) = snapshot;
+    let (latest_user_raw, latest_user_id, settings, messages) = snapshot;
     let latest_user = strip_agent_mode_marker(&latest_user_raw);
-
-    if let Some(plan) = pending_plan {
-        if is_affirmative(&latest_user) {
-            let store = &mut *lock_store(&store)?;
-            return create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan);
-        }
-        if is_negative(&latest_user) {
-            let store = &mut *lock_store(&store)?;
-            store.clear_pending_branch_plan(&tree_id, &node_id)?;
-            let message = store.add_message(
-                &tree_id,
-                &node_id,
-                "assistant",
-                "Ок, оставляю это в текущей ветке. Продолжаем здесь.",
-            )?;
-            return Ok(store::AssistantReplyResult {
-                message,
-                selected_node_id: node_id,
-                created_branches: Vec::new(),
-            });
-        }
-    }
-
-    if is_affirmative(&latest_user) {
-        if let Some(plan) = fallback_branch_plan_from_text(&latest_assistant) {
-            let store = &mut *lock_store(&store)?;
-            return create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan);
-        }
-    }
-
-    if wants_branch_creation(&latest_user) && !has_attachment_payload(&latest_user) {
-        if let Some(plan) = fallback_branch_plan_from_text(&latest_user) {
-            let store = &mut *lock_store(&store)?;
-            return save_branch_plan_question(store, &tree_id, &node_id, &plan);
-        }
-    }
 
     if let Some(memory_input) =
         remember_request_to_memory_input(&latest_user, &tree_id, &node_id, &latest_user_id)
@@ -1077,42 +1031,6 @@ fn generate_assistant_reply_blocking(
         }
     }
 
-    if looks_branchable(&latest_user) {
-        let branch_limit = 7;
-        let mut planner_messages = vec![store::ChatContextMessage {
-            role: "system".to_string(),
-            content: branch_planner_prompt(branch_limit),
-        }];
-        planner_messages.extend(
-            messages
-                .iter()
-                .filter(|message| message.role != "system")
-                .cloned(),
-        );
-
-        let mut plan = match api::chat_completion(&settings, &planner_messages) {
-            Ok(answer) => api::parse_branch_plan(&answer, branch_limit),
-            Err(error) => return Err(error),
-        };
-        if plan.is_none() || wants_branch_creation(&latest_user) {
-            let fallback = fallback_branch_plan_from_text(&latest_user)
-                .or_else(|| fallback_branch_plan_from_text(&latest_assistant));
-            if let Some(fallback_plan) = fallback {
-                if plan.is_none() {
-                    plan = Some(fallback_plan);
-                }
-            }
-        }
-
-        if let Some(plan) = plan {
-            let store = &mut *lock_store(&store)?;
-            if wants_branch_creation(&latest_user) {
-                return create_branches_from_plan(store, &tree_id, &node_id, &parent_title, &plan);
-            }
-            return save_branch_plan_question(store, &tree_id, &node_id, &plan);
-        }
-    }
-
     let answer = api::chat_completion_stream(&settings, &messages, |delta| {
         let _ = window.emit(
             "assistant-delta",
@@ -1163,7 +1081,17 @@ fn save_branch_plan_question(
     plan: &store::BranchPlan,
 ) -> Result<store::AssistantReplyResult, String> {
     store.save_pending_branch_plan(tree_id, node_id, plan)?;
-    let content = format!("{}\n\n{}", plan.question, BRANCH_PLAN_ACTION_MARKER);
+    let branches = plan
+        .branches
+        .iter()
+        .map(|branch| serde_json::json!({ "title": branch.title }))
+        .collect::<Vec<_>>();
+    let payload = serde_json::to_string_pretty(&serde_json::json!({ "branches": branches }))
+        .map_err(|e| e.to_string())?;
+    let content = format!(
+        "{}\n\n```{}\n{}\n```\n\n{}",
+        plan.question, BRANCH_PLAN_PAYLOAD_FENCE, payload, BRANCH_PLAN_ACTION_MARKER
+    );
     let message = store.add_message(tree_id, node_id, "assistant", &content)?;
     Ok(store::AssistantReplyResult {
         message,
@@ -1180,6 +1108,65 @@ fn create_branches_from_plan(
     plan: &store::BranchPlan,
 ) -> Result<store::AssistantReplyResult, String> {
     store.create_branches_from_plan(tree_id, node_id, parent_title, plan)
+}
+
+fn branch_plan_from_titles(
+    parent_title: &str,
+    question: &str,
+    titles: Vec<String>,
+) -> Result<store::BranchPlan, String> {
+    let mut seen = HashSet::new();
+    let branches = titles
+        .into_iter()
+        .filter_map(|title| {
+            let title = clean_branch_topic_title(&title);
+            if title.is_empty() {
+                return None;
+            }
+            let key = title.to_lowercase();
+            if !seen.insert(key) {
+                return None;
+            }
+            let context = generated_branch_context(parent_title, &title);
+            Some(store::BranchPlanItem { title, context })
+        })
+        .collect::<Vec<_>>();
+
+    if branches.is_empty() {
+        return Err("Add at least one branch topic before creating branches.".to_string());
+    }
+
+    Ok(store::BranchPlan {
+        question: question.to_string(),
+        branches,
+    })
+}
+
+fn clean_branch_topic_title(title: &str) -> String {
+    title
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches(|ch: char| {
+            ch.is_ascii_digit()
+                || ch == '-'
+                || ch == '*'
+                || ch == '.'
+                || ch == ')'
+                || ch.is_whitespace()
+        })
+        .trim()
+        .chars()
+        .take(80)
+        .collect::<String>()
+}
+
+fn generated_branch_context(parent_title: &str, title: &str) -> String {
+    format!(
+        "Автоматически созданное направление для темы \"{}\" внутри родительской ветки \"{}\". В этой ветке нужно отдельно разобрать именно эту тему, использовать общий контекст родительского диалога и не смешивать ее с соседними направлениями.",
+        title, parent_title
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -1592,6 +1579,9 @@ fn run_agent_tool_turn(
         &window,
         store.clone(),
         &workspace_root,
+        settings,
+        messages,
+        &user_request,
         decision.tool_calls,
         request_id,
         tree_id,
@@ -1629,6 +1619,9 @@ fn run_agent_tool_turn(
             &window,
             store.clone(),
             &workspace_root,
+            settings,
+            messages,
+            &user_request,
             followup.tool_calls,
             request_id,
             tree_id,
@@ -1710,6 +1703,9 @@ fn execute_agent_tool_calls(
     window: &Window,
     store: Arc<Mutex<store::Store>>,
     workspace_root: &std::path::Path,
+    settings: &store::ChatSettings,
+    messages: &[store::ChatContextMessage],
+    user_request: &str,
     calls: Vec<agent_tools::AgentToolCall>,
     request_id: &str,
     tree_id: &str,
@@ -1721,7 +1717,24 @@ fn execute_agent_tool_calls(
         .into_iter()
         .take(limit)
         .map(|call| {
-            if agent_tools::tool_needs_store(&call.tool) {
+            if call.tool == "self_review" {
+                let result = execute_self_review_tool(
+                    settings,
+                    messages,
+                    user_request,
+                    permission_profile,
+                    call,
+                );
+                emit_agent_tool_event(
+                    window,
+                    request_id,
+                    tree_id,
+                    node_id,
+                    permission_profile,
+                    &result,
+                );
+                Ok(result)
+            } else if agent_tools::tool_needs_store(&call.tool) {
                 let store = &mut *lock_store(&store)?;
                 let result = agent_tools::execute_tool(
                     Some(store),
@@ -1753,6 +1766,75 @@ fn execute_agent_tool_calls(
             }
         })
         .collect::<Result<Vec<_>, String>>()
+}
+
+fn execute_self_review_tool(
+    settings: &store::ChatSettings,
+    messages: &[store::ChatContextMessage],
+    user_request: &str,
+    permission_profile: agent_tools::AgentToolPermissionProfile,
+    call: agent_tools::AgentToolCall,
+) -> agent_tools::AgentToolResult {
+    if !permission_profile.allows("self_review") {
+        return agent_tools::AgentToolResult {
+            tool: call.tool,
+            ok: false,
+            content: json!({
+                "error": "Tool is not allowed by the current permission profile.",
+                "permissionProfile": permission_profile.name(),
+            }),
+        };
+    }
+
+    let mode = call
+        .args
+        .get("mode")
+        .and_then(|value| value.as_str())
+        .unwrap_or("full_history");
+    let isolated = matches!(mode, "isolated" | "no_history" | "without_history");
+    let review_question = call
+        .args
+        .get("question")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Critically review the agent's reasoning and point out mistakes, missing checks, or better next steps.");
+
+    let critic_prompt = format!(
+        "You are an independent critic pass for ino-agent. Review the agent's own reasoning with a skeptical engineering mindset. Focus on concrete mistakes, missing evidence, contradictions, and next actions. Do not call tools. Answer in the user's language.\n\nReview task: {review_question}"
+    );
+    let mut critic_messages = vec![store::ChatContextMessage {
+        role: "system".to_string(),
+        content: critic_prompt,
+    }];
+    if isolated {
+        critic_messages.push(store::ChatContextMessage {
+            role: "user".to_string(),
+            content: user_request.to_string(),
+        });
+    } else {
+        critic_messages.extend(messages.iter().cloned());
+    }
+
+    match api::chat_completion(settings, &critic_messages) {
+        Ok(review) => agent_tools::AgentToolResult {
+            tool: call.tool,
+            ok: true,
+            content: json!({
+                "mode": if isolated { "isolated" } else { "full_history" },
+                "usedMessages": critic_messages.len(),
+                "review": review,
+            }),
+        },
+        Err(error) => agent_tools::AgentToolResult {
+            tool: call.tool,
+            ok: false,
+            content: json!({
+                "mode": if isolated { "isolated" } else { "full_history" },
+                "error": error,
+            }),
+        },
+    }
 }
 
 fn emit_agent_tool_event(
@@ -2228,18 +2310,20 @@ fn agent_tool_planner_prompt(
 Return ONLY compact JSON in one of these shapes:
 {{"final_answer":"..."}}
 {{"tool_calls":[{{"tool":"search_memory","args":{{"query":"...","limit":8}}}}]}}
+{{"tool_calls":[{{"tool":"self_review","args":{{"mode":"full_history","question":"..."}}}}]}}
 
 {permission_summary}
 
 Rules:
 - Use only tools allowed by the permission profile.
-- Use tools only when the user explicitly asks to search memory, inspect files, run/check/build code, index files, or save memory.
+- Use tools only when the user explicitly asks to search memory, inspect files, run/check/build code, index files, save memory, or critically review your own reasoning.
 - Prefer search_memory for "remember/найди в памяти/что мы сохраняли" style requests.
 - Prefer add_memory only when the user explicitly asks to remember/save a fact and the profile allows it.
 - Prefer index_path when the user asks to index, remember a file/folder, or add local files to knowledge and the profile allows it.
 - Prefer open_target when the user asks where a memory points or how to open a saved source.
 - Prefer list_files/read_file for file inspection.
 - Use run_command only for explicit command execution, tests, builds, or local inspection and only when the profile allows it.
+- Prefer self_review when the user asks you to call yourself, check your own reasoning, analyze your own steps critically, or compare a full-history view with an isolated view. Use mode "full_history" when the user wants the whole dialogue; use "isolated" when they ask for no history/without context.
 - Never request destructive actions. Commands run without shell operators and inside workspace only.
 - For chat memories, use target "chat://tree/{tree_id}/node/{node_id}".
 - Current workspace root: {workspace_root}
@@ -2303,6 +2387,7 @@ or
 Rules:
 - Request more tools only if the current observations are insufficient to answer correctly.
 - Do not repeat a tool call that already failed or already returned the needed information.
+- Do not request self_review more than once in a single tool loop.
 - Prefer no more tools when the answer can be produced from existing observations.
 - At most {remaining} more tool call(s) are allowed.
 - Never request destructive actions.
@@ -2351,12 +2436,6 @@ Draft answer:
     )
 }
 
-fn branch_planner_prompt(count: usize) -> String {
-    format!(
-        "You are a strict branch-planning classifier for a local tree chat app. Decide whether the latest user request truly needs separate child branches.\n\nReturn ONLY JSON with this exact shape:\n{{\"should_branch\": boolean, \"question\": string, \"branches\": [{{\"title\": string, \"context\": string}}]}}\n\nSet should_branch=true whenever the request, pasted text, file, plan, project, research idea, study program, comparison, or broad problem would be cleaner as several independent subtopics that can be explored separately without polluting one chat. This is not limited to PDFs: any multi-topic content should be considered. If the latest user explicitly asks to create/split/separate branches or topics, set should_branch=true unless the conversation has no separable topics.\n\nSet should_branch=false for ordinary single-topic questions, single algorithm explanations, short follow-ups, simple clarifications, or lists that are small enough to answer in one message.\n\nWhen branching, create COARSE top-level branches, not one branch per tiny item. Prefer 3-{count} large blocks. For exam/program files, use blocks such as dynamic programming, graphs, flows/matchings, trees/decompositions, math/combinatorics, strings/geometry when those fit. For non-academic content, choose the natural large areas of work. Preserve explicit top-level sections/headings/modules when the source has them, but group fine-grained items under larger directions. Each title must be concise. Each context must explain what that branch is about so another assistant call can understand the branch focus.\n\nThe question must be one concise Russian paragraph in this style: \"Здесь есть несколько крупных направлений (...). Чтобы разбирать их отдельно и не смешивать контекст, создать отдельные ветки для этих блоков?\" Do not include a bullet list in the question. If should_branch=false, use an empty branches array and an empty question."
-    )
-}
-
 fn force_branch_planner_prompt(count: usize) -> String {
     format!(
         "You are a branch planner for a local tree chat app. The user pressed a dedicated Split button, so you MUST create useful child branches from the CURRENT SELECTED NODE, current composer content, attached file, or recent conversation inside that node.\n\nReturn ONLY JSON with this exact shape:\n{{\"should_branch\": true, \"question\": \"\", \"branches\": [{{\"title\": string, \"context\": string}}]}}\n\nThe current node title and description are authoritative. If the current node is already one block inside a broader parent program, split that block into its own subtopics. Do NOT recreate sibling or parent-level branches unless the current node title itself is that broad parent. For example, if the current node is about dynamic programming, create dynamic-programming subtopics; do not create graph/flow/tree branches just because they appeared in the parent context.\n\nCreate COARSE child branches, not one branch per tiny item. Prefer 3-{count} large blocks. If the content is an exam/program/algorithm list, group fine-grained topics under the selected node's domain. If the content is not academic, choose the natural large areas of work inside the selected node. Each title must be concise. Each context must explicitly mention how the child belongs to the current selected node and be specific enough that another assistant call can continue inside that branch without reading the parent chat."
@@ -2371,88 +2450,6 @@ fn force_branch_focus_prompt(current_title: &str, current_summary: Option<&str>)
     format!(
         "CURRENT SELECTED NODE TO SPLIT:\nTitle: {current_title}\nDescription: {summary}\n\nHard rule: every branch you create must be a subtopic of this exact node. Use the title and description as the primary source of scope. If recent messages mention broader parent topics or sibling branches, treat them only as background and never split them again."
     )
-}
-
-fn is_affirmative(raw: &str) -> bool {
-    let text = normalize_reply(raw);
-    let tokens = text.split_whitespace().collect::<HashSet<_>>();
-    matches!(
-        text.as_str(),
-        "да" | "ага"
-            | "угу"
-            | "ок"
-            | "окей"
-            | "yes"
-            | "y"
-            | "sure"
-            | "давай"
-            | "конечно"
-            | "подтверждаю"
-            | "согласен"
-            | "согласна"
-            | "можно"
-            | "го"
-    ) || tokens.iter().any(|token| {
-        matches!(
-            *token,
-            "да" | "ага"
-                | "угу"
-                | "ок"
-                | "окей"
-                | "yes"
-                | "y"
-                | "sure"
-                | "давай"
-                | "конечно"
-                | "подтверждаю"
-                | "согласен"
-                | "согласна"
-                | "можно"
-                | "го"
-        )
-    }) || wants_branch_creation(&text)
-        || (contains(&text, "делай") && contains(&text, "вет"))
-        || (contains(&text, "создавай") && contains(&text, "вет"))
-}
-
-fn is_negative(raw: &str) -> bool {
-    matches!(
-        normalize_reply(raw).as_str(),
-        "нет" | "не" | "no" | "n" | "не надо" | "не нужно" | "оставь так"
-    )
-}
-
-fn wants_branch_creation(raw: &str) -> bool {
-    let text = raw.to_lowercase();
-    let action = [
-        "создай",
-        "создашь",
-        "создать",
-        "сделай",
-        "разбей",
-        "разбить",
-        "раздели",
-        "разделить",
-        "разложи",
-        "раскидай",
-        "оформи",
-    ]
-    .iter()
-    .any(|needle| contains(&text, needle));
-    let target = [
-        "ветк",
-        "отдельн",
-        "тем",
-        "модул",
-        "блок",
-        "направлен",
-        "категор",
-        "сфер",
-        "част",
-    ]
-    .iter()
-    .any(|needle| contains(&text, needle));
-    action && target
 }
 
 fn wants_agent_tools(raw: &str) -> bool {
@@ -2508,94 +2505,26 @@ fn wants_agent_tools(raw: &str) -> bool {
     ]
     .iter()
     .any(|needle| contains(&text, needle));
-    memory || files || command
-}
-
-fn looks_branchable(raw: &str) -> bool {
-    let text = raw.to_lowercase();
-    let char_count = text.chars().count();
-    if is_negative(&text) || is_affirmative(&text) {
-        return false;
-    }
-    if wants_branch_creation(&text) {
-        return true;
-    }
-    if char_count < 24 {
-        return false;
-    }
-    if has_attachment_payload(&text) {
-        return true;
-    }
-    let many = [
-        "несколько",
-        "много",
-        "разные",
-        "разных",
-        "варианты",
-        "идеи",
-        "темы",
-        "темам",
-        "тем",
-        "сферы",
-        "направления",
-        "категории",
-        "модули",
-        "модул",
-        "блоки",
-        "блок",
-        "разложи",
-        "разбери",
-        "сравни",
+    let self_review = [
+        "проверь себя",
+        "критическим взглядом",
+        "критический взгляд",
+        "проанализируй свои шаги",
+        "анализ своих шагов",
+        "вызови себя",
+        "сам себя",
+        "со всей историей",
+        "без истории",
+        "without history",
+        "full history",
+        "self review",
+        "review yourself",
+        "criticize your reasoning",
+        "critically review",
     ]
     .iter()
     .any(|needle| contains(&text, needle));
-    let split = [
-        "отдельно",
-        "по отдельности",
-        "ветк",
-        "кажд",
-        "сфер",
-        "направлен",
-        "категор",
-        "стартап",
-        "предмет",
-        "блок",
-    ]
-    .iter()
-    .any(|needle| contains(&text, needle));
-    let structure_hint = text.lines().filter(|line| !line.trim().is_empty()).count() >= 3
-        || text.matches(';').count() >= 2
-        || text.matches(',').count() >= 4
-        || text.matches(" и ").count() >= 3
-        || text.matches(" или ").count() >= 2;
-    let broad_task = [
-        "план",
-        "проект",
-        "иде",
-        "исслед",
-        "курс",
-        "програм",
-        "подготов",
-        "стратег",
-        "архитект",
-        "продукт",
-        "стартап",
-        "разбор",
-        "обуч",
-        "roadmap",
-        "research",
-    ]
-    .iter()
-    .any(|needle| contains(&text, needle));
-
-    (many && split)
-        || (structure_hint && char_count >= 60)
-        || (broad_task && char_count >= 90)
-        || char_count >= 180
-}
-
-fn has_attachment_payload(raw: &str) -> bool {
-    contains(&raw.to_lowercase(), "[attached file:")
+    memory || files || command || self_review
 }
 
 fn remember_request_to_memory_input(
@@ -2920,24 +2849,6 @@ fn clean_fallback_branch_title(raw: &str) -> Option<String> {
     Some(text.chars().take(96).collect())
 }
 
-fn normalize_reply(raw: &str) -> String {
-    raw.trim()
-        .to_lowercase()
-        .replace('ё', "е")
-        .chars()
-        .map(|ch| {
-            if ch.is_alphanumeric() || ch.is_whitespace() {
-                ch
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 fn contains(haystack: &str, needle: &str) -> bool {
     haystack.contains(needle)
 }
@@ -2953,12 +2864,45 @@ fn strip_agent_mode_marker(value: &str) -> String {
 }
 
 fn clean_extracted_text(value: &str) -> String {
-    value
+    repair_extracted_text_mojibake(value)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn repair_extracted_text_mojibake(value: &str) -> String {
+    let bytes = value
+        .chars()
+        .map(|ch| {
+            let code = ch as u32;
+            if code <= 0xff {
+                Some(code as u8)
+            } else if ch.is_whitespace() {
+                Some(b' ')
+            } else {
+                None
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(bytes) = bytes else {
+        return value.to_string();
+    };
+    let (decoded, _, _) = WINDOWS_1251.decode(&bytes);
+    let decoded = decoded.into_owned();
+    if extracted_cyrillic_score(&decoded) > extracted_cyrillic_score(value) + 20 {
+        decoded
+    } else {
+        value.to_string()
+    }
+}
+
+fn extracted_cyrillic_score(value: &str) -> usize {
+    value
+        .chars()
+        .filter(|ch| ('А'..='я').contains(ch) || matches!(ch, 'Ё' | 'ё' | 'І' | 'і'))
+        .count()
 }
 
 fn parse_revised_content(answer: &str) -> Result<String, String> {
@@ -3082,6 +3026,7 @@ pub fn run() {
             list_trees,
             create_tree,
             delete_tree,
+            rename_tree,
             set_current_node,
             create_child_node,
             rename_node,

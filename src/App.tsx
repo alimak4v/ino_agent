@@ -1,6 +1,6 @@
 import {
   type FormEvent,
-  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   Suspense,
   lazy,
   useCallback,
@@ -9,7 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openShell } from "@tauri-apps/plugin-shell";
 import {
@@ -25,6 +26,12 @@ import {
   type TreeCreated,
   type TreeSummary,
 } from "./lib/api";
+import {
+  INTERFACE_LANGUAGES,
+  LANGUAGE_LABELS,
+  uiText,
+  type InterfaceLanguage,
+} from "./lib/i18n";
 import { applyThemeVars, THEMES, type ThemeName } from "./lib/theme";
 import { AgentTasksPanel } from "./components/AgentTasksPanel";
 import { AppDialog, type AppDialogState } from "./components/AppDialog";
@@ -50,27 +57,118 @@ const DEFAULT_SETTINGS: ChatSettings = {
   model: "gpt-4.1-mini",
   api_key: "",
   theme: "Minimal Light",
+  language: "English",
+  system_prompt: "",
 };
 const THEME_NAMES = Object.keys(THEMES) as ThemeName[];
-const COMPACT_LAYOUT_WIDTH = 860;
-const MIN_TREE_WIDTH = 360;
-const MIN_CHAT_WIDTH = 420;
-const TARGET_CHAT_WIDTH = 760;
-const DIVIDER_WIDTH = 8;
 const ONBOARDING_STORAGE_KEY = "ino-agent:onboarding:v1";
+const SIDEBAR_PROFILE_STORAGE_KEY = "ino-agent:sidebar-profile:v1";
 
 interface KnowledgeWatchEvent {
   ok: boolean;
   content: unknown;
 }
 
-function getViewportWidth() {
-  return typeof window === "undefined" ? 1440 : window.innerWidth;
+type AuxPanel = "chats" | "projects" | "tasks" | "terminal" | "search" | "memory" | "knowledge" | "settings";
+
+interface PanelSelectTreeEvent {
+  treeId: string;
 }
 
-function getMinChatWidth(viewportWidth: number) {
-  const available = viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH;
-  return Math.min(TARGET_CHAT_WIDTH, Math.max(MIN_CHAT_WIDTH, available));
+interface PanelOpenTargetEvent {
+  target: string;
+}
+
+interface PanelStartChatEvent {
+  content: string;
+}
+
+interface SidebarProfile {
+  name: string;
+  avatarDataUrl: string;
+}
+
+const AUX_PANEL_CONFIG: Record<
+  AuxPanel,
+  { label: string; title: string; width: number; height: number; minWidth: number; minHeight: number }
+> = {
+  chats: { label: "panel-chats", title: "Chats", width: 320, height: 500, minWidth: 300, minHeight: 380 },
+  projects: { label: "panel-projects", title: "Projects", width: 740, height: 560, minWidth: 640, minHeight: 460 },
+  tasks: { label: "panel-tasks", title: "Tasks", width: 720, height: 540, minWidth: 620, minHeight: 440 },
+  terminal: { label: "panel-terminal", title: "Terminal", width: 720, height: 520, minWidth: 620, minHeight: 420 },
+  search: { label: "panel-search", title: "Search", width: 740, height: 560, minWidth: 620, minHeight: 460 },
+  memory: { label: "panel-memory", title: "Memory", width: 760, height: 580, minWidth: 640, minHeight: 480 },
+  knowledge: { label: "panel-knowledge", title: "Knowledge", width: 720, height: 540, minWidth: 620, minHeight: 440 },
+  settings: { label: "panel-settings", title: "Settings", width: 460, height: 560, minWidth: 400, minHeight: 460 },
+};
+
+function panelFromLocation(): AuxPanel | null {
+  if (typeof window === "undefined") return null;
+  const value = new URLSearchParams(window.location.search).get("panel");
+  return value && value in AUX_PANEL_CONFIG ? (value as AuxPanel) : null;
+}
+
+function panelTitle(panel: AuxPanel, language: InterfaceLanguage) {
+  if (panel === "chats") return uiText(language, "chats");
+  if (panel === "projects") return uiText(language, "projects");
+  if (panel === "tasks") return uiText(language, "tasks");
+  if (panel === "terminal") return uiText(language, "terminal");
+  if (panel === "search") return uiText(language, "search");
+  if (panel === "memory") return uiText(language, "memory");
+  if (panel === "knowledge") return uiText(language, "knowledge");
+  return uiText(language, "settings");
+}
+
+function loadSidebarProfile(): SidebarProfile {
+  if (typeof window === "undefined") return { name: "ino-agent", avatarDataUrl: "" };
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_PROFILE_STORAGE_KEY);
+    if (!raw) return { name: "ino-agent", avatarDataUrl: "" };
+    const parsed = JSON.parse(raw) as Partial<SidebarProfile>;
+    return {
+      name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name : "ino-agent",
+      avatarDataUrl: typeof parsed.avatarDataUrl === "string" ? parsed.avatarDataUrl : "",
+    };
+  } catch {
+    return { name: "ino-agent", avatarDataUrl: "" };
+  }
+}
+
+function saveSidebarProfile(profile: SidebarProfile) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SIDEBAR_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  } catch {
+    // Local UI preference only; ignore storage failures.
+  }
+}
+
+function squareCropImageFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read image."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("Could not load image."));
+      image.onload = () => {
+        const side = Math.min(image.naturalWidth, image.naturalHeight);
+        const sourceX = Math.max(0, (image.naturalWidth - side) / 2);
+        const sourceY = Math.max(0, (image.naturalHeight - side) / 2);
+        const canvas = document.createElement("canvas");
+        canvas.width = 256;
+        canvas.height = 256;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("Could not crop image."));
+          return;
+        }
+        context.drawImage(image, sourceX, sourceY, side, side, 0, 0, 256, 256);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      image.src = String(reader.result ?? "");
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function App() {
@@ -87,6 +185,10 @@ export default function App() {
       </Suspense>
     );
   }
+  const auxPanel = panelFromLocation();
+  if (auxPanel) {
+    return <PanelWindowApp panel={auxPanel} />;
+  }
 
   const [trees, setTrees] = useState<TreeSummary[]>([]);
   const [activeTreeId, setActiveTreeId] = useState<string | null>(null);
@@ -100,35 +202,20 @@ export default function App() {
   const [agentToolEvents, setAgentToolEvents] = useState<Record<string, AgentToolEvent[]>>({});
   const [chatError, setChatError] = useState("");
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
+  const [connectorsLoading, setConnectorsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [statusText, setStatusText] = useState("");
   const [treeVisible, setTreeVisible] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatHomeVisible, setChatHomeVisible] = useState(true);
   const [startingChat, setStartingChat] = useState(false);
   const [windowFullscreen, setWindowFullscreen] = useState(false);
-  const [viewportWidth, setViewportWidth] = useState(getViewportWidth);
-  const [chatWidth, setChatWidth] = useState(() => {
-    const viewportWidth = getViewportWidth();
-    return Math.min(
-      Math.round(viewportWidth * 0.48),
-      viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH,
-    );
-  });
-  const [dividerDragging, setDividerDragging] = useState(false);
   const [dialog, setDialog] = useState<AppDialogState | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [chatsOpen, setChatsOpen] = useState(false);
-  const [projectsOpen, setProjectsOpen] = useState(false);
-  const [tasksOpen, setTasksOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [memoryOpen, setMemoryOpen] = useState(false);
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [activeAuxPanel, setActiveAuxPanel] = useState<AuxPanel | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
-  const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
-  const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
-  const [connectorsLoading, setConnectorsLoading] = useState(false);
-  const [savingSettings, setSavingSettings] = useState(false);
   const selectedNodeIdRef = useRef<string | null>(null);
   const activeTreeIdRef = useRef<string | null>(null);
   const activeRequestsRef = useRef<Record<string, string>>({});
@@ -164,22 +251,6 @@ export default function App() {
       .catch((e) => setChatError(String(e)));
   }, []);
 
-  const loadConnectors = useCallback(async () => {
-    setConnectorsLoading(true);
-    try {
-      setConnectors(await api.listConnectors());
-    } catch (e) {
-      setStatusText(String(e));
-    } finally {
-      setConnectorsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    void loadConnectors();
-  }, [loadConnectors]);
-
   useEffect(() => {
     selectedNodeIdRef.current = selectedNodeId;
   }, [selectedNodeId]);
@@ -212,13 +283,13 @@ export default function App() {
   const selectedAgentToolEvents = selectedCanvasNodeId
     ? agentToolEvents[selectedCanvasNodeId] ?? []
     : [];
-  const compactLayout = viewportWidth < COMPACT_LAYOUT_WIDTH;
   const titlebarNeedsTrafficSpace = isTauriRuntime() && !windowFullscreen;
   const titlebarTitle = chatHomeVisible ? "ino-agent" : selectedNode?.title ?? activeTree?.title ?? "ino-agent";
   const titlebarSubtitle =
     !chatHomeVisible && selectedNode && selectedNode.treeTitle !== selectedNode.title
       ? selectedNode.treeTitle
       : "";
+  const language = settings.language ?? DEFAULT_SETTINGS.language;
 
   const askText = useCallback(
     (options: {
@@ -261,26 +332,6 @@ export default function App() {
       }),
     [],
   );
-
-  const clampChatWidth = useCallback((width: number) => {
-    const viewportWidth = getViewportWidth();
-    const minByViewport = getMinChatWidth(viewportWidth);
-    const maxByViewport = Math.max(
-      minByViewport,
-      viewportWidth - MIN_TREE_WIDTH - DIVIDER_WIDTH,
-    );
-    return Math.min(maxByViewport, Math.max(minByViewport, Math.round(width)));
-  }, []);
-
-  useEffect(() => {
-    const onResize = () => {
-      setViewportWidth(getViewportWidth());
-      setChatWidth((width) => clampChatWidth(width));
-    };
-    window.addEventListener("resize", onResize);
-    onResize();
-    return () => window.removeEventListener("resize", onResize);
-  }, [clampChatWidth]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -327,37 +378,6 @@ export default function App() {
       unlistenFocus?.();
     };
   }, []);
-
-  const beginDividerDrag = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      setDividerDragging(true);
-      const previousCursor = document.body.style.cursor;
-      const previousUserSelect = document.body.style.userSelect;
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-
-      const updateWidth = (clientX: number) => {
-        setChatWidth(clampChatWidth(window.innerWidth - clientX));
-      };
-      updateWidth(event.clientX);
-
-      const onPointerMove = (moveEvent: PointerEvent) => {
-        updateWidth(moveEvent.clientX);
-      };
-      const onPointerUp = () => {
-        setDividerDragging(false);
-        document.body.style.cursor = previousCursor;
-        document.body.style.userSelect = previousUserSelect;
-        window.removeEventListener("pointermove", onPointerMove);
-        window.removeEventListener("pointerup", onPointerUp);
-      };
-
-      window.addEventListener("pointermove", onPointerMove);
-      window.addEventListener("pointerup", onPointerUp, { once: true });
-    },
-    [clampChatWidth],
-  );
 
   const selectLocally = useCallback((nodeId: string | null) => {
     selectedNodeIdRef.current = nodeId;
@@ -554,22 +574,103 @@ export default function App() {
     try {
       const created = await api.createTree(nextTitle);
       await api.setCurrentNode(created.tree_id, created.root_node_id);
+      setActiveAuxPanel(null);
       setChatHomeVisible(false);
+      setTreeVisible(false);
       await loadCanvas(created.root_node_id, created.tree_id);
     } catch (e) {
       setStatusText(String(e));
     }
   }, [askText, loadCanvas]);
 
+  const handleNewChat = useCallback(() => {
+    setActiveAuxPanel(null);
+    setChatHomeVisible(true);
+    setTreeVisible(false);
+    setTargetMessageId("");
+    setChatError("");
+    setMessages([]);
+  }, []);
+
   const handleSelectTree = useCallback(
     async (treeId: string) => {
       const tree = trees.find((item) => item.id === treeId);
       activeTreeIdRef.current = treeId;
       setActiveTreeId(treeId);
+      setActiveAuxPanel(null);
       setChatHomeVisible(false);
+      setTreeVisible(false);
       await loadCanvas(tree?.last_node_id ?? null, treeId);
     },
     [loadCanvas, trees],
+  );
+
+  const closeEmbeddedPanel = useCallback(() => {
+    setActiveAuxPanel(null);
+  }, []);
+
+  const openEmbeddedPanel = useCallback((panel: AuxPanel) => {
+    setActiveAuxPanel(panel);
+    setTreeVisible(false);
+    setChatHomeVisible(false);
+  }, []);
+
+  const handleRenameTreeFromSidebar = useCallback(
+    async (tree: TreeSummary) => {
+      const title = await askText({
+        title: uiText(language, "renameChat"),
+        label: uiText(language, "renameChat"),
+        value: tree.title,
+        placeholder: tree.title,
+        confirmText: uiText(language, "save"),
+      });
+      if (title === null) return;
+      const nextTitle = title.trim();
+      if (!nextTitle || nextTitle === tree.title) return;
+
+      try {
+        await api.renameTree(tree.id, nextTitle);
+        await loadCanvas(
+          tree.id === activeTreeIdRef.current ? selectedNodeIdRef.current : null,
+          activeTreeIdRef.current,
+        );
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [askText, language, loadCanvas],
+  );
+
+  const handleDeleteTreeFromSidebar = useCallback(
+    async (tree: TreeSummary) => {
+      const confirmed = await askConfirm({
+        title: uiText(language, "deleteChat"),
+        message: `${uiText(language, "deleteChatConfirm")} "${tree.title}"?`,
+        confirmText: uiText(language, "delete"),
+        destructive: true,
+      });
+      if (!confirmed) return;
+
+      try {
+        const deletingActive = tree.id === activeTreeIdRef.current;
+        await api.deleteTree(tree.id);
+        const remainingCount = trees.filter((item) => item.id !== tree.id).length;
+        if (deletingActive) {
+          activeTreeIdRef.current = null;
+          selectedNodeIdRef.current = null;
+          setMessages([]);
+          setTargetMessageId("");
+          setChatHomeVisible(remainingCount === 0);
+          if (remainingCount === 0) {
+            setTreeVisible(false);
+          }
+        }
+        await loadCanvas(null, deletingActive ? null : activeTreeIdRef.current);
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [askConfirm, language, loadCanvas, trees],
   );
 
   useEffect(() => {
@@ -597,9 +698,24 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [handleCreateRoot]);
 
-  const handleSelectNode = useCallback(
+  const handleActivateNode = useCallback(
+    async (treeId: string, nodeId: string) => {
+      setTargetMessageId("");
+      selectLocally(nodeId);
+      try {
+        await api.setCurrentNode(treeId, nodeId);
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [selectLocally],
+  );
+
+  const handleOpenDialogPoint = useCallback(
     async (treeId: string, nodeId: string) => {
       setChatHomeVisible(false);
+      setActiveAuxPanel(null);
+      setTreeVisible(false);
       setTargetMessageId("");
       selectLocally(nodeId);
       try {
@@ -618,14 +734,7 @@ export default function App() {
       try {
         const resolved = await api.resolveTarget(trimmed);
         if (resolved.kind === "chat" && resolved.treeId && resolved.nodeId) {
-          setSettingsOpen(false);
-          setChatsOpen(false);
-          setProjectsOpen(false);
-          setTasksOpen(false);
-          setTerminalOpen(false);
-          setSearchOpen(false);
-          setMemoryOpen(false);
-          setKnowledgeOpen(false);
+          setActiveAuxPanel(null);
           setChatHomeVisible(false);
           await api.setCurrentNode(resolved.treeId, resolved.nodeId);
           await loadCanvas(resolved.nodeId, resolved.treeId);
@@ -647,14 +756,6 @@ export default function App() {
     },
     [loadCanvas, loadMessages],
   );
-
-  const handleOpenFolder = useCallback(async (path: string) => {
-    try {
-      await openShell(path);
-    } catch (e) {
-      setStatusText(String(e));
-    }
-  }, []);
 
   const handleRenameNode = useCallback(
     async (node: CanvasLayoutNode) => {
@@ -816,13 +917,13 @@ export default function App() {
 
   const createInitialTree = useCallback(
     async (content: string): Promise<TreeCreated> => {
-      const created = await api.createTree(titleFromPrompt(content));
+      const created = await api.createTree(titleFromPrompt(content, language));
       await api.setCurrentNode(created.tree_id, created.root_node_id);
       setChatHomeVisible(false);
       await loadCanvas(created.root_node_id, created.tree_id);
       return created;
     },
-    [loadCanvas],
+    [language, loadCanvas],
   );
 
   const handleSendMessage = useCallback(
@@ -836,6 +937,7 @@ export default function App() {
 
   const handleStartChat = useCallback(
     async (content: string) => {
+      setActiveAuxPanel(null);
       setStartingChat(true);
       setChatError("");
       try {
@@ -849,6 +951,126 @@ export default function App() {
     },
     [createInitialTree, sendMessageToNode],
   );
+
+  const loadConnectors = useCallback(async () => {
+    setConnectorsLoading(true);
+    try {
+      setConnectors(await api.listConnectors());
+      setStatusText("");
+    } catch (e) {
+      setStatusText(String(e));
+    } finally {
+      setConnectorsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeAuxPanel === "settings") {
+      void loadConnectors();
+    }
+  }, [activeAuxPanel, loadConnectors]);
+
+  const saveSettings = useCallback(async (input: SettingsInput) => {
+    const saved = await api.saveSettings(input);
+    setSettings(saved);
+    setSettingsDraft(saved);
+    await emit("panel-settings-saved");
+  }, []);
+
+  const handleSubmitSettings = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      setSavingSettings(true);
+      try {
+        await saveSettings(settingsDraft);
+        setStatusText("");
+      } catch (e) {
+        setStatusText(String(e));
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleThemeChange = useCallback(
+    (theme: ThemeName) => {
+      const next = { ...settingsDraft, theme };
+      setSettingsDraft(next);
+      void saveSettings(next).catch((e) => setStatusText(String(e)));
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleLanguageChange = useCallback(
+    (language: InterfaceLanguage) => {
+      const next = { ...settingsDraft, language };
+      setSettingsDraft(next);
+      void saveSettings(next).catch((e) => setStatusText(String(e)));
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleToggleConnector = useCallback(
+    async (id: string, enabled: boolean) => {
+      try {
+        await api.setConnectorEnabled(id, enabled);
+        await loadConnectors();
+        await emit("panel-settings-saved");
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [loadConnectors],
+  );
+
+  const handleOpenFolder = useCallback(async (path: string) => {
+    try {
+      await openShell(path);
+    } catch (e) {
+      setStatusText(String(e));
+    }
+  }, []);
+
+  const handleAskAgentFromPanel = useCallback(
+    async (content: string) => {
+      setActiveAuxPanel(null);
+      setTreeVisible(false);
+      setChatHomeVisible(true);
+      await handleStartChat(content);
+    },
+    [handleStartChat],
+  );
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const unlisteners: Array<() => void> = [];
+    void listen<PanelSelectTreeEvent>("panel-select-tree", (event) => {
+      if (event.payload.treeId) {
+        void handleSelectTree(event.payload.treeId);
+      }
+    }).then((fn) => unlisteners.push(fn));
+    void listen<PanelOpenTargetEvent>("panel-open-target", (event) => {
+      if (event.payload.target) {
+        void handleOpenTarget(event.payload.target);
+      }
+    }).then((fn) => unlisteners.push(fn));
+    void listen<PanelStartChatEvent>("panel-start-chat", (event) => {
+      if (event.payload.content) {
+        void handleStartChat(event.payload.content);
+      }
+    }).then((fn) => unlisteners.push(fn));
+    void listen("panel-settings-saved", () => {
+      void api.getSettings().then((next) => {
+        setSettings(next);
+      });
+    }).then((fn) => unlisteners.push(fn));
+    return () => {
+      for (const unlisten of unlisteners) {
+        unlisten();
+      }
+    };
+  }, [handleOpenTarget, handleSelectTree, handleStartChat]);
 
   const handleStartBranchSplit = useCallback(
     async (content: string) => {
@@ -907,9 +1129,7 @@ export default function App() {
         await loadCanvas(nodeId, treeId);
 
         const connector = await api.proposeConnector(treeId, nodeId, content);
-        await loadConnectors();
-        setKnowledgeOpen(false);
-        setSettingsOpen(true);
+        setActiveAuxPanel("settings");
         setStatusText(`Connector draft created: ${connector.manifest.name}`);
       } catch (e) {
         setChatError(String(e));
@@ -924,11 +1144,11 @@ export default function App() {
         }
       }
     },
-    [createInitialTree, loadCanvas, loadConnectors],
+    [createInitialTree, loadCanvas],
   );
 
   const handleConfirmBranches = useCallback(
-    async (message: Message) => {
+    async (message: Message, titles?: string[]) => {
       const nodeId = message.node_id;
       const treeId = message.tree_id;
       if (activeRequestsRef.current[nodeId]) return;
@@ -937,7 +1157,7 @@ export default function App() {
       setAgentToolEvents((current) => ({ ...current, [nodeId]: [] }));
       setChatError("");
       try {
-        const reply = await api.confirmPendingBranches(treeId, nodeId);
+        const reply = await api.confirmPendingBranches(treeId, nodeId, titles);
         await applyAssistantReply(treeId, nodeId, reply);
       } catch (e) {
         setChatError(String(e));
@@ -1089,9 +1309,7 @@ export default function App() {
       setChatError("");
       try {
         const connector = await api.proposeConnector(treeId, nodeId, content);
-        await loadConnectors();
-        setKnowledgeOpen(false);
-        setSettingsOpen(true);
+        setActiveAuxPanel("settings");
         setStatusText(`Connector draft created: ${connector.manifest.name}`);
       } catch (e) {
         setChatError(String(e));
@@ -1103,457 +1321,235 @@ export default function App() {
         });
       }
     },
-    [loadConnectors, selectedNode],
+    [selectedNode],
   );
 
-  const handleSetConnectorEnabled = useCallback(
-    async (id: string, enabled: boolean) => {
-      try {
-        await api.setConnectorEnabled(id, enabled);
-        await loadConnectors();
-      } catch (e) {
-        setStatusText(String(e));
-      }
-    },
-    [loadConnectors],
-  );
-
-  const handleSaveSettings = useCallback(async (input: SettingsInput) => {
-    try {
-      const saved = await api.saveSettings(input);
-      setSettings(saved);
-      setSettingsDraft(saved);
-      setChatError("");
-    } catch (e) {
-      setChatError(String(e));
-      throw e;
-    }
-  }, []);
-
-  const handleThemeChange = useCallback(
-    async (theme: ThemeName) => {
-      const nextSettings = { ...settings, theme };
-      setSettings(nextSettings);
-      setSettingsDraft((current) => ({ ...current, theme }));
-      setChatError("");
-      try {
-        const saved = await api.saveSettings(nextSettings);
-        setSettings(saved);
-        setSettingsDraft((current) => ({ ...current, theme: saved.theme }));
-      } catch (e) {
-        setChatError(String(e));
-      }
-    },
-    [settings],
-  );
-
-  const saveSettings = useCallback(
-    async (event: FormEvent) => {
-      event.preventDefault();
-      setSavingSettings(true);
-      try {
-        await handleSaveSettings(settingsDraft);
-        setSettingsOpen(false);
-      } finally {
-        setSavingSettings(false);
-      }
-    },
-    [handleSaveSettings, settingsDraft],
-  );
+  const embeddedPanelNode =
+    activeAuxPanel === "chats" ? (
+      <ChatsPanel
+        windowed
+        trees={trees}
+        activeTreeId={activeTreeId}
+        language={language}
+        onCreateRoot={handleCreateRoot}
+        onSelectTree={handleSelectTree}
+      />
+    ) : activeAuxPanel === "projects" ? (
+      <ProjectWizardPanel
+        windowed
+        onClose={closeEmbeddedPanel}
+        onOpenFolder={handleOpenFolder}
+        onAskAgent={handleAskAgentFromPanel}
+      />
+    ) : activeAuxPanel === "tasks" ? (
+      <AgentTasksPanel
+        windowed
+        treeId={selectedTreeId}
+        nodeId={selectedCanvasNodeId}
+        onClose={closeEmbeddedPanel}
+      />
+    ) : activeAuxPanel === "terminal" ? (
+      <TerminalPanel windowed onClose={closeEmbeddedPanel} />
+    ) : activeAuxPanel === "search" ? (
+      <SearchPanel windowed onClose={closeEmbeddedPanel} onOpenTarget={handleOpenTarget} />
+    ) : activeAuxPanel === "memory" ? (
+      <MemoryPanel windowed onClose={closeEmbeddedPanel} onOpenTarget={handleOpenTarget} />
+    ) : activeAuxPanel === "knowledge" ? (
+      <KnowledgePanel windowed onClose={closeEmbeddedPanel} onOpenTarget={handleOpenTarget} />
+    ) : activeAuxPanel === "settings" ? (
+      <SettingsPanel
+        windowed
+        settings={settings}
+        settingsDraft={settingsDraft}
+        saving={savingSettings}
+        connectors={connectors}
+        connectorsLoading={connectorsLoading}
+        onChange={setSettingsDraft}
+        onThemeChange={handleThemeChange}
+        onLanguageChange={handleLanguageChange}
+        onToggleConnector={handleToggleConnector}
+        onCancel={closeEmbeddedPanel}
+        onSubmit={handleSubmitSettings}
+      />
+    ) : null;
 
   return (
-    <main className="no-drag relative flex h-screen flex-col overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)]">
+    <main className="no-drag relative flex h-screen overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text)]">
       <div className="drag-region absolute left-0 right-0 top-0 z-20 h-2" />
-      <header
-        className={`no-drag relative z-40 flex h-12 shrink-0 items-center bg-[color:var(--app-bg)] px-3 ${
-          chatHomeVisible ? "" : "border-b border-[color:var(--border)]"
-        }`}
-      >
-        <div
-          className={`absolute left-3 top-2 flex min-w-0 items-center justify-start gap-2 ${
-            titlebarNeedsTrafficSpace ? "pl-0 sm:pl-[72px]" : "pl-0"
+      {sidebarOpen && (
+        <MainSidebar
+          trees={trees}
+          activeTreeId={activeAuxPanel || chatHomeVisible ? null : activeTreeId}
+          activePanel={activeAuxPanel}
+          language={language}
+          onNewChat={handleNewChat}
+          onSelectTree={handleSelectTree}
+          onDeleteTree={handleDeleteTreeFromSidebar}
+          onRenameTree={handleRenameTreeFromSidebar}
+          onOpenPanel={openEmbeddedPanel}
+          onOpenSearch={() => openEmbeddedPanel("search")}
+          onOpenSettings={() => openEmbeddedPanel("settings")}
+          onCloseSidebar={() => setSidebarOpen(false)}
+          compactTopInset={!titlebarNeedsTrafficSpace}
+        />
+      )}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header
+          className={`no-drag relative z-40 flex h-12 shrink-0 items-center bg-[color:var(--app-bg)] px-3 ${
+            chatHomeVisible ? "" : "border-b border-[color:var(--border)]"
           }`}
         >
-          {titlebarNeedsTrafficSpace && (
-            <div className="drag-region mr-1 hidden h-8 w-2 shrink-0 sm:flex" />
-          )}
-          <div className="relative">
-            <button
-              type="button"
-              aria-label="Chats"
-              onClick={() => {
-                setSettingsOpen(false);
-                setProjectsOpen(false);
-                setTasksOpen(false);
-                setTerminalOpen(false);
-                setSearchOpen(false);
-                setMemoryOpen(false);
-                setKnowledgeOpen(false);
-                setChatsOpen((value) => !value);
-              }}
-              className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-                chatsOpen ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
-              }`}
+          <div
+            className={`absolute left-3 top-2 flex min-w-0 items-center justify-start gap-2 md:hidden ${
+              titlebarNeedsTrafficSpace ? "pl-0 sm:pl-[72px]" : "pl-0"
+            }`}
+          >
+            {titlebarNeedsTrafficSpace && (
+              <div className="drag-region mr-1 hidden h-8 w-2 shrink-0 sm:flex" />
+            )}
+            <TopBarButton
+              label={uiText(language, "chats")}
+              active={activeAuxPanel === "chats"}
+              onClick={() => openEmbeddedPanel("chats")}
             >
               <ChatsIcon />
-              <span>Chats</span>
-            </button>
-            {chatsOpen && (
-              <ChatsPanel
-                trees={trees}
-                activeTreeId={activeTreeId}
-                onCreateRoot={() => {
-                  setChatsOpen(false);
-                  void handleCreateRoot();
-                }}
-                onSelectTree={(treeId) => {
-                  setChatsOpen(false);
-                  void handleSelectTree(treeId);
-                }}
-              />
-            )}
-          </div>
-          <button
-            type="button"
-            aria-label="Projects"
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setProjectsOpen((value) => !value);
-            }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              projectsOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
-          >
-            <ProjectIcon />
-            <span>Projects</span>
-          </button>
-          {projectsOpen && (
-            <ProjectWizardPanel
-              onClose={() => setProjectsOpen(false)}
-              onOpenFolder={handleOpenFolder}
-              onAskAgent={handleStartChat}
-            />
-          )}
-          <button
-            type="button"
-            aria-label="Tasks"
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setTasksOpen((value) => !value);
-            }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              tasksOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
-          >
-            <TasksIcon />
-            <span>Tasks</span>
-          </button>
-          {tasksOpen && (
-            <AgentTasksPanel
-              treeId={selectedTreeId}
-              nodeId={selectedCanvasNodeId}
-              onClose={() => setTasksOpen(false)}
-            />
-          )}
-          <button
-            type="button"
-            aria-label="Terminal"
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setTerminalOpen((value) => !value);
-            }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              terminalOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
-          >
-            <TerminalIcon />
-            <span>Terminal</span>
-          </button>
-          {terminalOpen && <TerminalPanel onClose={() => setTerminalOpen(false)} />}
-          <button
-            type="button"
-            aria-label="Search"
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setSearchOpen((value) => !value);
-            }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              searchOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
-          >
-            <SearchIcon />
-            <span>Search</span>
-          </button>
-          {searchOpen && (
-            <SearchPanel
-              onClose={() => setSearchOpen(false)}
-              onOpenTarget={handleOpenTarget}
-            />
-          )}
-          {!chatHomeVisible && (
-            <button
-              type="button"
-              onClick={() => {
-                setChatsOpen(false);
-                setProjectsOpen(false);
-                setTasksOpen(false);
-                setTerminalOpen(false);
-                setSearchOpen(false);
-                setTreeVisible((value) => {
-                  const nextVisible = !value;
-                  if (nextVisible) {
-                    setChatHomeVisible(false);
-                  }
-                  return nextVisible;
-                });
-              }}
-              className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
+            </TopBarButton>
+            <TopBarButton
+              label={uiText(language, "search")}
+              active={activeAuxPanel === "search"}
+              onClick={() => openEmbeddedPanel("search")}
             >
-              <PanelIcon />
-              {treeVisible ? "Focus" : "Tree"}
-            </button>
-          )}
-          {!chatHomeVisible && (
-            <div className="hidden h-8 max-w-[168px] shrink-0 items-center truncate whitespace-nowrap rounded-full border border-[color:var(--border)] px-3 text-xs text-[color:var(--muted)] lg:inline-flex">
-              {settings.model || DEFAULT_SETTINGS.model}
-            </div>
-          )}
-        </div>
-        {!chatHomeVisible && (
-          <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(560px,42vw)] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center leading-tight">
-            <div className="max-w-full truncate text-sm font-semibold text-[color:var(--text)]">
-              {titlebarTitle}
-            </div>
-            {titlebarSubtitle && (
-              <div className="mt-0.5 max-w-full truncate text-[11px] text-[color:var(--muted)]">
-                {titlebarSubtitle}
-              </div>
-            )}
+              <SearchIcon />
+            </TopBarButton>
           </div>
-        )}
-        <div className="absolute right-3 top-2 flex min-w-0 items-center justify-end gap-2">
-          <button
-            type="button"
-            aria-label="Memory"
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setKnowledgeOpen(false);
-              setMemoryOpen((value) => !value);
-            }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              memoryOpen ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
-            }`}
-          >
-            <MemoryIcon />
-            <span className="hidden sm:inline">Memory</span>
-          </button>
-          {memoryOpen && (
-            <MemoryPanel
-              onClose={() => setMemoryOpen(false)}
-              onOpenTarget={handleOpenTarget}
-            />
-          )}
-          <button
-            type="button"
-            aria-label="Knowledge"
-            onClick={() => {
-              setSettingsOpen(false);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen((value) => !value);
-            }}
-            className={`inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3 ${
-              knowledgeOpen
-                ? "bg-[color:var(--selected)] text-[color:var(--text)]"
-                : "text-[color:var(--muted)]"
-            }`}
-          >
-            <KnowledgeIcon />
-            <span className="hidden sm:inline">Knowledge</span>
-          </button>
-          {knowledgeOpen && (
-            <KnowledgePanel
-              onClose={() => setKnowledgeOpen(false)}
-              onOpenTarget={handleOpenTarget}
-            />
-          )}
-          <button
-            type="button"
-            aria-label="Settings"
-            onClick={() => {
-              setSettingsDraft(settings);
-              setChatsOpen(false);
-              setProjectsOpen(false);
-              setTasksOpen(false);
-              setTerminalOpen(false);
-              setSearchOpen(false);
-              setMemoryOpen(false);
-              setKnowledgeOpen(false);
-              setSettingsOpen((value) => !value);
-            }}
-            className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 text-sm text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] sm:px-3"
-          >
-            <SettingsIcon />
-            <span className="hidden sm:inline">Settings</span>
-          </button>
-          {settingsOpen && (
-            <SettingsPanel
-              settings={settings}
-              settingsDraft={settingsDraft}
-              saving={savingSettings}
-              connectors={connectors}
-              connectorsLoading={connectorsLoading}
-              onChange={setSettingsDraft}
-              onThemeChange={handleThemeChange}
-              onToggleConnector={handleSetConnectorEnabled}
-              onCancel={() => {
-                setSettingsDraft(settings);
-                setSettingsOpen(false);
-              }}
-              onSubmit={saveSettings}
-            />
-          )}
-        </div>
-      </header>
-      <div className="min-h-0 flex flex-1 flex-col overflow-hidden md:flex-row">
-        <Suspense
-          fallback={
-            <div className="flex flex-1 items-center justify-center text-sm text-[color:var(--muted)]">
-              Loading
+          {!sidebarOpen && (
+            <div
+              className={`absolute left-3 top-2 hidden min-w-0 items-center justify-start gap-2 md:flex ${
+                titlebarNeedsTrafficSpace ? "pl-[72px]" : "pl-0"
+              }`}
+            >
+              <TopBarButton
+                label={uiText(language, "search")}
+                active={activeAuxPanel === "search"}
+                onClick={() => openEmbeddedPanel("search")}
+              >
+                <SearchIcon />
+              </TopBarButton>
+              <TopBarButton
+                label={uiText(language, "openSidebar")}
+                onClick={() => setSidebarOpen(true)}
+              >
+                <SidebarToggleIcon />
+              </TopBarButton>
             </div>
-          }
-        >
-          {treeVisible && (
-            <section className="min-h-[240px] min-w-0 shrink-0 overflow-hidden border-b border-[color:var(--border)] md:min-h-0 md:flex-1 md:border-b-0">
-              <TreeCanvas
+          )}
+          {(!chatHomeVisible || activeAuxPanel) && (
+            <div className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[min(560px,42vw)] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center leading-tight">
+              <div className="max-w-full truncate text-sm font-semibold text-[color:var(--text)]">
+                {activeAuxPanel ? panelTitle(activeAuxPanel, language) : titlebarTitle}
+              </div>
+              {!activeAuxPanel && titlebarSubtitle && (
+                <div className="mt-0.5 max-w-full truncate text-[11px] text-[color:var(--muted)]">
+                  {titlebarSubtitle}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="absolute right-3 top-2 flex min-w-0 items-center justify-end gap-2">
+            {!chatHomeVisible && !activeAuxPanel && (
+              <TopBarButton
+                label={treeVisible ? uiText(language, "focus") : uiText(language, "tree")}
+                onClick={() => {
+                  setActiveAuxPanel(null);
+                  setTreeVisible((value) => {
+                    const nextVisible = !value;
+                    if (nextVisible) {
+                      setChatHomeVisible(false);
+                    }
+                    return nextVisible;
+                  });
+                }}
+              >
+                <TreeGraphIcon />
+              </TopBarButton>
+            )}
+            <div className="md:hidden">
+              <TopBarButton
+                label={uiText(language, "settings")}
+                active={activeAuxPanel === "settings"}
+                tooltipAlign="right"
+                onClick={() => openEmbeddedPanel("settings")}
+              >
+                <SettingsIcon />
+              </TopBarButton>
+            </div>
+          </div>
+        </header>
+        <div className="min-h-0 flex flex-1 flex-col overflow-hidden md:flex-row">
+          <Suspense
+            fallback={
+              <div className="flex flex-1 items-center justify-center text-sm text-[color:var(--muted)]">
+                Loading
+              </div>
+            }
+          >
+            {embeddedPanelNode}
+            {!embeddedPanelNode && treeVisible && (
+              <section className="min-h-[240px] min-w-0 shrink-0 overflow-hidden border-b border-[color:var(--border)] md:min-h-0 md:flex-1 md:border-b-0">
+                <TreeCanvas
                 nodes={nodes}
                 loading={loading}
                 statusText={statusText}
                 onCreateRoot={handleCreateRoot}
-                onSelectNode={handleSelectNode}
+                onActivateNode={handleActivateNode}
+                onOpenDialogPoint={handleOpenDialogPoint}
                 onRenameNode={handleRenameNode}
                 onCreateChild={handleCreateChild}
                 onSetNodeColor={handleSetNodeColor}
                 onDeleteNode={handleDeleteNode}
+                />
+              </section>
+            )}
+            {!embeddedPanelNode && !treeVisible && (
+              <ChatPanel
+                selectedNode={chatHomeVisible ? null : selectedNode}
+                messages={chatHomeVisible ? [] : messages}
+                loading={chatHomeVisible ? false : messagesLoading}
+                sending={startingChat || (!chatHomeVisible && selectedNodeIsSending)}
+                streamingText={chatHomeVisible ? "" : selectedStreamingText}
+                agentToolEvents={chatHomeVisible ? [] : selectedAgentToolEvents}
+                canWrite={Boolean(!chatHomeVisible && selectedNode?.is_leaf)}
+                canStartChat={chatHomeVisible}
+                fullWidth
+                error={chatError}
+                targetMessageId={targetMessageId}
+                language={language}
+                onSend={handleSendMessage}
+                onStartChat={handleStartChat}
+                onStartBranchSplit={handleStartBranchSplit}
+                onStartConnector={handleStartConnector}
+                onEditMessage={handleEditMessage}
+                onRegenerateMessage={handleRegenerateMessage}
+                onConfirmBranches={handleConfirmBranches}
+                onForceBranchSplit={handleForceBranchSplit}
+                onProposeConnector={handleProposeConnector}
+                onOpenTarget={handleOpenTarget}
               />
-            </section>
-          )}
-          {treeVisible && !compactLayout && (
-            <div
-              role="separator"
-              aria-label="Resize tree and chat panels"
-              aria-orientation="vertical"
-              tabIndex={0}
-              onPointerDown={beginDividerDrag}
-              onKeyDown={(event) => {
-                if (event.key === "ArrowLeft") {
-                  event.preventDefault();
-                  setChatWidth((width) => clampChatWidth(width + 24));
-                }
-                if (event.key === "ArrowRight") {
-                  event.preventDefault();
-                  setChatWidth((width) => clampChatWidth(width - 24));
-                }
-              }}
-              className={`no-drag group relative z-30 w-2 shrink-0 cursor-col-resize outline-none ${
-                dividerDragging ? "bg-[color:var(--selected)]" : "bg-transparent"
-              }`}
-            >
-              <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--border)] transition-colors group-hover:bg-[color:var(--selected)] group-focus-visible:bg-[color:var(--selected)]" />
-            </div>
-          )}
-          <ChatPanel
-            selectedNode={chatHomeVisible ? null : selectedNode}
-            messages={chatHomeVisible ? [] : messages}
-            loading={chatHomeVisible ? false : messagesLoading}
-            sending={startingChat || (!chatHomeVisible && selectedNodeIsSending)}
-            streamingText={chatHomeVisible ? "" : selectedStreamingText}
-            agentToolEvents={chatHomeVisible ? [] : selectedAgentToolEvents}
-            canWrite={Boolean(!chatHomeVisible && selectedNode?.is_leaf)}
-            canStartChat={chatHomeVisible}
-            fullWidth={!treeVisible || compactLayout}
-            error={chatError}
-            targetMessageId={targetMessageId}
-            panelWidth={treeVisible && !compactLayout ? chatWidth : undefined}
-            onSend={handleSendMessage}
-            onStartChat={handleStartChat}
-            onStartBranchSplit={handleStartBranchSplit}
-            onStartConnector={handleStartConnector}
-            onEditMessage={handleEditMessage}
-            onRegenerateMessage={handleRegenerateMessage}
-            onConfirmBranches={handleConfirmBranches}
-            onForceBranchSplit={handleForceBranchSplit}
-            onProposeConnector={handleProposeConnector}
-            onOpenTarget={handleOpenTarget}
-          />
-        </Suspense>
+            )}
+          </Suspense>
+        </div>
       </div>
       {onboardingOpen && (
         <OnboardingPanel
+          language={language}
           onClose={dismissOnboarding}
           onOpenSettings={() => {
             dismissOnboarding();
-            setSettingsDraft(settings);
-            setChatsOpen(false);
-            setProjectsOpen(false);
-            setTasksOpen(false);
-            setTerminalOpen(false);
-            setSearchOpen(false);
-            setMemoryOpen(false);
-            setKnowledgeOpen(false);
-            setSettingsOpen(true);
+            openEmbeddedPanel("settings");
           }}
           onOpenProjects={() => {
             dismissOnboarding();
-            setSettingsOpen(false);
-            setChatsOpen(false);
-            setTasksOpen(false);
-            setTerminalOpen(false);
-            setSearchOpen(false);
-            setMemoryOpen(false);
-            setKnowledgeOpen(false);
-            setProjectsOpen(true);
+            openEmbeddedPanel("projects");
           }}
         />
       )}
@@ -1562,11 +1558,276 @@ export default function App() {
   );
 }
 
+function PanelWindowApp({ panel }: { panel: AuxPanel }) {
+  const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [connectors, setConnectors] = useState<ConnectorSummary[]>([]);
+  const [connectorsLoading, setConnectorsLoading] = useState(false);
+  const [trees, setTrees] = useState<TreeSummary[]>([]);
+  const [statusText, setStatusText] = useState("");
+
+  const searchParams = useMemo(
+    () => (typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search)),
+    [],
+  );
+  const activeTreeId = searchParams.get("treeId");
+  const activeNodeId = searchParams.get("nodeId");
+
+  const closeWindow = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    await getCurrentWindow().close();
+  }, []);
+
+  const focusMainWindow = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    const mainWindow = await WebviewWindow.getByLabel("main");
+    await mainWindow?.show();
+    await mainWindow?.setFocus();
+  }, []);
+
+  const loadTrees = useCallback(async () => {
+    try {
+      setTrees(await api.listTrees());
+      setStatusText("");
+    } catch (e) {
+      setStatusText(String(e));
+    }
+  }, []);
+
+  const loadConnectors = useCallback(async () => {
+    setConnectorsLoading(true);
+    try {
+      setConnectors(await api.listConnectors());
+      setStatusText("");
+    } catch (e) {
+      setStatusText(String(e));
+    } finally {
+      setConnectorsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void api
+      .getSettings()
+      .then((loaded) => {
+        setSettings(loaded);
+        setSettingsDraft(loaded);
+      })
+      .catch((e) => setStatusText(String(e)));
+  }, []);
+
+  useEffect(() => {
+    applyThemeVars(THEMES[settings.theme] ?? THEMES[DEFAULT_SETTINGS.theme]);
+  }, [settings.theme]);
+
+  useEffect(() => {
+    if (panel === "chats") {
+      void loadTrees();
+    }
+    if (panel === "settings") {
+      void loadConnectors();
+    }
+  }, [loadConnectors, loadTrees, panel]);
+
+  const saveSettings = useCallback(
+    async (input: SettingsInput) => {
+      const saved = await api.saveSettings(input);
+      setSettings(saved);
+      setSettingsDraft(saved);
+      await emit("panel-settings-saved");
+    },
+    [],
+  );
+
+  const handleSubmitSettings = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      setSavingSettings(true);
+      try {
+        await saveSettings(settingsDraft);
+        setStatusText("");
+      } catch (e) {
+        setStatusText(String(e));
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleThemeChange = useCallback(
+    (theme: ThemeName) => {
+      const next = { ...settingsDraft, theme };
+      setSettingsDraft(next);
+      void saveSettings(next).catch((e) => setStatusText(String(e)));
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleLanguageChange = useCallback(
+    (language: InterfaceLanguage) => {
+      const next = { ...settingsDraft, language };
+      setSettingsDraft(next);
+      void saveSettings(next).catch((e) => setStatusText(String(e)));
+    },
+    [saveSettings, settingsDraft],
+  );
+
+  const handleToggleConnector = useCallback(
+    async (id: string, enabled: boolean) => {
+      try {
+        await api.setConnectorEnabled(id, enabled);
+        await loadConnectors();
+        await emit("panel-settings-saved");
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [loadConnectors],
+  );
+
+  const handleCreateRoot = useCallback(async () => {
+    try {
+      const created = await api.createTree("Root");
+      await api.setCurrentNode(created.tree_id, created.root_node_id);
+      await emit<PanelSelectTreeEvent>("panel-select-tree", { treeId: created.tree_id });
+      await focusMainWindow();
+      await closeWindow();
+    } catch (e) {
+      setStatusText(String(e));
+    }
+  }, [closeWindow, focusMainWindow]);
+
+  const handleSelectTree = useCallback(
+    async (treeId: string) => {
+      try {
+        await emit<PanelSelectTreeEvent>("panel-select-tree", { treeId });
+        await focusMainWindow();
+        await closeWindow();
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [closeWindow, focusMainWindow],
+  );
+
+  const handleOpenTarget = useCallback(
+    async (target: string) => {
+      const trimmed = target.trim();
+      if (!trimmed) return;
+      try {
+        const resolved = await api.resolveTarget(trimmed);
+        if (resolved.kind === "chat") {
+          await emit<PanelOpenTargetEvent>("panel-open-target", { target: trimmed });
+          await focusMainWindow();
+          await closeWindow();
+          return;
+        }
+        const openTarget =
+          resolved.kind === "url"
+            ? resolved.target
+            : resolved.absolutePath ?? resolved.path ?? resolved.target;
+        if (!openTarget) {
+          throw new Error("Target is not openable.");
+        }
+        await openShell(openTarget);
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [closeWindow, focusMainWindow],
+  );
+
+  const handleOpenFolder = useCallback(async (path: string) => {
+    try {
+      await openShell(path);
+    } catch (e) {
+      setStatusText(String(e));
+    }
+  }, []);
+
+  const handleAskAgent = useCallback(
+    async (content: string) => {
+      try {
+        await emit<PanelStartChatEvent>("panel-start-chat", { content });
+        await focusMainWindow();
+        await closeWindow();
+      } catch (e) {
+        setStatusText(String(e));
+      }
+    },
+    [closeWindow, focusMainWindow],
+  );
+
+  const panelNode =
+    panel === "chats" ? (
+      <ChatsPanel
+        windowed
+        trees={trees}
+        activeTreeId={activeTreeId}
+        language={settings.language}
+        onCreateRoot={handleCreateRoot}
+        onSelectTree={handleSelectTree}
+      />
+    ) : panel === "projects" ? (
+      <ProjectWizardPanel
+        windowed
+        onClose={() => void closeWindow()}
+        onOpenFolder={handleOpenFolder}
+        onAskAgent={handleAskAgent}
+      />
+    ) : panel === "tasks" ? (
+      <AgentTasksPanel
+        windowed
+        treeId={activeTreeId}
+        nodeId={activeNodeId}
+        onClose={() => void closeWindow()}
+      />
+    ) : panel === "terminal" ? (
+      <TerminalPanel windowed onClose={() => void closeWindow()} />
+    ) : panel === "search" ? (
+      <SearchPanel windowed onClose={() => void closeWindow()} onOpenTarget={handleOpenTarget} />
+    ) : panel === "memory" ? (
+      <MemoryPanel windowed onClose={() => void closeWindow()} onOpenTarget={handleOpenTarget} />
+    ) : panel === "knowledge" ? (
+      <KnowledgePanel windowed onClose={() => void closeWindow()} onOpenTarget={handleOpenTarget} />
+    ) : (
+      <SettingsPanel
+        windowed
+        settings={settings}
+        settingsDraft={settingsDraft}
+        saving={savingSettings}
+        connectors={connectors}
+        connectorsLoading={connectorsLoading}
+        onChange={setSettingsDraft}
+        onThemeChange={handleThemeChange}
+        onLanguageChange={handleLanguageChange}
+        onToggleConnector={handleToggleConnector}
+        onCancel={() => void closeWindow()}
+        onSubmit={handleSubmitSettings}
+      />
+    );
+
+  return (
+    <main className="no-drag h-screen overflow-hidden bg-[color:var(--panel)] text-[color:var(--text)]">
+      {panelNode}
+      {statusText && (
+        <div className="fixed bottom-3 left-3 right-3 z-[100] rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 shadow-[0_8px_28px_rgba(0,0,0,0.14)]">
+          {statusText}
+        </div>
+      )}
+    </main>
+  );
+}
+
 function OnboardingPanel({
+  language,
   onClose,
   onOpenSettings,
   onOpenProjects,
 }: {
+  language: InterfaceLanguage;
   onClose: () => void;
   onOpenSettings: () => void;
   onOpenProjects: () => void;
@@ -1577,24 +1838,24 @@ function OnboardingPanel({
         <div className="border-b border-[color:var(--border)] px-5 py-4">
           <div className="text-base font-semibold text-[color:var(--text)]">ino-agent</div>
           <div className="mt-1 text-sm leading-6 text-[color:var(--muted)]">
-            Local workspace for projects, agent tasks, memory, search, and visual explanations.
+            {uiText(language, "onboardingDescription")}
           </div>
         </div>
         <div className="grid gap-2 p-4">
           <OnboardingStep
             label="1"
-            title="Set model access"
-            text="Save endpoint, model, API key, and theme in Settings."
+            title={uiText(language, "onboardingSetAccessTitle")}
+            text={uiText(language, "onboardingSetAccessText")}
           />
           <OnboardingStep
             label="2"
-            title="Create or inspect work"
-            text="Use Projects, Tasks, Terminal, Search, Memory, and Knowledge from the top bar."
+            title={uiText(language, "onboardingWorkTitle")}
+            text={uiText(language, "onboardingWorkText")}
           />
           <OnboardingStep
             label="3"
-            title="Keep local data private"
-            text="Chats, memory, command history, paths, and API keys stay in the local SQLite database."
+            title={uiText(language, "onboardingPrivacyTitle")}
+            text={uiText(language, "onboardingPrivacyText")}
           />
         </div>
         <div className="flex flex-col-reverse gap-2 border-t border-[color:var(--border)] px-4 py-3 sm:flex-row sm:justify-end">
@@ -1647,12 +1908,387 @@ function OnboardingStep({
   );
 }
 
-function titleFromPrompt(content: string) {
+function TopBarButton({
+  label,
+  active = false,
+  tooltipAlign = "center",
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  tooltipAlign?: "center" | "right";
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  const tooltipPosition =
+    tooltipAlign === "right" ? "right-0" : "left-1/2 -translate-x-1/2";
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className={`group relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:text-[color:var(--text)] focus-visible:outline-none ${
+        active ? "bg-[color:var(--selected)] text-[color:var(--text)]" : "text-[color:var(--muted)]"
+      }`}
+    >
+      {children}
+      <span
+        className={`pointer-events-none absolute top-full z-[80] mt-2 whitespace-nowrap rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] px-2 py-1 text-xs font-medium text-[color:var(--text)] opacity-0 shadow-[0_8px_24px_rgba(0,0,0,0.14)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 ${tooltipPosition}`}
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function MainSidebar({
+  trees,
+  activeTreeId,
+  activePanel,
+  language,
+  onNewChat,
+  onSelectTree,
+  onDeleteTree,
+  onRenameTree,
+  onOpenPanel,
+  onOpenSearch,
+  onOpenSettings,
+  onCloseSidebar,
+  compactTopInset,
+}: {
+  trees: TreeSummary[];
+  activeTreeId: string | null;
+  activePanel: AuxPanel | null;
+  language: InterfaceLanguage;
+  onNewChat: () => void;
+  onSelectTree: (treeId: string) => void;
+  onDeleteTree: (tree: TreeSummary) => void;
+  onRenameTree: (tree: TreeSummary) => void;
+  onOpenPanel: (panel: AuxPanel) => void;
+  onOpenSearch: () => void;
+  onOpenSettings: () => void;
+  onCloseSidebar: () => void;
+  compactTopInset: boolean;
+}) {
+  const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
+  const toolItems: Array<{ panel: AuxPanel; label: string; icon: ReactNode }> = [
+    { panel: "projects", label: uiText(language, "projects"), icon: <ProjectIcon /> },
+    { panel: "tasks", label: uiText(language, "tasks"), icon: <TasksIcon /> },
+    { panel: "terminal", label: uiText(language, "terminal"), icon: <TerminalIcon /> },
+    { panel: "memory", label: uiText(language, "memory"), icon: <MemoryIcon /> },
+    { panel: "knowledge", label: uiText(language, "knowledge"), icon: <KnowledgeIcon /> },
+  ];
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+  const profileRootRef = useRef<HTMLDivElement | null>(null);
+  const [profile, setProfile] = useState<SidebarProfile>(() => loadSidebarProfile());
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    tree: TreeSummary;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && profileRootRef.current?.contains(target)) return;
+      setProfileOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setProfileOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [profileOpen]);
+
+  const updateProfile = useCallback((next: SidebarProfile) => {
+    setProfile(next);
+    saveSidebarProfile(next);
+  }, []);
+
+  const handleAvatarFile = useCallback(
+    async (file: File | undefined) => {
+      if (!file) return;
+      try {
+        const avatarDataUrl = await squareCropImageFile(file);
+        updateProfile({ ...profile, avatarDataUrl });
+      } catch {
+        // Ignore invalid images; the input stays available for another attempt.
+      }
+    },
+    [profile, updateProfile],
+  );
+
+  const initials = profile.name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "IA";
+
+  return (
+    <aside className="no-drag hidden h-screen w-[260px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--sidebar)] text-[color:var(--text)] md:flex">
+      <div className={`drag-region shrink-0 ${compactTopInset ? "h-0" : "h-10"}`} />
+      <div className="flex h-12 shrink-0 items-center justify-between px-3">
+        <div className="truncate text-[23px] font-semibold tracking-normal">ino-agent</div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            aria-label={uiText(language, "search")}
+            title={uiText(language, "search")}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+          >
+            <SearchIcon />
+          </button>
+          <button
+            type="button"
+            onClick={onCloseSidebar}
+            aria-label={uiText(language, "closeSidebar")}
+            title={uiText(language, "closeSidebar")}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+          >
+            <SidebarToggleIcon />
+          </button>
+        </div>
+      </div>
+      <nav className="shrink-0 space-y-0.5 px-3 py-1.5">
+        <button
+          type="button"
+          onClick={onNewChat}
+          className="flex h-8 w-full items-center gap-2 rounded-xl px-2.5 text-left text-[13px] font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+        >
+          <NewChatIcon />
+          <span className="truncate">{uiText(language, "newChat")}</span>
+        </button>
+        {toolItems.map((item) => {
+          const active = activePanel === item.panel;
+          return (
+            <button
+              key={item.panel}
+              type="button"
+              onClick={() => onOpenPanel(item.panel)}
+              className={`flex h-8 w-full items-center gap-2 rounded-xl px-2.5 text-left text-[13px] font-medium transition-colors focus-visible:outline-none ${
+                active
+                  ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                  : "text-[color:var(--text)] hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)]"
+              }`}
+            >
+              {item.icon}
+              <span className="truncate">{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        <div className="mb-2 px-3 text-[13px] font-semibold text-[color:var(--text)]">
+          {uiText(language, "recent")}
+        </div>
+        {orderedTrees.length === 0 ? (
+          <div className="px-3 py-2 text-[13px] text-[color:var(--muted)]">{uiText(language, "noChats")}</div>
+        ) : (
+          <div className="space-y-0.5">
+            {orderedTrees.map((tree) => {
+              const active = tree.id === activeTreeId;
+              return (
+                <div
+                  key={tree.id}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setContextMenu({
+                      tree,
+                      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)),
+                      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 96)),
+                    });
+                  }}
+                  className={`group flex h-8 w-full min-w-0 items-center gap-2 rounded-xl pl-2.5 pr-1.5 text-left text-[13px] transition-colors focus-visible:outline-none ${
+                    active
+                      ? "bg-[color:var(--selected)] text-[color:var(--text)]"
+                      : "text-[color:var(--text)] hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)]"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onSelectTree(tree.id)}
+                    className="min-w-0 flex-1 truncate text-left outline-none"
+                  >
+                    {tree.title}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      {contextMenu && (
+        <div
+          className="fixed z-[120] min-w-[188px] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-1.5 text-[color:var(--text)] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              const tree = contextMenu.tree;
+              setContextMenu(null);
+              onRenameTree(tree);
+            }}
+            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+          >
+            <RenameIcon />
+            <span className="truncate">{uiText(language, "renameChat")}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const tree = contextMenu.tree;
+              setContextMenu(null);
+              onDeleteTree(tree);
+            }}
+            className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm text-[#d93025] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+          >
+            <TrashIcon />
+            <span className="truncate">{uiText(language, "deleteChat")}</span>
+          </button>
+        </div>
+      )}
+      <div
+        ref={profileRootRef}
+        className="relative shrink-0 border-t border-[color:var(--border)] p-2.5"
+      >
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setProfileOpen((open) => !open)}
+            aria-expanded={profileOpen}
+            className="flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-2xl px-2.5 text-left transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+          >
+            {profile.avatarDataUrl ? (
+              <img
+                src={profile.avatarDataUrl}
+                alt=""
+                className="h-7 w-7 shrink-0 rounded-full object-cover"
+              />
+            ) : (
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-[11px] font-semibold text-white">
+                {initials}
+              </span>
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-[color:var(--text)]">
+                {profile.name}
+              </span>
+              <span className="block truncate text-[11px] text-[color:var(--muted)]">
+                {uiText(language, "profile")}
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label={uiText(language, "settings")}
+            title={uiText(language, "settings")}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+          >
+            <SettingsIcon />
+          </button>
+        </div>
+        {profileOpen && (
+          <div
+            className="absolute bottom-[62px] left-2.5 right-2.5 z-[120] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 text-[color:var(--text)] shadow-[0_12px_30px_rgba(0,0,0,0.18)]"
+          >
+            <div className="mb-3 text-sm font-semibold">{uiText(language, "profile")}</div>
+            <div className="flex items-center gap-3">
+              {profile.avatarDataUrl ? (
+                <img
+                  src={profile.avatarDataUrl}
+                  alt=""
+                  className="h-12 w-12 shrink-0 rounded-full object-cover"
+                />
+              ) : (
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#10a37f] text-sm font-semibold text-white">
+                  {initials}
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <button
+                  type="button"
+                  onClick={() => avatarInputRef.current?.click()}
+                  className="h-7 rounded-full bg-[color:var(--panel-soft)] px-3 text-xs font-medium transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+                >
+                  {uiText(language, "chooseAvatar")}
+                </button>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(event) => {
+                    void handleAvatarFile(event.target.files?.[0]);
+                    event.target.value = "";
+                  }}
+                />
+              </div>
+            </div>
+            <label className="mt-3 block text-xs text-[color:var(--muted)]">
+              {uiText(language, "displayName")}
+              <input
+                type="text"
+                value={profile.name}
+                onChange={(event) => {
+                  const name = event.target.value;
+                  updateProfile({ ...profile, name });
+                }}
+                onBlur={() => {
+                  if (!profile.name.trim()) {
+                    updateProfile({ ...profile, name: "ino-agent" });
+                  }
+                }}
+                className="mt-1 h-8 w-full rounded-2xl border border-transparent bg-[color:var(--panel-soft)] px-3 text-sm text-[color:var(--text)] outline-none focus:shadow-[0_0_0_3px_rgba(0,0,0,0.06)]"
+              />
+            </label>
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function titleFromPrompt(content: string, language: InterfaceLanguage) {
   const firstLine =
     content
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .find((line) => line && !line.startsWith("[Attached file:")) ?? "New chat";
+      .find(
+        (line) =>
+          line &&
+          !line.startsWith("[Attached file:") &&
+          !line.startsWith("Note:") &&
+          !line.startsWith("```"),
+      ) ?? uiText(language, "newChat");
   const normalized = firstLine.replace(/\s+/g, " ");
   return normalized.length > 56 ? `${normalized.slice(0, 53).trim()}...` : normalized;
 }
@@ -1660,36 +2296,52 @@ function titleFromPrompt(content: string) {
 function ChatsPanel({
   trees,
   activeTreeId,
+  language,
   onCreateRoot,
   onSelectTree,
+  windowed = false,
 }: {
   trees: TreeSummary[];
   activeTreeId: string | null;
+  language: InterfaceLanguage;
   onCreateRoot: () => void;
   onSelectTree: (treeId: string) => void;
+  windowed?: boolean;
 }) {
   const orderedTrees = [...trees].sort((a, b) => b.updated_at - a.updated_at);
 
   return (
-    <div className="no-drag fixed left-3 right-3 top-12 z-50 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-0 sm:right-auto sm:top-10 sm:w-[300px]">
+    <div
+      className={
+        windowed
+          ? "no-drag flex h-full min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-0 sm:right-auto sm:top-10 sm:w-[300px]"
+      }
+    >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[color:var(--text)]">Chats</div>
-          <div className="truncate text-[11px] text-[color:var(--muted)]">Latest first</div>
+          <div className="truncate text-sm font-semibold text-[color:var(--text)]">
+            {uiText(language, "chats")}
+          </div>
+          <div className="truncate text-[11px] text-[color:var(--muted)]">
+            {uiText(language, "latestFirst")}
+          </div>
         </div>
         <button
           type="button"
           onClick={onCreateRoot}
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)]"
-          aria-label="New chat"
-          title="New chat"
+          aria-label={uiText(language, "newChat")}
+          title={uiText(language, "newChat")}
         >
           <PlusIcon />
         </button>
       </div>
-      <div className="max-h-[360px] overflow-y-auto p-1.5">
+      <div className={`${windowed ? "min-h-0 flex-1" : "max-h-[360px]"} overflow-y-auto p-1.5`}>
         {orderedTrees.length === 0 ? (
-          <div className="px-3 py-3 text-sm text-[color:var(--muted)]">No chats</div>
+          <div className="px-3 py-3 text-sm text-[color:var(--muted)]">
+            {uiText(language, "noChats")}
+          </div>
         ) : (
           orderedTrees.map((tree) => {
             const active = tree.id === activeTreeId;
@@ -1712,7 +2364,7 @@ function ChatsPanel({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{tree.title}</span>
                   <span className="block truncate text-[11px] text-[color:var(--muted)]">
-                    {tree.message_count} messages
+                    {tree.message_count} {uiText(language, "messages")}
                   </span>
                 </span>
               </button>
@@ -1732,9 +2384,11 @@ function SettingsPanel({
   connectorsLoading,
   onChange,
   onThemeChange,
+  onLanguageChange,
   onToggleConnector,
   onCancel,
   onSubmit,
+  windowed = false,
 }: {
   settings: ChatSettings;
   settingsDraft: ChatSettings;
@@ -1743,32 +2397,43 @@ function SettingsPanel({
   connectorsLoading: boolean;
   onChange: (next: ChatSettings) => void;
   onThemeChange: (theme: ThemeName) => void;
+  onLanguageChange: (language: InterfaceLanguage) => void;
   onToggleConnector: (id: string, enabled: boolean) => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent) => void;
+  windowed?: boolean;
 }) {
+  const language = settingsDraft.language ?? settings.language ?? DEFAULT_SETTINGS.language;
   const inputClass =
     "mt-1 h-9 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
-
+  const textareaClass =
+    "mt-1 min-h-24 w-full resize-y rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2 text-sm leading-5 text-[color:var(--text)] outline-none transition-shadow placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
   return (
     <form
       onSubmit={onSubmit}
-      className="no-drag fixed left-3 right-3 top-12 z-50 rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)]/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.14)] backdrop-blur-xl sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:w-[420px]"
+      className={
+        windowed
+          ? "no-drag h-full w-full min-h-0 flex-1 overflow-y-auto bg-[color:var(--panel)] p-6"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:w-[420px]"
+      }
     >
+      <div className="mx-auto w-full max-w-[560px]">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-medium text-[color:var(--text)]">Agent settings</div>
+          <div className="text-sm font-medium text-[color:var(--text)]">
+            {uiText(language, "agentSettings")}
+          </div>
           <div className="text-xs text-[color:var(--muted)]">
-            Appearance, model and API access
+            {uiText(language, "appearanceModelApi")}
           </div>
         </div>
         <div className="rounded-full border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--muted)]">
-          {settings.api_key ? "API connected" : "No API key"}
+          {settings.api_key ? uiText(language, "apiConnected") : uiText(language, "noApiKey")}
         </div>
       </div>
       <div className="grid gap-2">
         <label className="block text-xs text-[color:var(--muted)]">
-          Theme
+          {uiText(language, "theme")}
           <select
             value={settingsDraft.theme}
             onChange={(event) => onThemeChange(event.target.value as ThemeName)}
@@ -1782,7 +2447,21 @@ function SettingsPanel({
           </select>
         </label>
         <label className="block text-xs text-[color:var(--muted)]">
-          Model
+          {uiText(language, "language")}
+          <select
+            value={language}
+            onChange={(event) => onLanguageChange(event.target.value as InterfaceLanguage)}
+            className={inputClass}
+          >
+            {INTERFACE_LANGUAGES.map((languageName) => (
+              <option key={languageName} value={languageName}>
+                {LANGUAGE_LABELS[languageName]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-xs text-[color:var(--muted)]">
+          {uiText(language, "model")}
           <input
             type="text"
             value={settingsDraft.model}
@@ -1792,7 +2471,7 @@ function SettingsPanel({
           />
         </label>
         <label className="block text-xs text-[color:var(--muted)]">
-          API key
+          {uiText(language, "apiKey")}
           <input
             type="password"
             value={settingsDraft.api_key}
@@ -1802,7 +2481,7 @@ function SettingsPanel({
           />
         </label>
         <label className="block text-xs text-[color:var(--muted)]">
-          Endpoint
+          {uiText(language, "endpoint")}
           <input
             type="text"
             value={settingsDraft.endpoint}
@@ -1811,23 +2490,36 @@ function SettingsPanel({
             placeholder={DEFAULT_SETTINGS.endpoint}
           />
         </label>
+        <label className="block text-xs text-[color:var(--muted)]">
+          {uiText(language, "systemPrompt")}
+          <textarea
+            value={settingsDraft.system_prompt ?? ""}
+            onChange={(event) =>
+              onChange({ ...settingsDraft, system_prompt: event.target.value })
+            }
+            className={textareaClass}
+            placeholder={uiText(language, "systemPromptPlaceholder")}
+          />
+        </label>
       </div>
       <div className="mt-4 border-t border-[color:var(--border)] pt-3">
         <div className="mb-2 flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium text-[color:var(--text)]">Connectors</div>
+            <div className="text-sm font-medium text-[color:var(--text)]">
+              {uiText(language, "connectors")}
+            </div>
             <div className="text-xs text-[color:var(--muted)]">
-              Generated skills stay disabled until enabled
+              {uiText(language, "connectorsDescription")}
             </div>
           </div>
           <div className="rounded-full border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--muted)]">
-            {connectorsLoading ? "Loading" : connectors.length}
+            {connectorsLoading ? uiText(language, "loading") : connectors.length}
           </div>
         </div>
         <div className="max-h-[240px] space-y-2 overflow-y-auto pr-1">
           {connectors.length === 0 ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 py-2 text-xs text-[color:var(--muted)]">
-              No connector drafts yet.
+              {uiText(language, "noConnectorDrafts")}
             </div>
           ) : (
             connectors.map((connector) => (
@@ -1855,13 +2547,13 @@ function SettingsPanel({
                         : "bg-[color:var(--button)] text-[color:var(--button-text)]"
                     }`}
                   >
-                    {connector.manifest.enabled ? "Disable" : "Enable"}
+                    {connector.manifest.enabled ? uiText(language, "disable") : uiText(language, "enable")}
                   </button>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {connector.pending && (
                     <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] text-[color:var(--muted)]">
-                      pending
+                      {uiText(language, "pending")}
                     </span>
                   )}
                   {connector.manifest.schedule && (
@@ -1884,7 +2576,7 @@ function SettingsPanel({
                 {connector.files.length > 0 && (
                   <details className="mt-2">
                     <summary className="cursor-pointer text-xs text-[color:var(--muted)]">
-                      Files
+                      {uiText(language, "files")}
                     </summary>
                     <div className="mt-2 space-y-2">
                       {connector.files.map((file) => (
@@ -1914,15 +2606,16 @@ function SettingsPanel({
           onClick={onCancel}
           className="h-8 rounded-full px-3 text-xs text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
         >
-          Cancel
+          {uiText(language, "cancel")}
         </button>
         <button
           type="submit"
           disabled={saving}
           className="h-8 rounded-full bg-[color:var(--button)] px-3 text-xs font-medium text-[color:var(--button-text)] transition-opacity hover:opacity-90 disabled:opacity-50"
         >
-          {saving ? "Saving" : "Save"}
+          {saving ? uiText(language, "saving") : uiText(language, "save")}
         </button>
+      </div>
       </div>
     </form>
   );
@@ -2001,6 +2694,62 @@ function ChatsIcon() {
       <path d="M7 8h10" />
       <path d="M7 12h7" />
       <path d="M5 19a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-8l-4 3v-3Z" />
+    </svg>
+  );
+}
+
+function NewChatIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v5M14 11v5" />
+    </svg>
+  );
+}
+
+function RenameIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17z" />
+      <path d="m14 7 3 3" />
     </svg>
   );
 }
@@ -2093,7 +2842,7 @@ function PlusIcon() {
   );
 }
 
-function PanelIcon() {
+function SidebarToggleIcon() {
   return (
     <svg
       aria-hidden="true"
@@ -2107,6 +2856,28 @@ function PanelIcon() {
     >
       <rect x="4" y="5" width="16" height="14" rx="2" />
       <path d="M10 5v14" />
+    </svg>
+  );
+}
+
+function TreeGraphIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 6v4" />
+      <path d="M12 10 7 15" />
+      <path d="m12 10 5 5" />
+      <circle cx="12" cy="5" r="2.5" />
+      <circle cx="6" cy="17" r="2.5" />
+      <circle cx="18" cy="17" r="2.5" />
     </svg>
   );
 }

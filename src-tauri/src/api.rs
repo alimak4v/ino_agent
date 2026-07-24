@@ -1,4 +1,6 @@
 use crate::store::{BranchPlan, BranchPlanItem, ChatContextMessage, ChatSettings};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use encoding_rs::WINDOWS_1251;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -7,6 +9,7 @@ use std::thread;
 use std::time::Instant;
 
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
+const DIRECT_ATTACHMENT_FENCE: &str = "```ino-agent-attachment\n";
 
 pub fn chat_completion(
     settings: &ChatSettings,
@@ -277,10 +280,11 @@ fn request_payload(
     stream: bool,
     temperature: f32,
 ) -> String {
-    let api_messages = messages
-        .iter()
-        .map(|message| json!({ "role": message.role, "content": message.content }))
-        .collect::<Vec<_>>();
+    let mut api_messages = Vec::new();
+    if !settings.system_prompt.trim().is_empty() {
+        api_messages.push(json!({ "role": "system", "content": settings.system_prompt.trim() }));
+    }
+    api_messages.extend(messages.iter().map(message_to_api_json));
     let mut payload = json!({
         "model": settings.model,
         "messages": api_messages,
@@ -297,6 +301,223 @@ fn request_payload(
         }
     }
     payload.to_string()
+}
+
+fn message_to_api_json(message: &ChatContextMessage) -> Value {
+    if message.role == "user" {
+        if let Some(parts) = content_parts_with_direct_attachments(&message.content) {
+            return json!({ "role": message.role, "content": parts });
+        }
+    }
+    json!({ "role": message.role, "content": message.content })
+}
+
+fn content_parts_with_direct_attachments(content: &str) -> Option<Vec<Value>> {
+    let (text, attachments) = split_direct_attachment_payloads(content);
+    if attachments.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    let mut text = text.trim().to_string();
+    for attachment in &attachments {
+        if let Some(extracted_text) = attachment_text_fallback(attachment) {
+            text.push_str("\n\nPDF text fallback extracted locally from \"");
+            text.push_str(&attachment.filename);
+            text.push_str(
+                "\". Use this text if the model/provider cannot read the attached PDF file directly. Do not infer the file contents from the filename alone.\n\n",
+            );
+            text.push_str(&extracted_text);
+        }
+    }
+    let text = text.trim();
+    parts.push(json!({
+        "type": "text",
+        "text": if text.is_empty() {
+            "The user attached file(s). Analyze them according to the current request.".to_string()
+        } else {
+            text.to_string()
+        },
+    }));
+    for attachment in attachments {
+        let file_data = if attachment.data.starts_with("data:") {
+            attachment.data
+        } else {
+            format!("data:{};base64,{}", attachment.mime, attachment.data)
+        };
+        parts.push(json!({
+            "type": "file",
+            "file": {
+                "filename": attachment.filename,
+                "file_data": file_data,
+            },
+        }));
+    }
+    Some(parts)
+}
+
+#[derive(Debug)]
+struct DirectAttachment {
+    filename: String,
+    mime: String,
+    data: String,
+    extracted_text: Option<String>,
+}
+
+fn split_direct_attachment_payloads(content: &str) -> (String, Vec<DirectAttachment>) {
+    let mut visible = String::new();
+    let mut attachments = Vec::new();
+    let mut cursor = 0;
+
+    while let Some(relative_start) = content[cursor..].find("[Attached file: ") {
+        let start = cursor + relative_start;
+        let Some(relative_fence_start) = content[start..].find(DIRECT_ATTACHMENT_FENCE) else {
+            break;
+        };
+        let fence_start = start + relative_fence_start;
+        let payload_start = fence_start + DIRECT_ATTACHMENT_FENCE.len();
+        let Some(relative_payload_end) = content[payload_start..].find("\n```") else {
+            break;
+        };
+        let payload_end = payload_start + relative_payload_end;
+        let block_end = payload_end + "\n```".len();
+
+        visible.push_str(&content[cursor..start]);
+        let descriptor = content[start + "[Attached file: ".len()..fence_start]
+            .trim()
+            .trim_end_matches(']')
+            .trim();
+        if !descriptor.is_empty() {
+            visible.push_str("[Attached file: ");
+            visible.push_str(descriptor);
+            visible.push_str("]\n");
+        }
+
+        if let Some(attachment) = parse_direct_attachment(&content[payload_start..payload_end]) {
+            attachments.push(attachment);
+        }
+        cursor = block_end;
+    }
+
+    visible.push_str(&content[cursor..]);
+    (visible.trim().to_string(), attachments)
+}
+
+fn parse_direct_attachment(payload: &str) -> Option<DirectAttachment> {
+    let parsed = serde_json::from_str::<Value>(payload.trim()).ok()?;
+    if parsed.get("kind").and_then(Value::as_str) != Some("file") {
+        return None;
+    }
+    let filename = parsed
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or("attachment.pdf")
+        .trim()
+        .to_string();
+    let mime = parsed
+        .get("mime")
+        .and_then(Value::as_str)
+        .unwrap_or("application/pdf")
+        .trim()
+        .to_string();
+    let data = parsed
+        .get("data")
+        .and_then(Value::as_str)?
+        .trim()
+        .to_string();
+    if data.is_empty() {
+        return None;
+    }
+    let extracted_text = parsed
+        .get("extractedText")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    Some(DirectAttachment {
+        filename,
+        mime,
+        data,
+        extracted_text,
+    })
+}
+
+fn attachment_text_fallback(attachment: &DirectAttachment) -> Option<String> {
+    if let Some(extracted_text) = attachment.extracted_text.as_deref() {
+        let repaired = clean_pdf_text(extracted_text);
+        let extracted_text = repaired.trim();
+        if !extracted_text.is_empty() {
+            return Some(extracted_text.to_string());
+        }
+    }
+    if !attachment.mime.eq_ignore_ascii_case("application/pdf")
+        && !attachment.filename.to_lowercase().ends_with(".pdf")
+    {
+        return None;
+    }
+    let bytes = decode_base64_file_data(&attachment.data)?;
+    pdf_extract::extract_text_from_mem(&bytes)
+        .ok()
+        .map(|text| clean_pdf_text(&text))
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+fn decode_base64_file_data(data: &str) -> Option<Vec<u8>> {
+    let payload = data
+        .trim()
+        .split_once(',')
+        .map(|(_, payload)| payload)
+        .unwrap_or(data);
+    let compact = payload
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    BASE64_STANDARD.decode(compact).ok()
+}
+
+fn clean_pdf_text(value: &str) -> String {
+    repair_pdf_mojibake(value)
+        .replace('\0', "")
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+fn repair_pdf_mojibake(value: &str) -> String {
+    let bytes = value
+        .chars()
+        .map(|ch| {
+            let code = ch as u32;
+            if code <= 0xff {
+                Some(code as u8)
+            } else if ch.is_whitespace() {
+                Some(b' ')
+            } else {
+                None
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(bytes) = bytes else {
+        return value.to_string();
+    };
+    let (decoded, _, _) = WINDOWS_1251.decode(&bytes);
+    let decoded = decoded.into_owned();
+    if cyrillic_score(&decoded) > cyrillic_score(value) + 20 {
+        decoded
+    } else {
+        value.to_string()
+    }
+}
+
+fn cyrillic_score(value: &str) -> usize {
+    value
+        .chars()
+        .filter(|ch| ('А'..='я').contains(ch) || matches!(ch, 'Ё' | 'ё' | 'І' | 'і'))
+        .count()
 }
 
 fn should_use_openai_prompt_cache_hints(endpoint: &str) -> bool {
@@ -323,7 +544,15 @@ fn prompt_cache_retention(model: &str) -> Option<&'static str> {
 
 fn prompt_cache_key(settings: &ChatSettings, messages: &[ChatContextMessage]) -> String {
     let mut prefix = format!("model:{}\n", settings.model.trim());
-    for message in messages.iter().take_while(|message| message.role == "system") {
+    if !settings.system_prompt.trim().is_empty() {
+        prefix.push_str("system\n");
+        prefix.push_str(settings.system_prompt.trim());
+        prefix.push('\n');
+    }
+    for message in messages
+        .iter()
+        .take_while(|message| message.role == "system")
+    {
         prefix.push_str("system\n");
         prefix.push_str(&message.content);
         prefix.push('\n');
@@ -506,7 +735,13 @@ fn json_candidates(answer: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_stream_delta;
+    use crate::store::{ChatContextMessage, ChatSettings};
+    use serde_json::Value;
+
+    use super::{
+        clean_pdf_text, content_parts_with_direct_attachments, decode_base64_file_data,
+        normalize_stream_delta, request_payload,
+    };
 
     #[test]
     fn keeps_plain_stream_delta() {
@@ -532,6 +767,80 @@ mod tests {
             normalize_stream_delta("динамическое програм", "программирование", "програм"),
             "мирование"
         );
+    }
+
+    #[test]
+    fn builds_file_content_part_from_direct_attachment() {
+        let content = "Разбери этот файл\n\n[Attached file: lecture.pdf (application/pdf, 12 B)\nNote: PDF sent directly to model]\n\n```ino-agent-attachment\n{\"kind\":\"file\",\"filename\":\"lecture.pdf\",\"mime\":\"application/pdf\",\"size\":12,\"data\":\"JVBERi0=\",\"extractedText\":\"Билет 1. Алгоритмы.\"}\n```";
+        let parts = content_parts_with_direct_attachments(content).expect("content parts");
+
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["type"], "text");
+        assert!(parts[0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Разбери этот файл")));
+        assert!(parts[0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Билет 1. Алгоритмы.")));
+        assert_eq!(parts[1]["type"], "file");
+        assert_eq!(parts[1]["file"]["filename"], "lecture.pdf");
+        assert_eq!(
+            parts[1]["file"]["file_data"],
+            "data:application/pdf;base64,JVBERi0="
+        );
+    }
+
+    #[test]
+    fn repairs_saved_pdf_extracted_text_before_prompting() {
+        let content = "Разбери этот файл\n\n[Attached file: exam.pdf (application/pdf, 12 B)]\n\n```ino-agent-attachment\n{\"kind\":\"file\",\"filename\":\"exam.pdf\",\"mime\":\"application/pdf\",\"size\":12,\"data\":\"JVBERi0=\",\"extractedText\":\"ÝÊÇÀÌÅÍÀÖÈÎÍÍÀß ÏÐÎÃÐÀÌÌÀ\"}\n```";
+        let parts = content_parts_with_direct_attachments(content).expect("content parts");
+
+        assert!(
+            parts[0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("ЭКЗАМЕНАЦИОННАЯ ПРОГРАММА"))
+        );
+    }
+
+    #[test]
+    fn decodes_raw_and_data_url_file_data() {
+        assert_eq!(
+            decode_base64_file_data("JVBERi0=").as_deref(),
+            Some(&b"%PDF-"[..])
+        );
+        assert_eq!(
+            decode_base64_file_data("data:application/pdf;base64,JVBERi0=").as_deref(),
+            Some(&b"%PDF-"[..])
+        );
+    }
+
+    #[test]
+    fn repairs_cp1251_pdf_mojibake() {
+        let repaired = clean_pdf_text("ÝÊÇÀÌÅÍÀÖÈÎÍÍÀß ÏÐÎÃÐÀÌÌÀ");
+        assert_eq!(repaired, "ЭКЗАМЕНАЦИОННАЯ ПРОГРАММА");
+    }
+
+    #[test]
+    fn prepends_configured_system_prompt_to_payload() {
+        let settings = ChatSettings {
+            endpoint: "https://api.openai.com/v1/chat/completions".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+            api_key: "sk-test".to_string(),
+            theme: "Minimal Light".to_string(),
+            language: "English".to_string(),
+            system_prompt: "Always answer briefly.".to_string(),
+        };
+        let messages = vec![ChatContextMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+        }];
+        let payload: Value =
+            serde_json::from_str(&request_payload(&settings, &messages, false, 0.7))
+                .expect("payload json");
+
+        assert_eq!(payload["messages"][0]["role"], "system");
+        assert_eq!(payload["messages"][0]["content"], "Always answer briefly.");
+        assert_eq!(payload["messages"][1]["role"], "user");
     }
 }
 

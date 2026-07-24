@@ -35,7 +35,7 @@ fi
 python3 scripts/make_icon.py
 
 npm install
-npm run tauri build
+npm run tauri -- build --bundles app
 
 APP_PATH="src-tauri/target/release/bundle/macos/${APP_NAME}.app"
 if [[ ! -d "$APP_PATH" ]]; then
@@ -52,6 +52,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 mkdir -p dist
 rm -rf "dist/${APP_NAME}.app"
 cp -R "$APP_PATH" "dist/${APP_NAME}.app"
+rm -f "dist/${APP_NAME}-mac.dmg" "dist/${APP_NAME}-mac.dmg.sha256"
 
 rm -rf dmg-root
 mkdir -p dmg-root

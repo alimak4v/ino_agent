@@ -15,9 +15,11 @@ const LEGACY_DB_FILENAME: &str = "treeai.sqlite3";
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL: &str = "gpt-4.1-mini";
 const DEFAULT_THEME: &str = "Minimal Light";
+const DEFAULT_LANGUAGE: &str = "English";
 const API_CONTEXT_RECENT_MESSAGE_LIMIT: usize = 16;
 const API_CONTEXT_SUMMARY_CHAR_LIMIT: usize = 420;
 const API_CONTEXT_MESSAGE_CHAR_LIMIT: usize = 12_000;
+const DIRECT_ATTACHMENT_FENCE: &str = "```ino-agent-attachment\n";
 const MEMORY_GRAPH_LINK_LIMIT: usize = 6;
 const WATCHED_PATHS_SETTING: &str = "knowledge_watched_paths";
 
@@ -28,6 +30,24 @@ fn normalize_theme(theme: &str) -> &'static str {
         "Paper" => "Paper",
         _ => DEFAULT_THEME,
     }
+}
+
+fn normalize_language(language: &str) -> &'static str {
+    match language.trim().to_ascii_lowercase().as_str() {
+        "english" | "en" => "English",
+        "russian" | "ru" | "русский" => "Russian",
+        "spanish" | "es" | "español" | "espanol" => "Spanish",
+        "belarusian" | "belorussian" | "be" | "беларуская" | "белорусский" => "Belarusian",
+        _ => DEFAULT_LANGUAGE,
+    }
+}
+
+fn default_language() -> String {
+    DEFAULT_LANGUAGE.to_string()
+}
+
+fn default_system_prompt() -> String {
+    String::new()
 }
 const NODE_COLORS: [&str; 6] = ["slate", "sky", "mint", "amber", "rose", "violet"];
 
@@ -100,6 +120,10 @@ pub struct ChatSettings {
     pub model: String,
     pub api_key: String,
     pub theme: String,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default = "default_system_prompt")]
+    pub system_prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +132,10 @@ pub struct SettingsInput {
     pub model: String,
     pub api_key: String,
     pub theme: String,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default = "default_system_prompt")]
+    pub system_prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1192,6 +1220,25 @@ impl Store {
         Ok(())
     }
 
+    pub fn rename_tree(&self, tree_id: &str, title: &str) -> Result<(), String> {
+        let title = clean_title_or(title.to_string(), "Root");
+        let ts = Self::now();
+        self.conn
+            .execute(
+                "UPDATE trees SET title = ?1, updated_at = ?2 WHERE id = ?3",
+                params![&title, ts, tree_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "UPDATE nodes SET title = ?1, updated_at = ?2
+                 WHERE tree_id = ?3 AND parent_id IS NULL",
+                params![&title, ts, tree_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn get_nodes(&self, tree_id: &str) -> Result<Vec<Node>, String> {
         let mut stmt = self
             .conn
@@ -2074,7 +2121,8 @@ impl Store {
         for row in rows {
             if matches!(row.role.as_str(), "user" | "assistant" | "system") {
                 if latest_user_id.as_deref() == Some(row.id.as_str()) {
-                    let user_content = strip_agent_mode_marker(&row.content);
+                    let user_content =
+                        compact_direct_attachment_payloads(&strip_agent_mode_marker(&row.content));
                     messages.push(ChatContextMessage {
                         role: "system".to_string(),
                         content: format!(
@@ -2114,15 +2162,19 @@ impl Store {
                     }
                 }
                 let row_content = strip_agent_mode_marker(&row.content);
-                let content = if latest_user_id.as_deref() == Some(row.id.as_str())
-                    && context_builder::is_deictic_topic_request(&row_content)
+                let is_latest_user = latest_user_id.as_deref() == Some(row.id.as_str());
+                let row_content_for_scope = compact_direct_attachment_payloads(&row_content);
+                let content = if is_latest_user
+                    && context_builder::is_deictic_topic_request(&row_content_for_scope)
                 {
                     format!(
                         "Current selected leaf/topic: {current_title}\nFull selected path: {breadcrumb}\nUser request about this current leaf/topic: {}",
                         row_content
                     )
+                } else if is_latest_user && has_direct_attachment_payload(&row_content) {
+                    row_content
                 } else {
-                    truncate_for_api_context(&row_content, API_CONTEXT_MESSAGE_CHAR_LIMIT)
+                    truncate_for_api_context(&row_content_for_scope, API_CONTEXT_MESSAGE_CHAR_LIMIT)
                 };
                 messages.push(ChatContextMessage {
                     role: row.role,
@@ -3823,11 +3875,14 @@ impl Store {
 
     pub fn get_settings(&self) -> Result<ChatSettings, String> {
         let theme = self.get_setting("theme", DEFAULT_THEME)?;
+        let language = self.get_setting("language", DEFAULT_LANGUAGE)?;
         Ok(ChatSettings {
             endpoint: self.get_setting("endpoint", DEFAULT_ENDPOINT)?,
             model: self.get_setting("model", DEFAULT_MODEL)?,
             api_key: self.get_setting("api_key", "")?,
             theme: normalize_theme(&theme).to_string(),
+            language: normalize_language(&language).to_string(),
+            system_prompt: self.get_setting("system_prompt", "")?,
         })
     }
 
@@ -3843,10 +3898,13 @@ impl Store {
             input.model.trim()
         };
         let theme = normalize_theme(&input.theme);
+        let language = normalize_language(&input.language);
         self.set_setting("endpoint", endpoint)?;
         self.set_setting("model", model)?;
         self.set_setting("api_key", input.api_key.trim())?;
         self.set_setting("theme", theme)?;
+        self.set_setting("language", language)?;
+        self.set_setting("system_prompt", input.system_prompt.trim())?;
         self.get_settings()
     }
 
@@ -4096,6 +4154,47 @@ fn truncate_for_api_context(value: &str, max_chars: usize) -> String {
         .collect::<String>();
     truncated.push_str("...");
     truncated
+}
+
+fn has_direct_attachment_payload(value: &str) -> bool {
+    value.contains(DIRECT_ATTACHMENT_FENCE)
+}
+
+fn compact_direct_attachment_payloads(value: &str) -> String {
+    let mut out = String::new();
+    let mut cursor = 0;
+
+    while let Some(relative_start) = value[cursor..].find("[Attached file: ") {
+        let start = cursor + relative_start;
+        let Some(relative_fence_start) = value[start..].find(DIRECT_ATTACHMENT_FENCE) else {
+            break;
+        };
+        let fence_start = start + relative_fence_start;
+        let payload_start = fence_start + DIRECT_ATTACHMENT_FENCE.len();
+        let Some(relative_payload_end) = value[payload_start..].find("\n```") else {
+            break;
+        };
+        let payload_end = payload_start + relative_payload_end;
+        let block_end = payload_end + "\n```".len();
+
+        out.push_str(&value[cursor..start]);
+        let descriptor = value[start + "[Attached file: ".len()..fence_start]
+            .trim()
+            .trim_end_matches(']')
+            .trim();
+        if descriptor.is_empty() {
+            out.push_str("[Attached file: bytes omitted from older context]\n");
+        } else {
+            out.push_str("[Attached file: ");
+            out.push_str(descriptor);
+            out.push_str("]\n[File bytes omitted from older context. Use the prior assistant answer unless the user re-attaches the file.]\n");
+        }
+
+        cursor = block_end;
+    }
+
+    out.push_str(&value[cursor..]);
+    out.trim().to_string()
 }
 
 fn branch_context_message(parent_title: &str, item: &BranchPlanItem) -> String {

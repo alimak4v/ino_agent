@@ -2,10 +2,14 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "identifier": "default",
   "description": "Default permissions",
-  "windows": ["main"],
+  "windows": ["main", "panel-*"],
   "permissions": [
     "core:default",
     "core:tray:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-close",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
     "shell:allow-open"
   ]
 }

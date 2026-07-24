@@ -1,4 +1,11 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   api,
   type FeedbackSummary,
@@ -13,11 +20,13 @@ import {
 interface MemoryPanelProps {
   onClose: () => void;
   onOpenTarget: (target: string) => Promise<void>;
+  windowed?: boolean;
 }
 
 const EMPTY_GRAPH: MemoryGraph = { nodes: [], links: [] };
+type GraphPosition = { x: number; y: number };
 
-export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
+export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false }: MemoryPanelProps) {
   const [activeView, setActiveView] = useState<"browse" | "review" | "io">("browse");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MemorySearchResult[]>([]);
@@ -30,9 +39,14 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
   const [importText, setImportText] = useState("");
   const [importSummary, setImportSummary] = useState("");
   const [selectedMemoryId, setSelectedMemoryId] = useState("");
+  const [draggedMemoryId, setDraggedMemoryId] = useState("");
+  const [graphPositions, setGraphPositions] = useState<Record<string, GraphPosition>>({});
   const [editingMemoryId, setEditingMemoryId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const springFrameRef = useRef<number | null>(null);
+  const draggedMemoryIdRef = useRef("");
+  const graphPositionsRef = useRef<Record<string, GraphPosition>>({});
   const [draft, setDraft] = useState<MemoryInput>({
     title: "",
     description: "",
@@ -96,7 +110,11 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
   }, [query]);
 
   const visibleItems = query.trim() ? results.map((result) => result.item) : recent;
-  const graphLayout = useMemo(() => layoutGraph(graph), [graph]);
+  const baseGraphLayout = useMemo(() => layoutGraph(graph), [graph]);
+  const graphLayout = useMemo(
+    () => applyGraphPositions(baseGraphLayout, graphPositions),
+    [baseGraphLayout, graphPositions],
+  );
   const selectedMemory = graph.nodes.find((node) => node.id === selectedMemoryId) ?? null;
 
   useEffect(() => {
@@ -105,6 +123,22 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
       setSelectedMemoryId("");
     }
   }, [graph.nodes, selectedMemoryId]);
+
+  useEffect(() => {
+    draggedMemoryIdRef.current = draggedMemoryId;
+  }, [draggedMemoryId]);
+
+  useEffect(() => {
+    graphPositionsRef.current = graphPositions;
+  }, [graphPositions]);
+
+  useEffect(() => {
+    return () => {
+      if (springFrameRef.current !== null) {
+        window.cancelAnimationFrame(springFrameRef.current);
+      }
+    };
+  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -230,25 +264,118 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
     }
   };
 
-  return (
-    <aside className="no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)]/95 shadow-[0_12px_40px_rgba(0,0,0,0.14)] backdrop-blur-xl lg:left-auto lg:right-3 lg:w-[760px]">
-      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-[color:var(--text)]">Memory</div>
-          <div className="truncate text-xs text-[color:var(--muted)]">
-            Vector recall with source locations
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-8 rounded-full px-3 text-xs text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
-        >
-          Close
-        </button>
-      </div>
+  const graphPointFromEvent = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: clamp(((event.clientX - bounds.left) / bounds.width) * GRAPH_WIDTH, 24, GRAPH_WIDTH - 24),
+      y: clamp(((event.clientY - bounds.top) / bounds.height) * GRAPH_HEIGHT, 24, GRAPH_HEIGHT - 24),
+    };
+  };
 
-      <div className="grid max-h-[calc(100vh-122px)] gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+  const dragGraphNode = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!draggedMemoryId) return;
+    const point = graphPointFromEvent(event);
+    setGraphPositions((current) => ({ ...current, [draggedMemoryId]: point }));
+  };
+
+  const settleGraphNode = (nodeId: string) => {
+    if (springFrameRef.current !== null) {
+      window.cancelAnimationFrame(springFrameRef.current);
+      springFrameRef.current = null;
+    }
+
+    const target = baseGraphLayout.nodes.find((node) => node.item.id === nodeId);
+    if (!target) {
+      setGraphPositions((current) => {
+        if (!(nodeId in current)) return current;
+        const next = { ...current };
+        delete next[nodeId];
+        return next;
+      });
+      return;
+    }
+
+    const currentPosition = graphPositionsRef.current[nodeId] ?? { x: target.x, y: target.y };
+    const state = {
+      x: currentPosition.x,
+      y: currentPosition.y,
+      vx: 0,
+      vy: 0,
+      targetX: target.x,
+      targetY: target.y,
+    };
+
+    const step = () => {
+      const dx = state.targetX - state.x;
+      const dy = state.targetY - state.y;
+      state.vx = (state.vx + dx * 0.18) * 0.78;
+      state.vy = (state.vy + dy * 0.18) * 0.78;
+      state.x += state.vx;
+      state.y += state.vy;
+
+      const settled =
+        Math.abs(dx) < 0.35 &&
+        Math.abs(dy) < 0.35 &&
+        Math.abs(state.vx) < 0.25 &&
+        Math.abs(state.vy) < 0.25;
+
+      setGraphPositions((current) => {
+        if (settled) {
+          if (!(nodeId in current)) return current;
+          const next = { ...current };
+          delete next[nodeId];
+          return next;
+        }
+        return {
+          ...current,
+          [nodeId]: { x: state.x, y: state.y },
+        };
+      });
+
+      if (settled) {
+        springFrameRef.current = null;
+        return;
+      }
+      springFrameRef.current = window.requestAnimationFrame(step);
+    };
+
+    springFrameRef.current = window.requestAnimationFrame(step);
+  };
+
+  useEffect(() => {
+    if (!draggedMemoryId) return;
+    const handlePointerRelease = () => {
+      const nodeId = draggedMemoryIdRef.current;
+      if (!nodeId) return;
+      setDraggedMemoryId("");
+      settleGraphNode(nodeId);
+    };
+    window.addEventListener("pointerup", handlePointerRelease);
+    window.addEventListener("pointercancel", handlePointerRelease);
+    return () => {
+      window.removeEventListener("pointerup", handlePointerRelease);
+      window.removeEventListener("pointercancel", handlePointerRelease);
+    };
+  }, [draggedMemoryId]);
+
+  return (
+    <aside
+      className={
+        windowed
+          ? "no-drag flex h-full w-full min-h-0 flex-1 flex-col overflow-hidden bg-[color:var(--panel)]"
+          : "no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[760px]"
+      }
+    >
+      <div
+        className={`overflow-y-auto p-6 ${
+          windowed ? "min-h-0 flex-1" : "max-h-[calc(100vh-122px)]"
+        }`}
+      >
+        <div className="mx-auto w-full max-w-[1120px] space-y-4">
+        <div className="text-sm text-[color:var(--muted)]">
+          Vector recall with source locations
+        </div>
+        <div className="flex flex-col gap-4">
         <div className="min-w-0 space-y-4">
           <div className="grid grid-cols-3 gap-1 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-1">
             <ViewButton active={activeView === "browse"} onClick={() => setActiveView("browse")}>
@@ -450,7 +577,7 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
           )}
         </div>
 
-        <div className="min-w-0">
+        <div className="order-first min-w-0">
           <div className="mb-2 flex items-center justify-between">
             <div className="text-sm font-medium text-[color:var(--text)]">Graph</div>
             <div className="text-xs text-[color:var(--muted)]">
@@ -458,10 +585,11 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
             </div>
           </div>
           <svg
-            className="h-[320px] w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)]"
-            viewBox="0 0 320 320"
+            className="h-[360px] w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)]"
+            viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`}
             role="img"
             aria-label="Memory graph"
+            onPointerMove={dragGraphNode}
           >
             {graphLayout.links.map((link) => {
               const active =
@@ -496,11 +624,28 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
                   className="cursor-pointer outline-none"
                   role="button"
                   tabIndex={0}
-                  onClick={() =>
-                    setSelectedMemoryId((current) =>
-                      current === node.item.id ? "" : node.item.id,
-                    )
-                  }
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (springFrameRef.current !== null) {
+                      window.cancelAnimationFrame(springFrameRef.current);
+                      springFrameRef.current = null;
+                    }
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setDraggedMemoryId(node.item.id);
+                    setSelectedMemoryId(node.item.id);
+                    const owner = event.currentTarget.ownerSVGElement;
+                    if (!owner) return;
+                    const bounds = owner.getBoundingClientRect();
+                    setGraphPositions((current) => ({
+                      ...current,
+                      [node.item.id]: {
+                        x: clamp(((event.clientX - bounds.left) / bounds.width) * GRAPH_WIDTH, 24, GRAPH_WIDTH - 24),
+                        y: clamp(((event.clientY - bounds.top) / bounds.height) * GRAPH_HEIGHT, 24, GRAPH_HEIGHT - 24),
+                      },
+                    }));
+                  }}
+                  onClick={() => setSelectedMemoryId(node.item.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
@@ -542,6 +687,8 @@ export function MemoryPanel({ onClose, onOpenTarget }: MemoryPanelProps) {
             feedbackSummary={feedbackSummary}
             onSelect={setSelectedMemoryId}
           />
+        </div>
+        </div>
         </div>
       </div>
     </aside>
@@ -1037,7 +1184,7 @@ function MemoryGraphDebug({
   return (
     <div className="mt-3 space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-medium text-[color:var(--text)]">Debug</div>
+        <div className="text-sm font-medium text-[color:var(--text)]">Nodes</div>
         <button
           type="button"
           onClick={() => onSelect("")}
@@ -1209,6 +1356,9 @@ function DebugLine({ label, value }: { label: string; value: string }) {
 const inputClass =
   "min-h-9 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] px-3 text-sm text-[color:var(--text)] outline-none placeholder:text-[color:var(--muted)] focus:shadow-[0_0_0_3px_rgba(0,0,0,0.035)]";
 
+const GRAPH_WIDTH = 640;
+const GRAPH_HEIGHT = 360;
+
 function parseTags(value: string) {
   return value
     .split(/[,\s]+/)
@@ -1218,8 +1368,8 @@ function parseTags(value: string) {
 }
 
 function layoutGraph(graph: MemoryGraph) {
-  const width = 320;
-  const height = 320;
+  const width = GRAPH_WIDTH;
+  const height = GRAPH_HEIGHT;
   const padding = 26;
   const centerX = width / 2;
   const centerY = height / 2;
@@ -1296,6 +1446,26 @@ function layoutGraph(graph: MemoryGraph) {
       target: (typeof nodes)[number];
     }
   >;
+  return { nodes, links };
+}
+
+function applyGraphPositions(
+  layout: ReturnType<typeof layoutGraph>,
+  positions: Record<string, GraphPosition>,
+) {
+  const nodes = layout.nodes.map((node) => {
+    const position = positions[node.item.id];
+    return position ? { ...node, x: position.x, y: position.y } : node;
+  });
+  const byId = new Map(nodes.map((node) => [node.item.id, node]));
+  const links = layout.links
+    .map((link) => {
+      const source = byId.get(link.sourceId);
+      const target = byId.get(link.targetId);
+      if (!source || !target) return null;
+      return { ...link, source, target };
+    })
+    .filter(Boolean) as typeof layout.links;
   return { nodes, links };
 }
 

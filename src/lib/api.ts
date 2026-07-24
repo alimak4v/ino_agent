@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { InterfaceLanguage } from "./i18n";
 import type { ThemeName } from "./theme";
 
 declare global {
@@ -68,6 +69,8 @@ export interface ChatSettings {
   model: string;
   api_key: string;
   theme: ThemeName;
+  language: InterfaceLanguage;
+  system_prompt: string;
 }
 
 export interface AiBranchCreated {
@@ -530,6 +533,8 @@ const FALLBACK_SETTINGS: ChatSettings = {
   model: "gpt-4.1-mini",
   api_key: "",
   theme: "Minimal Light",
+  language: "English",
+  system_prompt: "",
 };
 
 const DESKTOP_ONLY_ERROR = "Open the desktop app window to use this action.";
@@ -550,6 +555,8 @@ export const api = {
     isTauriRuntime() ? invoke<TreeSummary[]>("list_trees") : Promise.resolve([]),
   createTree: (title?: string) => invokeDesktop<TreeCreated>("create_tree", { title }),
   deleteTree: (treeId: string) => invokeDesktop<void>("delete_tree", { treeId }),
+  renameTree: (treeId: string, title: string) =>
+    invokeDesktop<void>("rename_tree", { treeId, title }),
   setCurrentNode: (treeId: string, nodeId: string) =>
     invokeDesktop<void>("set_current_node", { treeId, nodeId }),
   createChildNode: (treeId: string, parentId: string, title?: string) =>
@@ -618,8 +625,8 @@ export const api = {
     }),
   generateAssistantReply: (treeId: string, nodeId: string, requestId: string) =>
     invokeDesktop<AssistantReplyResult>("generate_assistant_reply", { treeId, nodeId, requestId }),
-  confirmPendingBranches: (treeId: string, nodeId: string) =>
-    invokeDesktop<AssistantReplyResult>("confirm_pending_branches", { treeId, nodeId }),
+  confirmPendingBranches: (treeId: string, nodeId: string, titles?: string[]) =>
+    invokeDesktop<AssistantReplyResult>("confirm_pending_branches", { treeId, nodeId, titles }),
   forceBranchSplit: (treeId: string, nodeId: string) =>
     invokeDesktop<AssistantReplyResult>("force_branch_split", { treeId, nodeId }),
   listConnectors: () =>

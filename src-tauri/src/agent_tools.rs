@@ -63,7 +63,7 @@ impl AgentToolPermissionProfile {
         match self {
             Self::ReadOnly => matches!(
                 tool,
-                "search_memory" | "list_files" | "read_file" | "open_target"
+                "search_memory" | "list_files" | "read_file" | "open_target" | "self_review"
             ),
             Self::MemoryWrite => matches!(
                 tool,
@@ -73,10 +73,16 @@ impl AgentToolPermissionProfile {
                     | "read_file"
                     | "open_target"
                     | "index_path"
+                    | "self_review"
             ),
             Self::CommandRunner => matches!(
                 tool,
-                "search_memory" | "list_files" | "read_file" | "run_command" | "open_target"
+                "search_memory"
+                    | "list_files"
+                    | "read_file"
+                    | "run_command"
+                    | "open_target"
+                    | "self_review"
             ),
             Self::WorkspaceWrite => matches!(
                 tool,
@@ -87,6 +93,7 @@ impl AgentToolPermissionProfile {
                     | "run_command"
                     | "open_target"
                     | "index_path"
+                    | "self_review"
             ),
         }
     }
@@ -184,6 +191,10 @@ pub fn permission_profile_summary(profile: AgentToolPermissionProfile) -> String
         (
             "index_path",
             "index one supported file or a workspace directory into knowledge chunks. Args: path string, optional limitFiles and limitChunks numbers.",
+        ),
+        (
+            "self_review",
+            "ask a separate critic pass to review the agent's reasoning. Args: mode \"full_history\" or \"isolated\", optional question string.",
         ),
     ];
     let allowed = tools

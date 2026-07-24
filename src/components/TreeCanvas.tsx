@@ -20,7 +20,8 @@ interface TreeCanvasProps {
   loading: boolean;
   statusText: string;
   onCreateRoot: () => void;
-  onSelectNode: (treeId: string, nodeId: string) => void;
+  onActivateNode: (treeId: string, nodeId: string) => void;
+  onOpenDialogPoint: (treeId: string, nodeId: string) => void;
   onRenameNode: (node: CanvasLayoutNode) => void;
   onCreateChild: (node: CanvasLayoutNode) => void;
   onSetNodeColor: (node: CanvasLayoutNode, color: string | null, includeDescendants: boolean) => void;
@@ -221,7 +222,8 @@ export function TreeCanvas({
   loading,
   statusText,
   onCreateRoot,
-  onSelectNode,
+  onActivateNode,
+  onOpenDialogPoint,
   onRenameNode,
   onCreateChild,
   onSetNodeColor,
@@ -539,23 +541,22 @@ export function TreeCanvas({
     (node: CanvasLayoutNode) => {
       const canvasNode = getCanvasNode(node.id) ?? node;
       closeMenu();
-      void onSelectNode(canvasNode.treeId, canvasNode.id);
+      void onActivateNode(canvasNode.treeId, canvasNode.id);
     },
-    [closeMenu, getCanvasNode, onSelectNode],
+    [closeMenu, getCanvasNode, onActivateNode],
   );
 
   const handleNodeContextMenu = useCallback(
     (event: ContextMenuEvent, node: CanvasLayoutNode) => {
       event.preventDefault();
       const canvasNode = getCanvasNode(node.id) ?? node;
-      void onSelectNode(canvasNode.treeId, canvasNode.id);
       setMenu({
         x: event.clientX,
         y: event.clientY,
         node: canvasNode,
       });
     },
-    [getCanvasNode, onSelectNode],
+    [getCanvasNode],
   );
 
   const handlePaneContextMenu = useCallback(
@@ -1051,7 +1052,7 @@ export function TreeCanvas({
 
       {tooltip && (
         <div
-          className="pointer-events-none fixed z-50 max-w-[260px] rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)]/95 px-2.5 py-1.5 text-xs font-medium text-[color:var(--text)] shadow-[0_10px_30px_rgba(0,0,0,0.16)] backdrop-blur-xl"
+          className="pointer-events-none fixed z-50 max-w-[260px] rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] px-2.5 py-1.5 text-xs font-medium text-[color:var(--text)] shadow-[0_10px_30px_rgba(0,0,0,0.16)]"
           style={{ left: tooltip.x, top: tooltip.y }}
         >
           {tooltip.title}
@@ -1060,7 +1061,7 @@ export function TreeCanvas({
 
       {menu && (
         <div
-          className="no-drag fixed z-50 min-w-[180px] rounded-[14px] border border-[color:var(--border)] bg-[color:var(--panel)]/90 p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.16)] backdrop-blur-xl"
+          className="no-drag fixed z-50 min-w-[180px] rounded-[14px] border border-[color:var(--border)] bg-[color:var(--panel)] p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.16)]"
           style={{ left: menu.x, top: menu.y }}
           onClick={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
@@ -1068,6 +1069,14 @@ export function TreeCanvas({
         >
           {menu.node ? (
             <>
+              <button
+                type="button"
+                onClick={() => runMenuAction(() => onOpenDialogPoint(menu.node!.treeId, menu.node!.id))}
+                className="no-drag flex h-[34px] w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm hover:bg-[color:var(--selected)]"
+              >
+                <DialogPointIcon />
+                <span>Go to dialog point</span>
+              </button>
               <button
                 type="button"
                 onClick={() => runMenuAction(() => onRenameNode(menu.node!))}
@@ -1249,6 +1258,25 @@ function RadialModeIcon() {
       <path d="M12 21a9 9 0 0 1-9-9" />
       <path d="M4.6 7a9 9 0 0 1 4.6-3.4" />
       <path d="M19.4 17a9 9 0 0 1-4.6 3.4" />
+    </svg>
+  );
+}
+
+function DialogPointIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="block h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M5 12h9" />
+      <path d="m11 6 6 6-6 6" />
+      <path d="M19 5v14" />
     </svg>
   );
 }
