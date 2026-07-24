@@ -2399,10 +2399,11 @@ function SettingsPanel({
       onSubmit={onSubmit}
       className={
         windowed
-          ? "no-drag flex h-full min-h-0 flex-col overflow-y-auto bg-[color:var(--panel)] p-4"
+          ? "no-drag h-full w-full min-h-0 flex-1 overflow-y-auto bg-[color:var(--panel)] p-6"
           : "no-drag fixed left-3 right-3 top-12 z-50 max-w-[calc(100vw-24px)] rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.14)] sm:absolute sm:left-auto sm:right-0 sm:top-10 sm:w-[420px]"
       }
     >
+      <div className="mx-auto w-full max-w-[560px]">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-[color:var(--text)]">
@@ -2600,6 +2601,7 @@ function SettingsPanel({
         >
           {saving ? uiText(language, "saving") : uiText(language, "save")}
         </button>
+      </div>
       </div>
     </form>
   );

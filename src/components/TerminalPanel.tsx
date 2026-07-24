@@ -11,7 +11,7 @@ interface TerminalPanelProps {
   windowed?: boolean;
 }
 
-export function TerminalPanel({ onClose, windowed = false }: TerminalPanelProps) {
+export function TerminalPanel({ onClose: _onClose, windowed = false }: TerminalPanelProps) {
   const [command, setCommand] = useState("git status --short");
   const [cwd, setCwd] = useState(".");
   const [timeoutMs, setTimeoutMs] = useState(12000);
@@ -125,31 +125,19 @@ export function TerminalPanel({ onClose, windowed = false }: TerminalPanelProps)
     <aside
       className={
         windowed
-          ? "no-drag flex h-full min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          ? "no-drag flex h-full w-full min-h-0 flex-1 flex-col overflow-hidden bg-[color:var(--panel)]"
           : "no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[860px]"
       }
     >
-      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-[color:var(--text)]">Terminal</div>
-          <div className="truncate text-xs text-[color:var(--muted)]">
-            Safe workspace commands with approval, history and diagnostics
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-8 rounded-full px-3 text-xs text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
-        >
-          Close
-        </button>
-      </div>
-
       <div
-        className={`grid gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_300px] ${
+        className={`overflow-y-auto p-6 ${
           windowed ? "min-h-0 flex-1" : "max-h-[calc(100vh-122px)]"
         }`}
       >
+        <div className="mx-auto grid w-full max-w-[980px] gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="lg:col-span-2 text-sm text-[color:var(--muted)]">
+          Safe workspace commands with approval, history and diagnostics
+        </div>
         <div className="min-w-0 space-y-3">
           <form
             onSubmit={(event) => void submit(event)}
@@ -295,6 +283,7 @@ export function TerminalPanel({ onClose, windowed = false }: TerminalPanelProps)
               </button>
             ))
           )}
+        </div>
         </div>
       </div>
     </aside>

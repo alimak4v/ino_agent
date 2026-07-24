@@ -7,7 +7,7 @@ interface KnowledgePanelProps {
   windowed?: boolean;
 }
 
-export function KnowledgePanel({ onClose, onOpenTarget, windowed = false }: KnowledgePanelProps) {
+export function KnowledgePanel({ onClose: _onClose, onOpenTarget, windowed = false }: KnowledgePanelProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<KnowledgeSearchResult[]>([]);
   const [watchedPaths, setWatchedPaths] = useState<WatchedPath[]>([]);
@@ -104,27 +104,15 @@ export function KnowledgePanel({ onClose, onOpenTarget, windowed = false }: Know
     <aside
       className={
         windowed
-          ? "no-drag flex h-full min-h-0 flex-col overflow-hidden bg-[color:var(--panel)]"
+          ? "no-drag flex h-full w-full min-h-0 flex-1 flex-col overflow-hidden bg-[color:var(--panel)]"
           : "no-drag fixed left-3 right-3 top-12 z-50 max-h-[calc(100vh-64px)] max-w-[calc(100vw-24px)] overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel)] shadow-[0_12px_40px_rgba(0,0,0,0.14)] lg:left-auto lg:right-3 lg:w-[720px]"
       }
     >
-      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-[color:var(--text)]">Knowledge</div>
-          <div className="truncate text-xs text-[color:var(--muted)]">
-            Indexed source chunks with vector and lexical search
-          </div>
+      <div className={`${windowed ? "min-h-0 flex-1" : "max-h-[calc(100vh-122px)]"} overflow-y-auto p-6`}>
+        <div className="mx-auto w-full max-w-[760px]">
+        <div className="mb-4 text-sm text-[color:var(--muted)]">
+          Indexed source chunks with vector and lexical search
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-8 rounded-full px-3 text-xs text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)]"
-        >
-          Close
-        </button>
-      </div>
-
-      <div className={`${windowed ? "min-h-0 flex-1" : "max-h-[calc(100vh-122px)]"} overflow-y-auto p-4`}>
         <section className="rounded-xl border border-[color:var(--border)] bg-[color:var(--app-bg)] p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -221,6 +209,7 @@ export function KnowledgePanel({ onClose, onOpenTarget, windowed = false }: Know
               />
             ))
           )}
+        </div>
         </div>
       </div>
     </aside>
