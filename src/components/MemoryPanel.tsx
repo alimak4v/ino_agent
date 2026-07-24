@@ -45,6 +45,8 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const springFrameRef = useRef<number | null>(null);
+  const draggedMemoryIdRef = useRef("");
+  const graphPositionsRef = useRef<Record<string, GraphPosition>>({});
   const [draft, setDraft] = useState<MemoryInput>({
     title: "",
     description: "",
@@ -121,6 +123,14 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
       setSelectedMemoryId("");
     }
   }, [graph.nodes, selectedMemoryId]);
+
+  useEffect(() => {
+    draggedMemoryIdRef.current = draggedMemoryId;
+  }, [draggedMemoryId]);
+
+  useEffect(() => {
+    graphPositionsRef.current = graphPositions;
+  }, [graphPositions]);
 
   useEffect(() => {
     return () => {
@@ -285,7 +295,7 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
       return;
     }
 
-    const currentPosition = graphPositions[nodeId] ?? { x: target.x, y: target.y };
+    const currentPosition = graphPositionsRef.current[nodeId] ?? { x: target.x, y: target.y };
     const state = {
       x: currentPosition.x,
       y: currentPosition.y,
@@ -332,12 +342,21 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
     springFrameRef.current = window.requestAnimationFrame(step);
   };
 
-  const stopGraphDrag = () => {
+  useEffect(() => {
     if (!draggedMemoryId) return;
-    const nodeId = draggedMemoryId;
-    setDraggedMemoryId("");
-    settleGraphNode(nodeId);
-  };
+    const handlePointerRelease = () => {
+      const nodeId = draggedMemoryIdRef.current;
+      if (!nodeId) return;
+      setDraggedMemoryId("");
+      settleGraphNode(nodeId);
+    };
+    window.addEventListener("pointerup", handlePointerRelease);
+    window.addEventListener("pointercancel", handlePointerRelease);
+    return () => {
+      window.removeEventListener("pointerup", handlePointerRelease);
+      window.removeEventListener("pointercancel", handlePointerRelease);
+    };
+  }, [draggedMemoryId]);
 
   return (
     <aside
@@ -571,8 +590,6 @@ export function MemoryPanel({ onClose: _onClose, onOpenTarget, windowed = false 
             role="img"
             aria-label="Memory graph"
             onPointerMove={dragGraphNode}
-            onPointerUp={stopGraphDrag}
-            onPointerLeave={stopGraphDrag}
           >
             {graphLayout.links.map((link) => {
               const active =
