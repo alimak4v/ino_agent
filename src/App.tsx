@@ -2046,7 +2046,7 @@ function MainSidebar({
             onClick={onOpenSearch}
             aria-label={uiText(language, "search")}
             title={uiText(language, "search")}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             <SearchIcon />
           </button>
@@ -2055,17 +2055,17 @@ function MainSidebar({
             onClick={onCloseSidebar}
             aria-label={uiText(language, "closeSidebar")}
             title={uiText(language, "closeSidebar")}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[color:var(--muted)] transition-colors hover:bg-[color:var(--selected)] hover:text-[color:var(--text)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
           >
             <SidebarToggleIcon />
           </button>
         </div>
       </div>
-      <nav className="shrink-0 space-y-1 px-3 py-2">
+      <nav className="shrink-0 space-y-0.5 px-3 py-1.5">
         <button
           type="button"
           onClick={onNewChat}
-          className="flex h-9 w-full items-center gap-2 rounded-2xl px-3 text-left text-[13px] font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
+          className="flex h-8 w-full items-center gap-2 rounded-xl px-2.5 text-left text-[13px] font-medium text-[color:var(--text)] transition-colors hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)] focus-visible:outline-none"
         >
           <NewChatIcon />
           <span className="truncate">{uiText(language, "newChat")}</span>
@@ -2077,7 +2077,7 @@ function MainSidebar({
               key={item.panel}
               type="button"
               onClick={() => onOpenPanel(item.panel)}
-              className={`flex h-9 w-full items-center gap-2 rounded-2xl px-3 text-left text-[13px] font-medium transition-colors focus-visible:outline-none ${
+              className={`flex h-8 w-full items-center gap-2 rounded-xl px-2.5 text-left text-[13px] font-medium transition-colors focus-visible:outline-none ${
                 active
                   ? "bg-[color:var(--selected)] text-[color:var(--text)]"
                   : "text-[color:var(--text)] hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)]"
@@ -2110,7 +2110,7 @@ function MainSidebar({
                       y: Math.max(8, Math.min(event.clientY, window.innerHeight - 96)),
                     });
                   }}
-                  className={`group flex h-9 w-full min-w-0 items-center gap-2 rounded-2xl pl-3 pr-1.5 text-left text-[13px] transition-colors focus-visible:outline-none ${
+                  className={`group flex h-8 w-full min-w-0 items-center gap-2 rounded-xl pl-2.5 pr-1.5 text-left text-[13px] transition-colors focus-visible:outline-none ${
                     active
                       ? "bg-[color:var(--selected)] text-[color:var(--text)]"
                       : "text-[color:var(--text)] hover:bg-[color:var(--selected)] focus-visible:bg-[color:var(--selected)]"
@@ -2688,12 +2688,12 @@ function NewChatIcon() {
   return (
     <svg
       aria-hidden="true"
-      className="h-5 w-5 shrink-0"
+      className="h-4 w-4 shrink-0"
       fill="none"
       stroke="currentColor"
       strokeLinecap="round"
       strokeLinejoin="round"
-      strokeWidth="2"
+      strokeWidth="1.9"
       viewBox="0 0 24 24"
     >
       <path d="M12 20h9" />
