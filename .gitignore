@@ -21,7 +21,17 @@ src-tauri/target/
 
 # Tooling caches
 .DS_Store
+._*
+Thumbs.db
+Desktop.ini
+.AppleDouble
+.LSOverride
+.Spotlight-V100/
+.Trashes/
 .vite/
 *.log
+*.swp
+*.swo
+*~
 playwright-report/
 test-results/
