@@ -232,71 +232,103 @@ Network access is needed only for configured model calls or user-approved networ
 - Diagrams: Mermaid.
 - QA: Playwright screenshot tests.
 
-## Quick Start
+## Installation and Development
 
-Requirements:
+ino-agent is a Tauri 2 desktop application. Build on the operating system you intend to run it on:
+native installers are not normally cross-compiled by the default Tauri toolchain.
 
-- Node.js 20+
-- Rust stable
-- Xcode Command Line Tools on macOS
-- OpenAI-compatible chat completions endpoint and API key for model-backed actions
+### Requirements
 
-Run in development:
+All platforms need:
+
+- Node.js 20 LTS or newer and npm;
+- Rust stable via [rustup](https://rustup.rs/);
+- an OpenAI-compatible chat-completions endpoint and API key for model-backed features.
+
+Platform-specific requirements:
+
+- **macOS 10.15+:** Xcode Command Line Tools (`xcode-select --install`). A DMG build also needs
+  `python3`, `codesign`, and `hdiutil`; the last two are provided by macOS.
+- **Linux:** WebKitGTK 4.1, GTK, AppIndicator, librsvg, OpenSSL, `patchelf`, `file`, and a C/C++
+  toolchain. On Ubuntu/Debian, the CI-equivalent setup is:
+
+  ```bash
+  sudo apt update
+  sudo apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+    libgtk-3-dev libxdo-dev libssl-dev patchelf build-essential file
+  ```
+
+- **Windows 10/11:** Visual Studio Build Tools with **Desktop development with C++**, Rust's
+  `stable-msvc` toolchain, and Microsoft Edge WebView2. WebView2 is normally already installed.
+  MSI packaging may also require the Windows optional **VBScript** feature.
+
+See the [official Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for other Linux
+distributions and current platform details.
+
+### Install and run
 
 ```bash
-npm install
+git clone <repository-url>
+cd ino_agent
+npm ci
 npm run tauri:dev
 ```
 
-Frontend-only preview:
+The first run downloads Rust and npm dependencies and may take several minutes. Open Settings in the
+app to save the endpoint, model, API key, language, and theme. Credentials and user data remain
+local; do not commit databases or secrets.
+
+For frontend-only work, use `npm run dev`. This does not provide native file access, SQLite, terminal
+commands, or other Tauri `invoke` features. Use `npm run dev:render-smoke` for the deterministic QA
+fixture.
+
+## Validation and Tests
 
 ```bash
-npm run dev
+npm run build                                      # TypeScript check + Vite production build
+cargo check --manifest-path src-tauri/Cargo.toml  # Rust compile check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run qa:render-screenshots                     # Playwright desktop + mobile screenshots
 ```
 
-Some features only work in the Tauri desktop app because they use native commands, local files,
-SQLite, and Tauri `invoke`.
+Playwright writes ignored output to `test-results/`; inspect failures and traces before changing
+expectations. Screenshot coverage includes responsive layout, math, diagrams, charts, and graph
+blocks.
 
-## QA
+## Packaging and Release Builds
 
-```bash
-cargo check --manifest-path src-tauri/Cargo.toml
-npx tsc --noEmit
-npm run build
-npm run qa:render-screenshots
-```
-
-Screenshot QA covers:
-
-- desktop render fixture;
-- mobile render fixture;
-- matrix/vector/chart/Mermaid/graphsteps;
-- top-bar overlay bounds regression.
-
-## Build
-
-Tauri build:
+The portable Tauri command works on macOS, Linux, and Windows:
 
 ```bash
 npm run tauri:build
 ```
 
-macOS internal release-candidate build:
+Artifacts are written under `src-tauri/target/release/bundle/` (for example, macOS `.app`/`.dmg`,
+Linux `.deb`/`.AppImage`, and Windows `.msi`/`.exe`, depending on installed platform tooling).
+
+For the internal macOS release-candidate flow, run on macOS:
 
 ```bash
 bash build_macos.sh
 ```
 
-The helper creates:
+It creates `dist/ino-agent.app`, `dist/ino-agent-mac.dmg`, and a SHA-256 checksum. The script uses
+ad-hoc signing unless `APPLE_SIGNING_IDENTITY` is set. Public macOS distribution still requires
+Developer ID signing and notarization. Release artifacts, `dist/`, and build caches are ignored and
+must not be committed.
 
-```text
-dist/ino-agent.app
-dist/ino-agent-mac.dmg
-dist/ino-agent-mac.dmg.sha256
+### Clean rebuild
+
+If stale frontend or Rust output causes a problem, remove only generated directories and reinstall:
+
+```bash
+rm -rf dist src-tauri/target node_modules
+npm ci
+npm run tauri:build
 ```
 
-The current macOS build uses ad-hoc signing for internal RC smoke tests. Public distribution still
-needs Developer ID signing and notarization.
+On Windows, remove the same directories from PowerShell or delete them in Explorer.
 
 ## Release Status
 
