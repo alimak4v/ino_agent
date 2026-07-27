@@ -268,7 +268,7 @@ distributions and current platform details.
 ### Install and run
 
 ```bash
-git clone <repository-url>
+git clone github.com/alimak4v/ino_agent
 cd ino_agent
 npm ci
 npm run tauri:dev
